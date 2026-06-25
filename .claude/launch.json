@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@ghost/web", "exec", "vite", "--port", "5174"],
+      "port": 5174,
+      "autoPort": false
+    }
+  ]
+}
