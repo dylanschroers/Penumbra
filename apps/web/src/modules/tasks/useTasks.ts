@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { db } from "./db/client";
+import { getDb } from "../../db/client";
 import type { CreateTaskInput, TaskRow, UpdateTaskInput } from "@ghost/shared";
 
 // The single place the UI touches the repository. Holds the task list in React
@@ -13,7 +13,7 @@ export function useTasks() {
 
   const refresh = useCallback(async () => {
     try {
-      setTasks(await db.listTasks());
+      setTasks(await getDb().listTasks());
       setError(null);
     } catch (err) {
       setError(String(err));
@@ -28,7 +28,7 @@ export function useTasks() {
 
   const createTask = useCallback(
     async (input: CreateTaskInput) => {
-      await db.createTask(input);
+      await getDb().createTask(input);
       await refresh();
     },
     [refresh],
@@ -36,7 +36,7 @@ export function useTasks() {
 
   const updateTask = useCallback(
     async (id: string, patch: UpdateTaskInput) => {
-      await db.updateTask(id, patch);
+      await getDb().updateTask(id, patch);
       await refresh();
     },
     [refresh],
@@ -44,7 +44,7 @@ export function useTasks() {
 
   const deleteTask = useCallback(
     async (id: string) => {
-      await db.deleteTask(id);
+      await getDb().deleteTask(id);
       await refresh();
     },
     [refresh],
