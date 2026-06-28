@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import RGL, { WidthProvider, type Layout } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
-import { MODULES, getModule } from "./registry";
+import { getModule } from "./registry";
 import { ModuleFrame } from "./ModuleFrame";
+import { AddModuleMenu } from "./AddModuleMenu";
 import { useLayout } from "./useLayout";
 
 // WidthProvider measures the container and feeds `width` to the grid, so we don't
@@ -45,16 +46,7 @@ export function Workspace() {
       <header className="workspace__bar">
         <h1 className="workspace__title">Ghost</h1>
         <div className="workspace__actions">
-          {MODULES.map((def) => (
-            <button
-              key={def.id}
-              type="button"
-              className="btn"
-              onClick={() => addModule(def.id)}
-            >
-              + {def.title}
-            </button>
-          ))}
+          <AddModuleMenu onAdd={addModule} />
         </div>
       </header>
 

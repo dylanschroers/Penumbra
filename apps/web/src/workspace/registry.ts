@@ -1,5 +1,6 @@
 import type { ModuleDefinition } from "./types";
 import { TasksModule } from "../modules/tasks/TasksModule";
+import { ColorPickerModule } from "../modules/color/ColorPickerModule";
 
 // The module registry. Adding a future module (weather, notes, …) is one entry
 // here plus its component — the canvas, the "add module" menu, and persistence
@@ -13,6 +14,14 @@ export const MODULES: ModuleDefinition[] = [
     defaultSize: { w: 8, h: 6 },
     minSize: { w: 6, h: 3 },
     Component: TasksModule,
+  },
+  {
+    id: "color",
+    title: "Color Picker",
+    // Sized to fit the static 180px wheel plus the slider and hex row.
+    defaultSize: { w: 6, h: 9 },
+    minSize: { w: 5, h: 8 },
+    Component: ColorPickerModule,
   },
 ];
 
