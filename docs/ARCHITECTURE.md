@@ -131,6 +131,43 @@ buying much.
 
 ---
 
+## The web shell: workspace canvas + module registry
+
+The web client is a **blank workspace canvas**, not a fixed-layout app. Features
+live as **modules** — self-contained cards (tasks today; weather, notes, agent
+chat later) that the user places, drags, and resizes on a snapping grid.
+
+- **Module registry** (`workspace/registry.ts`) — the frontend counterpart to the
+  backend tool registry. A module is *defined once* (`id`, `title`, default/min
+  size, its React component); the canvas can then place, render, and persist any
+  module without knowing its internals. Adding a feature is one registry entry
+  plus its component — the canvas, the "add module" menu, and persistence pick it
+  up automatically.
+- **Modules** (`modules/<feature>/`) own their data and render only their inner
+  content. The surrounding card chrome (title bar, drag handle, close, sizing)
+  belongs to the workspace `ModuleFrame`, never the module.
+- **Canvas** (`workspace/Workspace.tsx`) lays modules out on a snapping grid via
+  `react-grid-layout` (v1.5, the React-18-stable line; `compactType={null}` for
+  free placement). Positions/sizes are stored in grid units, not pixels.
+- **Layout persistence** is user-authored data, so it's **Plane A**. It currently
+  persists to `localStorage` (`workspace/useLayout.ts`); the hook's interface is
+  shaped so it can graduate to the shared SQLite schema — and sync across devices
+  — without touching the canvas. Module data itself (e.g. tasks) already lives in
+  the local SQLite store.
+- **Single-tab ownership.** The client SQLite store uses the OPFS `SAHPool` VFS,
+  which takes an *exclusive* lock on its files — a second tab opening it throws
+  `NoModificationAllowedError`. `SingleTabGuard` (`src/SingleTabGuard.tsx`) gates
+  the app on a Web Locks (`navigator.locks`) exclusive lock: the first tab owns the
+  store; other tabs render a takeover screen instead. The DB worker is created
+  lazily (`db/client.ts` `getDb()`) so a non-owner tab never opens the store, and
+  an owner hands off by closing the DB (freeing the handles) before releasing the
+  lock. Multi-tab concurrency would instead need a `SharedWorker`; deferred since
+  the app is desktop-first (Tauri is a single window).
+
+> Status: the canvas, registry, `ModuleFrame`, grid movement, and localStorage
+> persistence are implemented with the Tasks module. Graduating the layout to the
+> shared SQLite schema, plus the weather and agent-chat modules, are still to do.
+
 ## Sync
 
 - **Server DB:** Postgres.
@@ -199,8 +236,9 @@ ghost/
 │   │
 │   ├── web/                  # React + Vite — build first
 │   │   ├── src/
-│   │   │   ├── features/     # dashboard · tasks · finance · agent
-│   │   │   ├── data/         # local SQLite + sync client
+│   │   │   ├── workspace/    # the canvas shell + module registry
+│   │   │   ├── modules/      # self-contained feature modules (tasks · …)
+│   │   │   ├── db/           # local SQLite (worker + Drizzle) + sync client
 │   │   │   └── lib/
 │   │   └── index.html
 │   │

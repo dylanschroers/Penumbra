@@ -41,26 +41,110 @@ body {
   font-family: system-ui, -apple-system, sans-serif;
 }
 
-.app {
-  max-width: 640px;
-  margin: 0 auto;
-  padding: 2.5rem 1.25rem;
+/* Workspace canvas */
+.workspace {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
-.app__header {
-  margin-bottom: 1.5rem;
+.workspace__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
 }
 
-.app__title {
+.workspace__title {
   margin: 0;
-  font-size: 1.9rem;
+  font-size: 1.25rem;
   letter-spacing: -0.02em;
 }
 
-.app__subtitle {
-  margin: 0.25rem 0 0;
-  color: var(--muted);
-  font-size: 0.9rem;
+.workspace__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.workspace__canvas {
+  flex: 1;
+  padding: 0.75rem;
+  position: relative;
+}
+
+.workspace__empty {
+  padding-top: 3rem;
+}
+
+.workspace__item {
+  height: 100%;
+}
+
+/* Module card chrome */
+.module-frame {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.module-frame__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.4rem 0.4rem 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+  user-select: none;
+}
+
+.module-frame__title {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.module-frame__close {
+  cursor: pointer;
+}
+
+.module-frame__body {
+  flex: 1;
+  padding: 0.9rem;
+  overflow: auto;
+}
+
+/* Grid placeholder shown while dragging/resizing */
+/* Scoped under .workspace so it outranks react-grid-layout's own
+   `.react-grid-item.react-grid-placeholder { background: red }` (same specificity,
+   loaded later) instead of tying with it. */
+.workspace .react-grid-item.react-grid-placeholder {
+  background: #ab13ab;
+  border-radius: var(--radius);
+}
+
+/* Make the resize handle discoverable. The bundled CSS keeps it at opacity 0
+   until hover and draws a dark arrow that vanishes on a dark surface, so show a
+   faint handle always (full on hover) and tint the arrow with the theme. Scoped
+   under .workspace to outrank the bundled rule, which is imported afterwards. */
+.workspace .react-grid-item > .react-resizable-handle {
+  opacity: 0.35;
+}
+
+.workspace .react-grid-item:hover > .react-resizable-handle {
+  opacity: 1;
+}
+
+.workspace .react-grid-item > .react-resizable-handle::after {
+  border-right-color: var(--muted);
+  border-bottom-color: var(--muted);
 }
 
 /* Add-task form */
@@ -198,4 +282,34 @@ body {
 
 .notice--error {
   color: var(--danger);
+}
+
+/* Single-tab guard screen (shown when the store is owned by another tab) */
+.tab-blocked {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+}
+
+.tab-blocked__card {
+  max-width: 26rem;
+  text-align: center;
+  padding: 2rem 1.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.tab-blocked__title {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
+}
+
+.tab-blocked__text {
+  margin: 0 0 1.25rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
 }
