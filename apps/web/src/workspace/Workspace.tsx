@@ -5,16 +5,11 @@ import { getModule } from "./registry";
 import { ModuleFrame } from "./ModuleFrame";
 import { AddModuleMenu } from "./AddModuleMenu";
 import { useLayout } from "./useLayout";
+import { COLS, ROW_HEIGHT, MARGIN } from "./grid";
 
 // WidthProvider measures the container and feeds `width` to the grid, so we don't
 // have to track it ourselves.
 const GridLayout = WidthProvider(RGL);
-
-// Grid metrics. Positions in ModuleInstance are in these units; the grid maps
-// them to pixels from the measured container width.
-const COLS = 24;
-const ROW_HEIGHT = 40;
-const MARGIN: [number, number] = [12, 12];
 
 // The blank base canvas. Renders each placed module inside a ModuleFrame and lets
 // the user drag/resize them on a snapping grid. Layout state and persistence live

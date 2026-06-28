@@ -1,6 +1,28 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ModuleInstance } from "./types";
 import { getModule } from "./registry";
+import { COLS } from "./grid";
+
+type Rect = { x: number; y: number; w: number; h: number };
+
+function overlaps(a: Rect, b: Rect): boolean {
+  return (
+    a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+  );
+}
+
+// First free grid slot scanning left-to-right within a row, then top-to-bottom.
+// New tiles fill gaps and wrap to the next row instead of always extending the
+// page downward. Terminates: once y clears every existing tile, row 0..COLS-w is
+// empty, so a slot always exists.
+function firstFreeSlot(existing: Rect[], w: number, h: number): Rect {
+  for (let y = 0; ; y++) {
+    for (let x = 0; x + w <= COLS; x++) {
+      const candidate = { x, y, w, h };
+      if (!existing.some((tile) => overlaps(candidate, tile))) return candidate;
+    }
+  }
+}
 
 // Workspace layout is user-authored data (Plane A in docs/ARCHITECTURE.md).
 // It will eventually live in the shared SQLite schema and sync across devices;
@@ -42,24 +64,19 @@ export function useLayout() {
     }
   }, [instances]);
 
-  /** Add a module instance below everything already placed. */
+  /** Add a module instance in the first free slot (left-to-right, top-to-bottom). */
   const addModule = useCallback((moduleId: string) => {
     const def = getModule(moduleId);
     if (!def) return;
     setInstances((prev) => {
-      // No compaction is applied, so a new module would otherwise land on top of
-      // existing ones at (0,0). Drop it in a fresh row beneath the lowest module.
-      const nextY = prev.reduce((max, i) => Math.max(max, i.y + i.h), 0);
+      // No compaction is applied, so place the new tile in the first gap rather
+      // than letting it land on existing ones or always stack below them.
+      const w = Math.min(def.defaultSize.w, COLS);
+      const h = def.defaultSize.h;
+      const { x, y } = firstFreeSlot(prev, w, h);
       return [
         ...prev,
-        {
-          instanceId: crypto.randomUUID(),
-          moduleId,
-          x: 0,
-          y: nextY,
-          w: def.defaultSize.w,
-          h: def.defaultSize.h,
-        },
+        { instanceId: crypto.randomUUID(), moduleId, x, y, w, h },
       ];
     });
   }, []);
