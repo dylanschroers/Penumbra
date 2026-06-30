@@ -408,3 +408,114 @@ body {
   font-size: 0.8rem;
   color: var(--muted);
 }
+
+/* Weather module */
+.weather {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.weather__search {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.weather__input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.weather__input:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.weather__place {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.weather__current {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.weather__icon {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.weather__temp {
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.weather__label {
+  color: var(--muted);
+}
+
+.weather__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.weather__forecast {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.weather__day {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.5rem 0.25rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.weather__day-name {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.weather__day-icon {
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.weather__day-temps {
+  font-size: 0.8rem;
+}
+
+.weather__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.weather__units {
+  font-size: 0.85rem;
+  padding: 0.2rem 0.5rem;
+}
