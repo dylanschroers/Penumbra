@@ -1,12 +1,14 @@
 // Runs on a Web Worker (background thread). Owns the SQLite database so query
 // work never blocks the UI. The main thread talks to it via Comlink — see
-// ./client.ts. The exposed `api` object grows into the full repository in the
-// next step; for now it carries a single health check to prove the chain works.
+// ./client.ts. Besides the task CRUD the UI calls, this also exposes the four
+// primitives the sync client drives (collect/clear the outbox, apply pulled
+// rows, read the cursor) — see ../sync/SyncClient.ts and docs/SYNC.md.
 
 import * as Comlink from "comlink";
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import {
   tasks,
   createTaskInput,
@@ -15,6 +17,7 @@ import {
   type UpdateTaskInput,
   type NewTaskRow,
   type TaskRow,
+  type SyncTask,
 } from "@ghost/shared";
 import { runMigrations } from "./migrator";
 
@@ -22,6 +25,15 @@ import { runMigrations } from "./migrator";
 // "leave the door open for more"), so multi-user later is a query change, not
 // a schema migration.
 const LOCAL_USER_ID = "local";
+
+// Client-only sync bookkeeping table. Mirrors migration 0002_outbox.sql; it is
+// deliberately NOT in the shared schema because the server has no outbox. Each
+// local mutation appends the touched row id here; the sync client drains it
+// after a successful push.
+const outbox = sqliteTable("_outbox", {
+  seq: integer("seq").primaryKey({ autoIncrement: true }),
+  rowId: text("row_id").notNull(),
+});
 
 // Minimal shapes for the parts of the sqlite-wasm API we use. The package's
 // own types vary across builds, so we pin just what we touch at the WASM
@@ -71,11 +83,56 @@ async function init() {
 // Kick off initialization once; every API call awaits it.
 const ready = init();
 
+type Db = Awaited<ReturnType<typeof init>>["db"];
+
+/** Record that a row changed locally and needs pushing. */
+async function enqueue(db: Db, rowId: string): Promise<void> {
+  await db.insert(outbox).values({ rowId });
+}
+
+/** LWW upsert of a single sync row, used when applying server changes. Writes
+ * only when the row is new or the incoming edit is at least as recent, and
+ * never touches the outbox (pulled rows must not bounce back as local dirt). */
+async function upsertFromServer(db: Db, row: SyncTask): Promise<boolean> {
+  const [existing] = await db
+    .select({ updatedAt: tasks.updatedAt })
+    .from(tasks)
+    .where(eq(tasks.id, row.id));
+
+  // ISO-8601 strings sort chronologically, so a string compare is the LWW test.
+  // `>=` lets the server (the merge authority) win ties.
+  if (existing && row.updatedAt < existing.updatedAt) return false;
+
+  const values: NewTaskRow = {
+    id: row.id,
+    userId: row.userId,
+    title: row.title,
+    notes: row.notes ?? null,
+    priority: row.priority,
+    status: row.status,
+    dueAt: row.dueAt ?? null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    deletedAt: row.deletedAt ?? null,
+    rev: row.rev ?? null,
+  };
+
+  await db
+    .insert(tasks)
+    .values(values)
+    .onConflictDoUpdate({ target: tasks.id, set: values });
+  return true;
+}
+
 const api = {
-  /** All tasks, newest first. */
+  /** All live (non-deleted) tasks, newest first. */
   async listTasks(): Promise<TaskRow[]> {
     const { db } = await ready;
-    return db.select().from(tasks).orderBy(desc(tasks.createdAt));
+    return db
+      .select()
+      .from(tasks)
+      .where(isNull(tasks.deletedAt))
+      .orderBy(desc(tasks.createdAt));
   },
 
   /** Validate input, insert a new task, and return the stored row. */
@@ -95,6 +152,7 @@ const api = {
       updatedAt: now,
     };
     const [created] = await db.insert(tasks).values(row).returning();
+    await enqueue(db, row.id);
     return created!;
   },
 
@@ -108,13 +166,68 @@ const api = {
       .where(eq(tasks.id, id))
       .returning();
     if (!updated) throw new Error(`Task not found: ${id}`);
+    await enqueue(db, id);
     return updated;
   },
 
-  /** Delete one task by id. */
+  /** Soft-delete one task: stamp a tombstone so the deletion can sync. The row
+   * stays in the table (filtered out of listTasks) until it is pushed. */
   async deleteTask(id: string): Promise<void> {
     const { db } = await ready;
-    await db.delete(tasks).where(eq(tasks.id, id));
+    const now = new Date().toISOString();
+    const [deleted] = await db
+      .update(tasks)
+      .set({ deletedAt: now, updatedAt: now })
+      .where(eq(tasks.id, id))
+      .returning();
+    if (!deleted) return; // already gone — nothing to enqueue
+    await enqueue(db, id);
+  },
+
+  // ---- Sync primitives (driven by ../sync/SyncClient.ts) -------------------
+
+  /** The highest server rev this device has stored — the pull cursor. */
+  async getCursor(): Promise<number> {
+    const { db } = await ready;
+    const [row] = await db
+      .select({ max: sql<number>`coalesce(max(${tasks.rev}), 0)` })
+      .from(tasks);
+    return Number(row?.max ?? 0);
+  },
+
+  /** Current state of every locally-dirty row, plus the outbox seqs covering
+   * them. The seqs are handed back to clearOutbox after a successful push. */
+  async collectOutbox(): Promise<{ seqs: number[]; rows: SyncTask[] }> {
+    const { db } = await ready;
+    const entries = await db.select().from(outbox);
+    if (entries.length === 0) return { seqs: [], rows: [] };
+
+    const seqs = entries.map((e) => e.seq);
+    const ids = [...new Set(entries.map((e) => e.rowId))];
+    const rows = (await db
+      .select()
+      .from(tasks)
+      .where(inArray(tasks.id, ids))) as SyncTask[];
+    return { seqs, rows };
+  },
+
+  /** Drop the given outbox entries after the server has accepted them. */
+  async clearOutbox(seqs: number[]): Promise<void> {
+    if (seqs.length === 0) return;
+    const { db } = await ready;
+    await db.delete(outbox).where(inArray(outbox.seq, seqs));
+  },
+
+  /** Apply rows pulled from the server with last-write-wins. Returns how many
+   * rows actually changed locally, so the caller can skip a UI refresh on a
+   * no-op pull. */
+  async applyServerRows(rows: SyncTask[]): Promise<number> {
+    const { db } = await ready;
+    let changed = 0;
+    for (const row of rows) {
+      if (await upsertFromServer(db, row)) changed++;
+    }
+    return changed;
   },
 };
 

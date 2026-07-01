@@ -13,6 +13,10 @@ dist/
 .env.*
 !.env.example
 
+# server-side sqlite store (sync v0)
+ghost-server.db
+ghost-server.db-*
+
 # os
 .DS_Store
 

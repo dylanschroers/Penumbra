@@ -1,4 +1,4 @@
-import { sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 // The local-store (SQLite) definition of the tasks table — Plane A, owned data.
 // The Postgres counterpart for the server arrives in the sync phase and will
@@ -21,6 +21,13 @@ export const tasks = sqliteTable("tasks", {
   dueAt: text("due_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+  // Sync columns (Plane A, see docs/SYNC.md).
+  //   deletedAt — soft-delete tombstone so deletions propagate; null = live.
+  //   rev       — server-assigned monotonic version. It is the pull cursor:
+  //               a client asks for rows with rev greater than the highest it
+  //               has seen. Null on a row created locally and not yet pushed.
+  deletedAt: text("deleted_at"),
+  rev: integer("rev"),
 });
 
 // Row shapes inferred directly from the table definition — the storage-side

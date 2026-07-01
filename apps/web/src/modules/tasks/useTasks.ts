@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getDb } from "../../db/client";
+import { requestSync, SYNC_EVENT } from "../../sync/SyncClient";
 import type { CreateTaskInput, TaskRow, UpdateTaskInput } from "@ghost/shared";
 
 // The single place the UI touches the repository. Holds the task list in React
@@ -24,12 +25,18 @@ export function useTasks() {
 
   useEffect(() => {
     void refresh();
+    // A pull that changed local data fires this — re-read so remote edits from
+    // another device show up live.
+    const onSynced = () => void refresh();
+    window.addEventListener(SYNC_EVENT, onSynced);
+    return () => window.removeEventListener(SYNC_EVENT, onSynced);
   }, [refresh]);
 
   const createTask = useCallback(
     async (input: CreateTaskInput) => {
       await getDb().createTask(input);
       await refresh();
+      requestSync();
     },
     [refresh],
   );
@@ -38,6 +45,7 @@ export function useTasks() {
     async (id: string, patch: UpdateTaskInput) => {
       await getDb().updateTask(id, patch);
       await refresh();
+      requestSync();
     },
     [refresh],
   );
@@ -46,6 +54,7 @@ export function useTasks() {
     async (id: string) => {
       await getDb().deleteTask(id);
       await refresh();
+      requestSync();
     },
     [refresh],
   );

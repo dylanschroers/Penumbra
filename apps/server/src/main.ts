@@ -1,19 +1,17 @@
 import Fastify from "fastify";
-import { createTaskInput } from "@ghost/shared";
+import cors from "@fastify/cors";
+import { registerTaskSyncRoutes } from "./sync/tasks";
+import "./db"; // open the store + ensure schema on startup
 
 const app = Fastify({ logger: true });
 
+// v0 has no auth (single user, LAN/localhost — see docs/SYNC.md), so reflect any
+// origin. Lock this down before the server ever faces the open internet.
+await app.register(cors, { origin: true });
+
 app.get("/health", async () => ({ status: "ok" }));
 
-// Demonstrates the *same* shared Zod schema validating input on the server.
-// Persistence (Plane A via Drizzle/SQLite + sync) comes in a later phase.
-app.post("/tasks", async (request, reply) => {
-  const parsed = createTaskInput.safeParse(request.body);
-  if (!parsed.success) {
-    return reply.code(400).send({ error: parsed.error.flatten() });
-  }
-  return reply.code(201).send({ task: parsed.data });
-});
+registerTaskSyncRoutes(app);
 
 const port = Number(process.env.PORT ?? 3000);
 app.listen({ port, host: "0.0.0.0" }).catch((err) => {
