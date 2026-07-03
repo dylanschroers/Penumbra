@@ -9,6 +9,7 @@
 // A later move to Postgres is contained to this module.
 
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 
 export const sqlite: Database.Database = new Database(
   process.env.DB_PATH ?? "ghost-server.db",
@@ -30,4 +31,26 @@ CREATE TABLE IF NOT EXISTS tasks (
   rev integer
 );
 CREATE INDEX IF NOT EXISTS tasks_rev_idx ON tasks (rev);
+CREATE TABLE IF NOT EXISTS meta (
+  key text PRIMARY KEY NOT NULL,
+  value text NOT NULL
+);
 `);
+
+// The identity of this database, minted once at creation and returned with
+// every sync response. Revs are only meaningful relative to the database that
+// issued them, so a client that sees an unfamiliar id knows its cursor and
+// cleared outbox belong to a dead epoch and must reconcile (see docs/SYNC.md).
+// A restored backup keeps its id (its revs are still valid); a fresh or
+// replaced file gets a new one.
+export const instanceId: string = (() => {
+  const row = sqlite
+    .prepare(`SELECT value FROM meta WHERE key = 'instance_id'`)
+    .get() as { value: string } | undefined;
+  if (row) return row.value;
+  const id = randomUUID();
+  sqlite
+    .prepare(`INSERT INTO meta (key, value) VALUES ('instance_id', ?)`)
+    .run(id);
+  return id;
+})();

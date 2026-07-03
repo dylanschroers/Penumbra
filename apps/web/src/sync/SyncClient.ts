@@ -17,6 +17,27 @@ const DEBOUNCE_MS = 800;
  * React. */
 export const SYNC_EVENT = "ghost:synced";
 
+/** Fired on window when the connection status changes; detail is a SyncStatus.
+ * "pending" until the first round settles, then whatever the last round
+ * proved. Same event-not-callback reasoning as SYNC_EVENT. */
+export const SYNC_STATUS_EVENT = "ghost:sync-status";
+
+export type SyncStatus = "pending" | "connected" | "disconnected";
+
+let status: SyncStatus = "pending";
+
+/** The last known connection status (for initial render; updates arrive via
+ * SYNC_STATUS_EVENT). */
+export function getSyncStatus(): SyncStatus {
+  return status;
+}
+
+function setStatus(next: SyncStatus): void {
+  if (status === next) return;
+  status = next;
+  window.dispatchEvent(new CustomEvent<SyncStatus>(SYNC_STATUS_EVENT, { detail: next }));
+}
+
 let active = false; // a sync loop is running in this tab
 let syncing = false; // a round is in flight (prevents overlap)
 let debounce: ReturnType<typeof setTimeout> | undefined;
@@ -36,28 +57,49 @@ async function pushOnce(): Promise<void> {
   await db.clearOutbox(seqs);
 }
 
-/** Returns true when pulled rows changed local data. */
-async function pullOnce(): Promise<boolean> {
+/** `changed` is true when pulled rows changed local data. */
+async function pullOnce(): Promise<{ changed: boolean; serverId: string }> {
   const db = getDb();
   const cursor = await db.getCursor();
   const res = await fetch(`${SERVER_URL}/sync/tasks?since=${cursor}`);
   if (!res.ok) throw new Error(`pull failed: ${res.status}`);
-  const { rows } = (await res.json()) as PullTasksResult;
-  if (rows.length === 0) return false;
-  return (await db.applyServerRows(rows)) > 0;
+  const { rows, serverId } = (await res.json()) as PullTasksResult;
+  const changed = rows.length > 0 && (await db.applyServerRows(rows)) > 0;
+  return { changed, serverId };
 }
 
 async function syncNow(): Promise<void> {
-  if (!active || syncing || !navigator.onLine) return;
+  if (!active || syncing) return;
+  if (!navigator.onLine) {
+    setStatus("disconnected");
+    return;
+  }
   syncing = true;
   try {
     await pushOnce();
-    if (await pullOnce()) {
+    let { changed, serverId } = await pullOnce();
+
+    // A serverId we haven't adopted means the database behind the URL was
+    // replaced (or this store has never synced): our cursor and cleared outbox
+    // belong to a dead epoch. Reconcile — forget revs, re-offer every row —
+    // then run one more push+pull against the new epoch. If the id changes
+    // again mid-round, the next round picks it up. A response with no serverId
+    // at all is a pre-epoch server build: don't treat that as a new epoch.
+    if (serverId && serverId !== (await getDb().getServerId())) {
+      await getDb().adoptServer(serverId);
+      await pushOnce();
+      changed = (await pullOnce()).changed || changed;
+    }
+
+    if (changed) {
       window.dispatchEvent(new CustomEvent(SYNC_EVENT));
     }
+    // Every round ends in a pull, so reaching here proves the server answered.
+    setStatus("connected");
   } catch (err) {
     // Offline or server down is the normal local-first case: stay quiet-ish and
     // let the next trigger retry. The outbox preserves unpushed work.
+    setStatus("disconnected");
     console.warn("[sync]", err);
   } finally {
     syncing = false;
@@ -81,13 +123,18 @@ export function startSync(): () => void {
   void syncNow();
   const timer = setInterval(() => void syncNow(), INTERVAL_MS);
   const onOnline = () => void syncNow();
+  // Flip the light immediately when the network drops, rather than waiting for
+  // the next round's fetch to fail.
+  const onOffline = () => setStatus("disconnected");
   window.addEventListener("online", onOnline);
+  window.addEventListener("offline", onOffline);
 
   function stop(): void {
     active = false;
     clearInterval(timer);
     clearTimeout(debounce);
     window.removeEventListener("online", onOnline);
+    window.removeEventListener("offline", onOffline);
   }
   stopSync = stop;
   return stop;

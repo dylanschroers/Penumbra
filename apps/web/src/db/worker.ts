@@ -35,6 +35,15 @@ const outbox = sqliteTable("_outbox", {
   rowId: text("row_id").notNull(),
 });
 
+// Client-only, mirrors 0003_sync_meta.sql. Holds the id of the server database
+// this store last reconciled with; see adoptServer below.
+const syncMeta = sqliteTable("_sync_meta", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
+
+const SERVER_ID_KEY = "server_id";
+
 // Minimal shapes for the parts of the sqlite-wasm API we use. The package's
 // own types vary across builds, so we pin just what we touch at the WASM
 // boundary rather than depend on its full typings.
@@ -216,6 +225,35 @@ const api = {
     if (seqs.length === 0) return;
     const { db } = await ready;
     await db.delete(outbox).where(inArray(outbox.seq, seqs));
+  },
+
+  /** The id of the server database this store last reconciled with, or null if
+   * it has never synced (or predates instance ids). */
+  async getServerId(): Promise<string | null> {
+    const { db } = await ready;
+    const [row] = await db
+      .select()
+      .from(syncMeta)
+      .where(eq(syncMeta.key, SERVER_ID_KEY));
+    return row?.value ?? null;
+  },
+
+  /** Reconcile this store with a new server database (epoch). Revs issued by
+   * the old database are meaningless (nulling them also resets the pull cursor
+   * to 0), and pushes the old database acknowledged may have died with it, so
+   * every row — tombstones included — goes back into the outbox to be
+   * re-offered. LWW on both sides makes the re-exchange converge. */
+  async adoptServer(serverId: string): Promise<void> {
+    const { db } = await ready;
+    await db.update(tasks).set({ rev: null });
+    const ids = await db.select({ id: tasks.id }).from(tasks);
+    if (ids.length > 0) {
+      await db.insert(outbox).values(ids.map(({ id }) => ({ rowId: id })));
+    }
+    await db
+      .insert(syncMeta)
+      .values({ key: SERVER_ID_KEY, value: serverId })
+      .onConflictDoUpdate({ target: syncMeta.key, set: { value: serverId } });
   },
 
   /** Apply rows pulled from the server with last-write-wins. Returns how many

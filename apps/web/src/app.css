@@ -67,6 +67,38 @@ body {
   letter-spacing: -0.02em;
 }
 
+.workspace__brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Sync status light (see src/sync/SyncStatusLight.tsx). */
+.sync-light {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.sync-light--pending {
+  background: var(--muted);
+}
+
+.sync-light--connected {
+  background: #16a34a;
+}
+
+.sync-light--disconnected {
+  background: var(--danger);
+}
+
+@media (prefers-color-scheme: dark) {
+  .sync-light--connected {
+    background: #4ade80;
+  }
+}
+
 .workspace__actions {
   display: flex;
   gap: 0.5rem;

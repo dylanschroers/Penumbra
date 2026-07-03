@@ -5,7 +5,7 @@
 
 import type { FastifyInstance } from "fastify";
 import { pushTasksInput, type SyncTask } from "@ghost/shared";
-import { sqlite } from "../db";
+import { sqlite, instanceId } from "../db";
 
 // Column aliases map snake_case storage to the camelCase SyncTask wire shape, so
 // rows read straight out of these statements are already valid sync rows.
@@ -71,7 +71,7 @@ export function registerTaskSyncRoutes(app: FastifyInstance): void {
     const since = Number((request.query as { since?: string }).since ?? 0);
     const rows = selectSince.all(since) as SyncTask[];
     const last = rows[rows.length - 1];
-    return { rows, cursor: last?.rev ?? since };
+    return { rows, cursor: last?.rev ?? since, serverId: instanceId };
   });
 
   // Push: client's dirty rows. Validated against the shared schema, then merged.
@@ -81,6 +81,6 @@ export function registerTaskSyncRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     const cursor = applyPush(parsed.data.rows);
-    return { cursor };
+    return { cursor, serverId: instanceId };
   });
 }

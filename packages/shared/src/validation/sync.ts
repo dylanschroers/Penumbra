@@ -27,9 +27,15 @@ export const pushTasksInput = z.object({
   rows: z.array(syncTask),
 });
 
+// Every server response carries `serverId`, the identity of the database that
+// issued it. Revs and cursors are only meaningful within one database's
+// lifetime (an "epoch"): a client that sees an unfamiliar serverId must
+// reconcile — forget its revs and re-offer every row. See docs/SYNC.md.
+
 /** Server → client (push ack): the server's high-water cursor after applying. */
 export const pushTasksResult = z.object({
   cursor: z.number().int(),
+  serverId: z.string(),
 });
 
 /** Server → client (pull): rows with rev past the client's cursor, plus the
@@ -37,6 +43,7 @@ export const pushTasksResult = z.object({
 export const pullTasksResult = z.object({
   rows: z.array(syncTask),
   cursor: z.number().int(),
+  serverId: z.string(),
 });
 
 export type SyncTask = z.infer<typeof syncTask>;
