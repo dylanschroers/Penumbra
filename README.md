@@ -119,4 +119,4 @@ append-only audit log of every agent action. See the security section of
 
 ## License
 
-To be determined.
+Apache License 2.0. See [LICENSE](LICENSE).
