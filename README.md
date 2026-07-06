@@ -1,21 +1,22 @@
 # Ghost
 
-**A local-first personal assistant that manages your tasks, finances, and daily
-responsibilities — and can act on them through an AI agent.** Your data lives on
-your devices and works fully offline, syncing across them when you reconnect.
+Ghost is a local-first personal assistant for your tasks, finances, and daily
+responsibilities, with an AI agent that can act on them for you. Your data lives
+on your own devices and works fully offline, then syncs across them when you
+reconnect.
 
-## What makes Ghost different
+## What it does
 
-- **Local-first** — every device holds a full copy of your data, works
-  completely offline, and syncs in the background when reconnected.
-- **Agentic** — a tool-calling AI that can actually *do* things on your behalf
-  (create tasks, read your calendar, check balances), not just chat.
-- **Unified** — tasks, scheduling, finances, and third-party integrations in one
-  place instead of five apps.
+- Keeps a full copy of your data on every device, so it works offline and syncs
+  in the background once you're back online.
+- Runs a tool-calling AI agent that can create tasks, read your calendar, and
+  check balances on your behalf.
+- Brings tasks, scheduling, finances, and third-party integrations together in
+  one app.
 
 ## How it's built
 
-One headless backend, with thin clients that share its types and sync stream:
+One headless backend serves thin clients that share its types and sync stream:
 
 ```
    Web · Desktop · Mobile          (each with a local store, works offline)
@@ -28,22 +29,25 @@ One headless backend, with thin clients that share its types and sync stream:
    Google · banking · model API
 ```
 
-**TypeScript end-to-end · React + Tauri clients · Node sync server ·
-local-first over SQLite** (server on better-sqlite3 today, Postgres later).
+The stack is TypeScript throughout: React and Tauri on the clients, a Node sync
+server, and local-first storage on SQLite. The server runs on better-sqlite3 for
+now and will move to Postgres later.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design — the two
-data planes, the tool registry, sync, and the reasoning behind the stack — and
-[docs/SYNC.md](docs/SYNC.md) for the delta-sync engine.
+For the full design, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), which
+covers the two data planes, the tool registry, sync, and the reasoning behind
+the stack. The delta-sync engine has its own writeup in
+[docs/SYNC.md](docs/SYNC.md).
 
 ## Getting started
 
 ### Prerequisites
 
-- **Node 20+** and **pnpm 9+** (the repo pins pnpm via `packageManager`; run
-  `corepack enable` to use the right version automatically).
-- For the **desktop app only**: a stable **Rust** toolchain plus the platform
-  webview — WebView2 on Windows (preinstalled on Windows 11), WebKitGTK on
-  Linux, WKWebView on macOS. Not needed to run the web app.
+- Node 20 or newer and pnpm 9 or newer. The repo pins pnpm through the
+  `packageManager` field, so `corepack enable` picks up the right version
+  automatically.
+- Only for the desktop app: a stable Rust toolchain and the platform webview
+  (WebView2 on Windows, preinstalled on Windows 11; WebKitGTK on Linux;
+  WKWebView on macOS). The web app does not need these.
 
 ### Install
 
@@ -56,56 +60,60 @@ pnpm install
 Start the web client and the sync server together (Turborepo runs both):
 
 ```
-pnpm dev          # web → http://localhost:5173 · sync server → http://localhost:3000
+pnpm dev          # web on :5173, sync server on :3000
 ```
 
-Or run either half on its own:
+Run either half on its own:
 
 ```
-pnpm --filter @ghost/web dev      # web only — the offline v0, no server needed
+pnpm --filter @ghost/web dev      # web only, the offline v0 with no server
 pnpm --filter @ghost/server dev   # sync server only
 ```
 
-Run it as a native desktop app (wraps the same web UI in Tauri):
+Run it as a native desktop app, which wraps the same web UI in Tauri:
 
 ```
 pnpm desktop         # dev window with hot reload
-pnpm desktop:build   # native installers (.msi / .exe on Windows)
+pnpm desktop:build   # native installers (.msi and .exe on Windows)
 ```
 
 ### Sync across devices
 
-Each client keeps a full local SQLite store and works fully offline; the server
-just reconciles them. To sync across machines on your LAN, copy
-`apps/web/.env.example` to `apps/web/.env` and point `VITE_SERVER_URL` at the
-host's address (e.g. `http://192.168.1.50:3000`). It defaults to
-`http://localhost:3000`, which is right when everything runs on one machine.
+Every client keeps its own full SQLite store and works offline; the server only
+reconciles them. To sync across machines on your LAN, copy
+`apps/web/.env.example` to `apps/web/.env` and set `VITE_SERVER_URL` to the
+host's address, for example `http://192.168.1.50:3000`. It defaults to
+`http://localhost:3000`, which is what you want when everything runs on one
+machine.
 
-Here's the web client and a fresh desktop client before their first sync — the
-web app already has tasks, the desktop store is empty:
+The screenshot below shows the web client next to a freshly opened desktop
+client before their first sync. The web app already has tasks; the desktop store
+is still empty.
 
-![Before sync: the web client has tasks while the newly opened desktop client is still empty](docs/images/sync-before.png)
+![Web client with tasks next to an empty desktop client before syncing](docs/images/sync-before.png)
 
-After one sync round the desktop client mirrors the web client's tasks (note the
-green status light on both):
+After one sync round the desktop client has the same tasks as the web client,
+and both status lights are green.
 
-![After sync: the desktop client now shows the same tasks as the web client](docs/images/sync-after.png)
+![Desktop client showing the same tasks as the web client after syncing](docs/images/sync-after.png)
 
 ## Roadmap
 
-The ordering ships something useful before tackling the hardest part (sync).
+The order ships something useful before taking on the hardest part, which is
+sync.
 
-- [x] **Offline v0** — web UI + local SQLite store; tasks, weather, and the
-      workspace canvas working on one device
-- [x] **Sync** — sync server + delta-sync engine; multi-device, last-write-wins
-- [x] **Desktop** — the web UI wrapped in Tauri, sharing the same local store
-- [ ] **Agent + integrations** — tool registry and OAuth connectors
-      (calendar, email, banking)
-- [ ] **Mobile** — reuse the API and shared types
+- [x] Offline v0: web UI and local SQLite store, with tasks, weather, and the
+      workspace canvas working on one device.
+- [x] Sync: sync server and delta-sync engine, so it works across devices with
+      last-write-wins.
+- [x] Desktop: the web UI wrapped in Tauri, sharing the same local store.
+- [ ] Agent and integrations: the tool registry and OAuth connectors for
+      calendar, email, and banking.
+- [ ] Mobile: reuse the API and shared types.
 
 ## Security & privacy
 
-OAuth for all third-party integrations, encrypted credentials, and a full
+OAuth for every third-party integration, encrypted credentials, and an
 append-only audit log of every agent action. See the security section of
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
