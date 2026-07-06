@@ -13,8 +13,16 @@ dist/
 .env.*
 !.env.example
 
+# server-side sqlite store (sync v0)
+ghost-server.db
+ghost-server.db-*
+
 # os
 .DS_Store
 
 # claude code local settings
 .claude/settings.local.json
+
+# tauri / rust
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/schemas/

@@ -10,7 +10,9 @@ export default defineConfig({
   define: {
     "process.env.DRAGGABLE_DEBUG": "false",
   },
-  server: { port: 5173 },
+  // strictPort: the Tauri shell hardcodes this port as its devUrl, so failing
+  // fast beats Vite silently hopping to 5174 and leaving the webview dead.
+  server: { port: 5173, strictPort: true },
   // The worker is an ES module (it uses import/export).
   worker: { format: "es" },
   optimizeDeps: {

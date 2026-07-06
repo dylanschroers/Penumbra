@@ -4,6 +4,7 @@ import "react-grid-layout/css/styles.css";
 import { getModule } from "./registry";
 import { ModuleFrame } from "./ModuleFrame";
 import { AddModuleMenu } from "./AddModuleMenu";
+import { SyncStatusLight } from "../sync/SyncStatusLight";
 import { useLayout } from "./useLayout";
 import { COLS, ROW_HEIGHT, MARGIN } from "./grid";
 
@@ -39,7 +40,10 @@ export function Workspace() {
   return (
     <main className="workspace">
       <header className="workspace__bar">
-        <h1 className="workspace__title">Ghost</h1>
+        <div className="workspace__brand">
+          <h1 className="workspace__title">Ghost</h1>
+          <SyncStatusLight />
+        </div>
         <div className="workspace__actions">
           <AddModuleMenu onAdd={addModule} />
         </div>

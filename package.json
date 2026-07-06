@@ -1,6 +1,7 @@
 {
   "name": "ghost",
   "private": true,
+  "license": "Apache-2.0",
   "packageManager": "pnpm@9.15.0",
   "engines": {
     "node": ">=20"
@@ -8,13 +9,15 @@
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
-    "typecheck": "turbo run typecheck"
+    "typecheck": "turbo run typecheck",
+    "desktop": "pnpm --filter @ghost/desktop dev:desktop",
+    "desktop:build": "pnpm --filter @ghost/desktop build:desktop"
   },
   "devDependencies": {
     "turbo": "^2.3.3",
     "typescript": "^5.7.2"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": ["esbuild", "better-sqlite3", "@tauri-apps/cli"]
   }
 }
