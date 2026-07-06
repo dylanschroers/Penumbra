@@ -22,3 +22,7 @@ ghost-server.db-*
 
 # claude code local settings
 .claude/settings.local.json
+
+# tauri / rust
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/schemas/
