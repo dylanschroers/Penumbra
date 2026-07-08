@@ -38,7 +38,7 @@ data can or should be offline-capable. Data is split by *where truth lives*.
 │                                                                    │
 │  PLANE B — External data  (online-only, read-through cache)        │
 │  live bank balances · emails · calendar · agent actions            │
-│    • truth lives in Google / your bank / the model provider       │
+│    • truth lives in Google or your bank (their systems)           │
 │    • cache last-known value for offline *reading* only            │
 │    • writes & agent actions queue as intents, execute on reconnect│
 └────────────────────────────────────────────────────────────────────┘
@@ -125,9 +125,60 @@ is "a human pulled this trigger"; the agent is "the model pulled this trigger."
 This is what makes the agent trustworthy and keeps behavior consistent across
 the two entry points.
 
-The agent itself calls the model provider directly via the Anthropic TS SDK — no
-LangChain. For a single-agent tool loop, a framework adds indirection without
+The agent talks to its model through a single provider-neutral seam — an
+OpenAI-compatible client — so any local server, self-hosted endpoint, or opt-in
+cloud provider drops in behind the same `{ baseURL, model }` config. No
+LangChain: for a single-agent tool loop, a framework adds indirection without
 buying much.
+
+---
+
+## AI & inference
+
+AI in Ghost is **local-first, like the rest of the app**: a small model ships
+embedded in the client and works with no server and no network. A self-hosted
+server or an opt-in cloud provider are *optional escalations*, never a hard
+dependency — nothing here is welded to any single vendor. See AGENT_DESIGN.md for
+the full model.
+
+### Capabilities, not model sizes
+
+"Agentic" work is not one big model doing everything; it is a router dispatching
+each request to the cheapest thing that can handle it. The capability types:
+
+| Capability | Handled by | Where |
+|---|---|---|
+| **Route / classify** intent | a tiny classifier, rules, or embeddings (often no LLM) | on device |
+| **Retrieve / search / memory** | an **embedding model** + a vector index over local SQLite | on device |
+| **Generate / converse / guide** | the embedded chat model | on device |
+| **Orchestrate tools, multi-step** | a larger model (self-hosted or opt-in cloud) | server / cloud |
+| **Proactive / background** | the same larger model, run autonomously | Worker |
+
+The embedding model is a distinct artifact from the chat model, and it is what
+keeps a small on-device model useful: it grounds answers in the user's own data
+instead of leaning on raw parameter count.
+
+### Deployment tiers
+
+All three tiers sit behind the one provider-neutral seam above.
+
+- **Tier 0 — Embedded (default).** A small model bundled with the app. Guidance,
+  Q&A, and *light* local tool calls (e.g. `createTask`), constrained to valid
+  JSON. Zero download, fully offline, private.
+- **Tier 1 — Self-hosted (optional).** The user runs the Ghost server with a
+  larger model for the full tool registry and multi-step agent work, plus sync.
+- **Opt-in cloud.** The user may point the same seam at a cloud provider for
+  maximum capability. Never required, never assumed.
+
+### Guidance vs. agent
+
+Two roles with opposite needs, kept deliberately separate. **Guidance** (Tier 0)
+is small, always-on, and does not need the tool loop. The **agent** (Tier 1)
+orchestrates the tool registry and wants capability. One bundled small model is a
+good guide and a poor multi-step agent, which is why they are not the same model.
+Small on-device tool calling is viable but bounded — reliable for a *few*
+well-described tools in a single step with constrained decoding, degrading with
+many tools or long multi-hop loops.
 
 ---
 
@@ -200,13 +251,15 @@ chat later) that the user places, drags, and resizes on a snapping grid.
 | Web UI | React + Vite | built first |
 | Desktop | Tauri | wraps the web UI (~10 MB vs Electron ~150 MB) |
 | Mobile (later) | Capacitor or React Native / Expo | backend unchanged |
-| Agent | Anthropic TS SDK + custom tool registry | no LangChain |
+| Agent | OpenAI-compatible client + custom tool registry | provider-neutral; local by default, self-hosted / cloud optional; no LangChain |
+| Local inference | bundled llama.cpp (GGUF) + a small embedding model | Tier 0, offline; exposed as a local OpenAI-compatible endpoint |
 | Background jobs | a dedicated worker process | scheduling, integration polling |
 | Auth | start with local sessions; add a provider only if/when multi-user lands |
 
-Deferred until a feature forces them: Redis / message queues, vector DBs,
-secrets vaults, Kubernetes. A single-user assistant does not need any of these on
-day one.
+Deferred until a feature forces them: Redis / message queues, *server-side*
+vector databases, secrets vaults, Kubernetes. (On-device semantic search uses a
+lightweight local index, not a hosted vector DB.) A single-user assistant does
+not need any of these on day one.
 
 ---
 
@@ -247,7 +300,7 @@ ghost/
 │
 └── docs/
     ├── ARCHITECTURE.md
-    ├── AGENT_DESIGN.md       # to write: tool registry + execution model
+    ├── AGENT_DESIGN.md       # inference tiers, tool registry + execution model
     └── SYNC.md               # to write: sync engine choice + conflict rules
 ```
 
@@ -263,8 +316,9 @@ part (sync), so you only invest in syncing an app you already know is worth it.
 2. **Server + sync** — stand up Postgres + the sync engine; wire Plane A.
    Now it's multi-device.
 3. **Desktop** — wrap the web UI in Tauri. Near-zero new code.
-4. **Agent + integrations** — tool registry, Google / email / banking OAuth
-   connectors, online-only (Plane B).
+4. **Agent + integrations** — tool registry and the agent loop (local-first, on
+   the embedded model), plus Google / email / banking OAuth connectors, which are
+   online-only (Plane B).
 5. **Mobile** — Capacitor or React Native, reusing the API + shared types.
 
 ---
@@ -278,5 +332,7 @@ part (sync), so you only invest in syncing an app you already know is worth it.
 - Per-tool permission levels; the agent cannot exceed the permissions of its
   registered tools.
 - Treat Plane B as untrusted while offline: never act on stale external data.
+- AI is local-first: Tier 0 keeps prompts and data on device. Cloud inference is
+  opt-in, and when enabled is treated as Plane B (external, untrusted offline).
 - `user_id` scoping on every owned row from day one.
 ```

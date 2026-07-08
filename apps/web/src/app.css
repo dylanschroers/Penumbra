@@ -551,3 +551,109 @@ body {
   font-size: 0.85rem;
   padding: 0.2rem 0.5rem;
 }
+
+/* Assistant module */
+.agent {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  height: 100%;
+  min-height: 0;
+}
+
+.agent__status {
+  display: flex;
+}
+
+.agent__pill {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--bg);
+}
+
+.agent__pill--ready {
+  color: var(--primary-text);
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.agent__messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.agent__msg {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.agent__msg--user {
+  align-items: flex-end;
+}
+
+.agent__bubble {
+  max-width: 85%;
+  padding: 0.45rem 0.65rem;
+  border-radius: var(--radius);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent__msg--user .agent__bubble {
+  background: var(--primary);
+  color: var(--primary-text);
+  border-color: var(--primary);
+}
+
+.agent__bubble--pending {
+  color: var(--muted);
+}
+
+.agent__think {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.agent__think-summary {
+  cursor: pointer;
+}
+
+.agent__think-body {
+  margin-top: 0.25rem;
+  padding: 0.4rem 0.55rem;
+  border-left: 2px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent__form {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.agent__input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.agent__input:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}

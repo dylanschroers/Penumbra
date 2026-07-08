@@ -2,6 +2,7 @@ import type { ModuleDefinition } from "./types";
 import { TasksModule } from "../modules/tasks/TasksModule";
 import { ColorPickerModule } from "../modules/color/ColorPickerModule";
 import { WeatherModule } from "../modules/weather/WeatherModule";
+import { AgentModule } from "../modules/agent/AgentModule";
 
 // The module registry. Adding a future module (weather, notes, …) is one entry
 // here plus its component — the canvas, the "add module" menu, and persistence
@@ -30,6 +31,13 @@ export const MODULES: ModuleDefinition[] = [
     defaultSize: { w: 7, h: 8 },
     minSize: { w: 6, h: 7 },
     Component: WeatherModule,
+  },
+  {
+    id: "agent",
+    title: "Assistant",
+    defaultSize: { w: 8, h: 10 },
+    minSize: { w: 6, h: 7 },
+    Component: AgentModule,
   },
 ];
 
