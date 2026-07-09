@@ -13,3 +13,5 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# Spawns the bundled llama-server sidecar (Tier-0 embedded model). See SIDECAR.md.
+tauri-plugin-shell = "2"
