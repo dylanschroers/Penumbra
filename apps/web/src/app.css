@@ -620,6 +620,13 @@ body {
   color: var(--muted);
 }
 
+.agent__tool {
+  font-size: 0.78rem;
+  color: var(--muted);
+  padding: 0.15rem 0;
+  cursor: default;
+}
+
 .agent__think {
   font-size: 0.8rem;
   color: var(--muted);

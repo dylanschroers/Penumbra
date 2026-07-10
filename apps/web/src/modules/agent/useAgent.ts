@@ -1,28 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AgentStatus, ChatMessage, InferenceEngine } from "@ghost/shared";
-import { defaultEngine } from "../../engine";
+import type { AgentStatus, ChatMessage } from "@ghost/shared";
+import { localEngine } from "../../engine";
+import { AGENT_SYSTEM, runTool, toolSpecs } from "../../agent/tools";
 
-// Drives the agent module: tracks backend status and runs a streaming chat turn.
-// It talks to an InferenceEngine, not a transport — the embedded LocalEngine by
-// default (Tier 0, no server), or a RemoteEngine behind a self-hosted/cloud
-// backend. This hook owns only UI concerns: message state, streaming, and abort.
+// Drives the agent module: tracks the embedded model's status and runs a
+// tool-using turn against it (LocalEngine.runAgent — Tier 0, no server). This
+// hook owns only UI concerns: message state, the busy flag, and abort. Tool
+// execution lives in ../../agent/tools; the model just decides what to call.
 
-// A message as the UI holds it: the wire contract plus the model's reasoning,
-// streamed on a side channel and rendered apart from the answer. `reasoning` is
-// display-only — it is never sent back in history (see `history` below).
-export type DisplayMessage = ChatMessage & { reasoning?: string };
+/** One tool the model ran during a turn, shown inline in the thread. */
+export type ToolStep = { name: string; result: string };
+/** A message as the UI holds it: wire content plus any tool steps that ran. */
+export type DisplayMessage = ChatMessage & { steps?: ToolStep[] };
 
-export function useAgent(engine: InferenceEngine = defaultEngine) {
+export function useAgent() {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [status, setStatus] = useState<AgentStatus>({ state: "stopped" });
-  const [streaming, setStreaming] = useState(false);
+  const [busy, setBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const refreshStatus = useCallback(async () => {
-    setStatus(await engine.getStatus());
-  }, [engine]);
+    setStatus(await localEngine.getStatus());
+  }, []);
 
-  // Poll status so the pill reflects the backend starting/stopping out of band.
+  // Poll status so the pill reflects the model starting/stopping out of band.
   useEffect(() => {
     void refreshStatus();
     const id = setInterval(() => void refreshStatus(), 5000);
@@ -32,52 +33,61 @@ export function useAgent(engine: InferenceEngine = defaultEngine) {
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || streaming) return;
+      if (!trimmed || busy) return;
 
-      // What we send: role + content only. Reasoning stays client-side so the
-      // model is never fed back its own raw chain-of-thought.
+      // History is role + content only; tool steps are display-only and never
+      // replayed (each turn runs a fresh tool loop).
       const history: ChatMessage[] = [
         ...messages.map(({ role, content }) => ({ role, content })),
         { role: "user", content: trimmed },
       ];
-      // Add the user turn plus an empty assistant turn we'll stream into.
       setMessages((prev) => [
         ...prev,
         { role: "user", content: trimmed },
-        { role: "assistant", content: "", reasoning: "" },
+        { role: "assistant", content: "", steps: [] },
       ]);
-      setStreaming(true);
+      setBusy(true);
 
       const controller = new AbortController();
       abortRef.current = controller;
 
-      const appendToAssistant = (
-        field: "content" | "reasoning",
-        chunk: string,
-      ) =>
+      // Patch the trailing (assistant) message in place.
+      const patch = (fn: (m: DisplayMessage) => DisplayMessage) =>
         setMessages((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
           if (!last) return prev;
-          next[next.length - 1] = { ...last, [field]: (last[field] ?? "") + chunk };
+          next[next.length - 1] = fn(last);
           return next;
         });
 
       try {
-        for await (const chunk of engine.streamReply(history, controller.signal)) {
-          appendToAssistant(chunk.kind === "reasoning" ? "reasoning" : "content", chunk.text);
+        for await (const ev of localEngine.runAgent(
+          history,
+          { tools: toolSpecs, system: AGENT_SYSTEM, runTool },
+          controller.signal,
+        )) {
+          if (ev.kind === "tool") {
+            patch((m) => ({
+              ...m,
+              steps: [...(m.steps ?? []), { name: ev.name, result: ev.result }],
+            }));
+          } else {
+            patch((m) => ({ ...m, content: ev.text }));
+          }
         }
       } catch (err) {
         if (!controller.signal.aborted) {
-          appendToAssistant("content", `\n\n⚠️ ${err instanceof Error ? err.message : String(err)}`);
+          const note = `⚠️ ${err instanceof Error ? err.message : String(err)}`;
+          patch((m) => ({ ...m, content: `${m.content}\n\n${note}`.trim() }));
         }
       } finally {
-        setStreaming(false);
+        setBusy(false);
         abortRef.current = null;
       }
     },
-    [engine, messages, streaming],
+    [messages, busy],
   );
 
-  return { messages, status, streaming, send };
+  return { messages, status, busy, send };
 }
