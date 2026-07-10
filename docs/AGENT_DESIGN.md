@@ -230,10 +230,37 @@ Viable, with one technique doing most of the work, and a firm ceiling.
   — that is Tier 1's larger model. With the no-cloud constraint, the ceiling is
   "run a bigger self-hosted model," not "call the cloud."
 
-**Viability check (do before committing):** wire 3–4 real Zod tools through
-GBNF-constrained JSON on the bundled 3–4B model and measure tool-selection
-accuracy and argument validity against the real registry. That sets the honest
-Tier-0 action line.
+### Viability check — measured (✅ passed)
+
+`scripts/tool-eval.mjs` ran 26 labeled utterances against the bundled
+**Qwen3-1.7B Q4** (thinking off), using llama-server's grammar-constrained
+`tools` API with three tools (`create_task`, `set_reminder`, `search_notes`):
+
+| Metric | Result |
+|---|---|
+| Tool-selection accuracy | **24/26 (92%)** |
+| False positives (tool called on chit-chat) | **0** |
+| False negatives (missed a real action) | 2 |
+| Argument JSON validity | 16/16 (100%) |
+| Argument correctness (priority spot-checks) | 4/4 (100%) |
+| Latency (CPU) | avg 3.8 s, max 10.7 s |
+
+Verdict: **Tier-0 local tool calling is viable** for a small curated tool set.
+Notes:
+
+- **0 false positives** is the key safety property — it never fabricates an
+  action during questions/greetings. It *under-calls* on softly-phrased actions
+  ("Ping me…", "What did I write about…?"), which is the safe direction.
+- Argument extraction is good (priority parsed from natural language every time);
+  JSON validity is guaranteed by the grammar.
+- **Dates are the untested weak spot** — `priority` was verified, but not whether
+  `dueAt`/`when` resolve to the *correct* date. Use a deterministic date parser
+  for those slots rather than trusting the model.
+- Latency is CPU-bound; a Vulkan/CUDA build would cut it substantially.
+
+Ship it, keep the tool set small, re-measure as it grows, and add deterministic
+date parsing. `scripts/tool-eval.mjs` is the regression check for model/prompt
+changes.
 
 ---
 
