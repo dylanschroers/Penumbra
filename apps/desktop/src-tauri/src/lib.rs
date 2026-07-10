@@ -59,6 +59,18 @@ fn spawn_llm_sidecar(app: tauri::AppHandle) {
             LLM_HOST,
             "--port",
             &LLM_PORT.to_string(),
+            // Apply the model's chat template (Qwen3 needs it).
+            "--jinja",
+            // Keep any <think> tags inline so the shared splitter handles them.
+            "--reasoning-format",
+            "none",
+            // Disable thinking by default: on a small CPU model it emits
+            // thousands of slow tokens, which is poor UX for guidance.
+            "--reasoning-budget",
+            "0",
+            // Clean model id for the status pill.
+            "-a",
+            "qwen3-1.7b",
         ]),
         Err(err) => {
             eprintln!("[ghost] llama-server sidecar not configured: {err}");

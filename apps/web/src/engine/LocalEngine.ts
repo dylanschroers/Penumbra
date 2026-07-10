@@ -15,6 +15,9 @@ import {
 // exactly as the server RemoteEngine path does.
 const DEFAULT_URL = import.meta.env.VITE_LOCAL_LLM_URL ?? "http://127.0.0.1:8080";
 const DEFAULT_MODEL = import.meta.env.VITE_LOCAL_LLM_MODEL ?? "local";
+// Cap generation so a small model can't run away (Qwen3 thinking can otherwise
+// emit thousands of tokens). Mirrors the server loop's MAX_TOKENS.
+const MAX_TOKENS = 512;
 
 export class LocalEngine implements InferenceEngine {
   constructor(
@@ -47,6 +50,7 @@ export class LocalEngine implements InferenceEngine {
         model: this.model,
         messages: messages.map((m) => ({ role: m.role, content: m.content })),
         stream: true,
+        max_tokens: MAX_TOKENS,
       }),
       signal,
     });
