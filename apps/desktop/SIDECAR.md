@@ -1,66 +1,59 @@
 # Local model sidecar (Tier 0)
 
-The desktop app can bundle a small model and run it locally so guidance works
-with **no server and no network** (docs/AGENT_DESIGN.md → "Local model
-delivery"). At launch the Rust side spawns a bundled `llama-server` that serves
-an OpenAI-compatible API on `127.0.0.1:8080`; the web client's `LocalEngine`
-talks to it directly.
+The desktop app bundles a small model and runs it locally so guidance works with
+**no server and no network** (docs/AGENT_DESIGN.md → "Local model delivery"). At
+launch the Rust side spawns the bundled `llama-server`, which serves an
+OpenAI-compatible API on `127.0.0.1:8080`; the web client's `LocalEngine` talks
+to it directly.
 
-## What's already wired
+## How it's wired
 
 - `Cargo.toml` — depends on `tauri-plugin-shell`.
-- `src/lib.rs` — registers the shell plugin and spawns the `llama-server`
-  sidecar on startup, pointed at the bundled model on `127.0.0.1:8080`. It is
-  **best-effort**: with no binary or weights present it logs a line and the app
-  runs normally (the model just shows as offline). Backend spawning is not
+- `tauri.conf.json` → `bundle.resources` — ships the binary, **its `.so`
+  libraries**, and the model into the app bundle.
+- `src/lib.rs` — registers the shell plugin and, on startup, resolves the
+  bundled `llama-server` + model from the resource dir and spawns the server with
+  the guidance flags (`--jinja --reasoning-format none --reasoning-budget 0`).
+  It is **best-effort**: if the binary or weights are missing it logs a line and
+  the app runs normally (the model just shows offline). Backend spawning is not
   capability-gated, so no `capabilities/` change is needed.
-- `LocalEngine` (web) defaults to `http://127.0.0.1:8080` — matches the port above.
+- `LocalEngine` (web) defaults to `http://127.0.0.1:8080` — matches the port.
 
-## Activation (once, when you have the assets)
+### Why not `externalBin`
 
-Bundling requires large, platform-specific files that are **not committed**, so
-the final two config lines are left out of `tauri.conf.json` on purpose: adding
-them before the files exist would break `tauri dev`/`build`. Do this to turn it
-on:
+`llama-server` is **not a single file** — it loads ~38 sibling `.so` libraries
+via rpath `$ORIGIN`. Tauri's `externalBin` ships one file, which would strand the
+libraries. So instead we bundle the whole `binaries/` dir (binary + `.so`s) as
+`resources` and spawn the binary from there with `shell().command(path)`, so
+`$ORIGIN` finds the libraries next to it.
 
-### 1. Add the binary and model
+## The assets (not committed)
 
-- Binary → `src-tauri/binaries/llama-server-<target-triple>` (see
-  `binaries/README.md`).
-- Weights → `src-tauri/models/model.gguf` (see `models/README.md`; an
-  Apache-2.0 model such as Qwen3 keeps redistribution clean).
+Large, platform-specific files are git-ignored, so a fresh clone must fetch them
+before `pnpm desktop` will build (the `resources` globs require them to exist):
 
-### 2. Declare them in `tauri.conf.json`
+- **Binary + libs** → `src-tauri/binaries/` — the `llama-server` build for your
+  platform plus its `.so`s (see `binaries/README.md`).
+- **Weights** → `src-tauri/models/model.gguf` — an Apache-2.0 model such as
+  Qwen3 keeps redistribution clean (see `models/README.md`).
 
-Add to the `bundle` object:
+> TODO: a `fetch-model` / `fetch-binary` script so this is one command.
 
-```jsonc
-"bundle": {
-  // …existing keys…
-  "externalBin": ["binaries/llama-server"],
-  "resources": ["models/model.gguf"]
-}
-```
-
-`externalBin` names the sidecar **without** the target-triple suffix — Tauri
-picks the right file per platform. `resources` ships the weights into the app
-bundle so `lib.rs` can resolve them from the resource dir.
-
-### 3. Run it
+## Run it
 
 ```bash
-pnpm desktop        # requires the Rust toolchain — see repo README
+pnpm desktop        # requires the Rust toolchain (cargo) + Tauri Linux libs
 ```
 
-The Assistant module's pill should turn from **Model offline** to **Ready** once
-`llama-server` has loaded the model.
+The Assistant module's pill turns from **Model offline** to **Ready ·
+qwen3-1.7b** once `llama-server` has loaded the model.
 
 ## Notes
 
-- **Toolchain:** the Rust code only compiles/runs with `cargo` installed. Until
-  then, `pnpm desktop` cannot build (the web app and `pnpm dev` are unaffected).
-- **Port:** if you change the port, keep `lib.rs` (`LLM_PORT`) and the web
-  client's `VITE_LOCAL_LLM_URL` in sync.
+- **Toolchain:** needs `cargo` on PATH (`source ~/.cargo/env`) and the Tauri
+  Linux system libraries (webkit2gtk etc.). The web app and `pnpm dev` don't.
+- **Port:** if you change it, keep `lib.rs` (`LLM_PORT`) and the web client's
+  `VITE_LOCAL_LLM_URL` in sync.
 - **Web/mobile:** this native sidecar is the desktop path. Web downloads the
   model once and runs it in-browser; mobile uses a native module — both behind
-  the same `LocalEngine` interface (docs/AGENT_DESIGN.md).
+  the same `LocalEngine` interface.

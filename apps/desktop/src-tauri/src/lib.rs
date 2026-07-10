@@ -36,12 +36,11 @@ pub fn run() {
 }
 
 fn spawn_llm_sidecar(app: tauri::AppHandle) {
-    // The model, shipped as a Tauri resource (SIDECAR.md). Absent in dev builds
-    // without the weights dropped in — skip gracefully.
-    let model = match app
-        .path()
-        .resolve("models/model.gguf", BaseDirectory::Resource)
-    {
+    let resolve = |rel: &str| app.path().resolve(rel, BaseDirectory::Resource);
+
+    // The model, shipped as a Tauri resource (SIDECAR.md). Absent in a build
+    // without the weights — skip gracefully so the app still runs.
+    let model = match resolve("models/model.gguf") {
         Ok(path) if path.exists() => path,
         _ => {
             eprintln!("[ghost] no bundled model found; local LLM sidecar not started");
@@ -49,34 +48,37 @@ fn spawn_llm_sidecar(app: tauri::AppHandle) {
         }
     };
 
-    // The bundled llama-server binary (Tauri externalBin, SIDECAR.md). Returns
-    // Err until externalBin is configured — treated as "not enabled yet".
-    let command = match app.shell().sidecar("llama-server") {
-        Ok(cmd) => cmd.args([
-            "--model",
-            &model.to_string_lossy(),
-            "--host",
-            LLM_HOST,
-            "--port",
-            &LLM_PORT.to_string(),
-            // Apply the model's chat template (Qwen3 needs it).
-            "--jinja",
-            // Keep any <think> tags inline so the shared splitter handles them.
-            "--reasoning-format",
-            "none",
-            // Disable thinking by default: on a small CPU model it emits
-            // thousands of slow tokens, which is poor UX for guidance.
-            "--reasoning-budget",
-            "0",
-            // Clean model id for the status pill.
-            "-a",
-            "qwen3-1.7b",
-        ]),
-        Err(err) => {
-            eprintln!("[ghost] llama-server sidecar not configured: {err}");
+    // The bundled llama-server. It is not a single file: it loads sibling .so
+    // libraries via rpath=$ORIGIN, so the binary and its libs are bundled
+    // together under resources/binaries/ and spawned from there (SIDECAR.md).
+    let server = match resolve("binaries/llama-server") {
+        Ok(path) if path.exists() => path,
+        _ => {
+            eprintln!("[ghost] llama-server binary not bundled; sidecar not started");
             return;
         }
     };
+
+    let command = app.shell().command(&server).args([
+        "--model",
+        &model.to_string_lossy(),
+        "--host",
+        LLM_HOST,
+        "--port",
+        &LLM_PORT.to_string(),
+        // Apply the model's chat template (Qwen3 needs it).
+        "--jinja",
+        // Keep any <think> tags inline so the shared splitter handles them.
+        "--reasoning-format",
+        "none",
+        // Disable thinking by default: on a small CPU model it emits thousands
+        // of slow tokens, which is poor UX for guidance.
+        "--reasoning-budget",
+        "0",
+        // Clean model id for the status pill.
+        "-a",
+        "qwen3-1.7b",
+    ]);
 
     match command.spawn() {
         Ok((mut rx, child)) => {
