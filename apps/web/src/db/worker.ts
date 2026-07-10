@@ -62,15 +62,29 @@ interface SAHPoolUtil {
 async function init() {
   const sqlite3 = await sqlite3InitModule();
 
-  // Install the OPFS "SyncAccessHandle Pool" VFS: real on-disk persistence in
-  // the browser that, unlike plain OPFS, needs no special COOP/COEP headers.
-  const poolUtil = (await (
-    sqlite3 as unknown as {
-      installOpfsSAHPoolVfs(opts: { name: string }): Promise<SAHPoolUtil>;
-    }
-  ).installOpfsSAHPoolVfs({ name: "ghost" })) satisfies SAHPoolUtil;
-
-  const sqliteDb = new poolUtil.OpfsSAHPoolDb("/ghost.db");
+  // Try to use OPFS for persistence, but fall back to browser storage if OPFS
+  // APIs are unavailable (e.g., Tauri webview, desktop apps, environments
+  // without FileSystem Access API support).
+  let sqliteDb: SqliteDb;
+  try {
+    const poolUtil = (await (
+      sqlite3 as unknown as {
+        installOpfsSAHPoolVfs(opts: { name: string }): Promise<SAHPoolUtil>;
+      }
+    ).installOpfsSAHPoolVfs({ name: "ghost" })) satisfies SAHPoolUtil;
+    sqliteDb = new poolUtil.OpfsSAHPoolDb("/ghost.db");
+  } catch (err) {
+    // OPFS not available; use JsStorageDb which persists to browser storage
+    // (localStorage/IndexedDB). This allows data to survive app restarts in
+    // Tauri and other non-browser environments.
+    console.warn(
+      "[ghost] OPFS not available, using browser storage database:",
+      err instanceof Error ? err.message : String(err),
+    );
+    const JsStorageDb = (sqlite3 as unknown as { oo1: { JsStorageDb: any } })
+      .oo1.JsStorageDb;
+    sqliteDb = new JsStorageDb("local");
+  }
 
   // Bridge between SQL strings and the WASM database. `rowMode: "array"` returns
   // each row as an array of column values, which is what Drizzle's proxy wants.
