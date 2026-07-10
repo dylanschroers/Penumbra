@@ -11,7 +11,8 @@
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "desktop": "pnpm --filter @ghost/desktop dev:desktop",
-    "desktop:build": "pnpm --filter @ghost/desktop build:desktop"
+    "desktop:build": "pnpm --filter @ghost/desktop build:desktop",
+    "fetch-assets": "bash scripts/fetch-assets.sh"
   },
   "devDependencies": {
     "turbo": "^2.3.3",

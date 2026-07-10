@@ -30,14 +30,17 @@ libraries. So instead we bundle the whole `binaries/` dir (binary + `.so`s) as
 ## The assets (not committed)
 
 Large, platform-specific files are git-ignored, so a fresh clone must fetch them
-before `pnpm desktop` will build (the `resources` globs require them to exist):
+before `pnpm desktop` will build (the `resources` globs require them to exist).
+One command does both, idempotently:
 
-- **Binary + libs** → `src-tauri/binaries/` — the `llama-server` build for your
-  platform plus its `.so`s (see `binaries/README.md`).
-- **Weights** → `src-tauri/models/model.gguf` — an Apache-2.0 model such as
-  Qwen3 keeps redistribution clean (see `models/README.md`).
+```bash
+pnpm fetch-assets   # scripts/fetch-assets.sh
+```
 
-> TODO: a `fetch-model` / `fetch-binary` script so this is one command.
+It downloads the pinned Qwen3-1.7B Q4_K_M weights → `src-tauri/models/model.gguf`
+and, on Linux x86_64, the `llama-server` build + its libraries →
+`src-tauri/binaries/`. On other platforms it fetches the model and points you to
+`binaries/README.md` for the matching binary.
 
 ## Run it
 

@@ -60,8 +60,10 @@ export function AgentModule() {
                   <div className="agent__think-body">{m.reasoning}</div>
                 </details>
               ) : null}
-              {m.content ? (
-                <div className="agent__bubble">{m.content}</div>
+              {m.content.trim() ? (
+                // Trim surrounding whitespace: a thinking-disabled model still
+                // emits empty <think></think>, leaving leading blank lines.
+                <div className="agent__bubble">{m.content.trim()}</div>
               ) : streaming && i === messages.length - 1 ? (
                 <div className="agent__bubble agent__bubble--pending">…</div>
               ) : null}
