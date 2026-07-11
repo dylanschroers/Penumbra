@@ -1,3 +1,5 @@
+mod db;
+
 use std::sync::Mutex;
 
 use tauri::path::BaseDirectory;
@@ -27,7 +29,11 @@ struct LlmSidecar(#[allow(dead_code)] Mutex<Option<CommandChild>>);
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![db::db_exec])
         .setup(|app| {
+            // Native persistence must come up before the webview asks for data;
+            // unlike the sidecar this is not best-effort (see db.rs).
+            db::open(app)?;
             spawn_llm_sidecar(app.handle().clone());
             Ok(())
         })
@@ -48,10 +54,16 @@ fn spawn_llm_sidecar(app: tauri::AppHandle) {
         }
     };
 
-    // The bundled llama-server. It is not a single file: it loads sibling .so
-    // libraries via rpath=$ORIGIN, so the binary and its libs are bundled
-    // together under resources/binaries/ and spawned from there (SIDECAR.md).
-    let server = match resolve("binaries/llama-server") {
+    // The bundled llama-server. It is not a single file: it loads sibling
+    // shared libraries (.so via rpath=$ORIGIN on Linux, .dll next to the .exe
+    // on Windows), so the binary and its libs are bundled together under
+    // resources/binaries/ and spawned from there (SIDECAR.md).
+    let server_rel = if cfg!(windows) {
+        "binaries/llama-server.exe"
+    } else {
+        "binaries/llama-server"
+    };
+    let server = match resolve(server_rel) {
         Ok(path) if path.exists() => path,
         _ => {
             eprintln!("[ghost] llama-server binary not bundled; sidecar not started");
@@ -68,7 +80,7 @@ fn spawn_llm_sidecar(app: tauri::AppHandle) {
         &LLM_PORT.to_string(),
         // Apply the model's chat template (Qwen3 needs it).
         "--jinja",
-        // Keep any <think> tags inline so the shared splitter handles them.
+        // Keep any <think> tags inline; the client strips them from the answer.
         "--reasoning-format",
         "none",
         // Disable thinking by default: on a small CPU model it emits thousands

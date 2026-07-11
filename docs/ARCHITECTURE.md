@@ -205,11 +205,21 @@ chat later) that the user places, drags, and resizes on a snapping grid.
   shaped so it can graduate to the shared SQLite schema — and sync across devices
   — without touching the canvas. Module data itself (e.g. tasks) already lives in
   the local SQLite store.
-- **Single-tab ownership.** The client SQLite store uses the OPFS `SAHPool` VFS,
-  which takes an *exclusive* lock on its files — a second tab opening it throws
+- **Storage backends, one DbApi.** All database logic (CRUD, sync bookkeeping,
+  migrations) is storage-agnostic (`db/api.ts`), built on a single "run this
+  SQL, return rows" primitive. In the **browser** that primitive is sqlite-wasm
+  against OPFS inside a Web Worker (`db/worker.ts`). In **Tauri** it is native
+  SQLite in the Rust process against an ordinary file in the app data dir
+  (`db/tauriExec.ts` → `src-tauri/src/db.rs`) — desktop persistence never
+  depends on webview storage. There is deliberately **no silent fallback**: if a
+  backend cannot persist, it fails loudly rather than accepting data into an
+  in-memory store that dies with the session. Mobile later follows the same
+  pattern with a native SQLite plugin.
+- **Single-tab ownership.** The browser's OPFS `SAHPool` VFS takes an
+  *exclusive* lock on its files — a second tab opening it throws
   `NoModificationAllowedError`. `SingleTabGuard` (`src/SingleTabGuard.tsx`) gates
   the app on a Web Locks (`navigator.locks`) exclusive lock: the first tab owns the
-  store; other tabs render a takeover screen instead. The DB worker is created
+  store; other tabs render a takeover screen instead. The DB backend is created
   lazily (`db/client.ts` `getDb()`) so a non-owner tab never opens the store, and
   an owner hands off by closing the DB (freeing the handles) before releasing the
   lock. Multi-tab concurrency would instead need a `SharedWorker`; deferred since
@@ -244,7 +254,7 @@ chat later) that the user places, drags, and resizes on a snapping grid.
 | Monorepo | pnpm workspaces + Turborepo | shared schema / types / tool defs |
 | Server | Node + Fastify (or Hono) | headless API |
 | Server DB | PostgreSQL | single DB, modules own tables |
-| Client DB | SQLite | local source of truth |
+| Client DB | SQLite | local source of truth; sqlite-wasm + OPFS on web, native file via Tauri IPC on desktop |
 | ORM | Drizzle | one schema → Postgres + SQLite dialects |
 | Sync | PowerSync or ElectricSQL | Postgres ↔ SQLite |
 | Validation | Zod | API, forms, and tool args from one source |

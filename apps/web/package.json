@@ -13,6 +13,7 @@
   "dependencies": {
     "@ghost/shared": "workspace:*",
     "@sqlite.org/sqlite-wasm": "3.53.0-build1",
+    "@tauri-apps/api": "^2",
     "@uiw/react-color": "^2.10.3",
     "comlink": "^4.4.2",
     "drizzle-orm": "^0.45.2",
