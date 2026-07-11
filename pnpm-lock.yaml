@@ -8,6 +8,15 @@ importers:
 
   .:
     devDependencies:
+      '@ghost/shared':
+        specifier: workspace:^
+        version: link:packages/shared
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.21
+      tsx:
+        specifier: ^4.19.2
+        version: 4.22.4
       turbo:
         specifier: ^2.3.3
         version: 2.9.18
@@ -81,6 +90,9 @@ importers:
       react-grid-layout:
         specifier: ^1.5.3
         version: 1.5.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
     devDependencies:
       '@types/react':
         specifier: ^18.3.18
@@ -112,6 +124,9 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+      zod-to-json-schema:
+        specifier: ^3.25.2
+        version: 3.25.2(zod@3.25.76)
     devDependencies:
       typescript:
         specifier: ^5.7.2
@@ -2077,6 +2092,11 @@ packages:
   yallist@3.1.1:
     resolution: {integrity: sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g==}
 
+  zod-to-json-schema@3.25.2:
+    resolution: {integrity: sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA==}
+    peerDependencies:
+      zod: ^3.25.28 || ^4
+
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
@@ -3723,5 +3743,9 @@ snapshots:
   wrappy@1.0.2: {}
 
   yallist@3.1.1: {}
+
+  zod-to-json-schema@3.25.2(zod@3.25.76):
+    dependencies:
+      zod: 3.25.76
 
   zod@3.25.76: {}

@@ -1,92 +1,52 @@
+import type { z } from "zod";
+import {
+  taskTools,
+  createTaskTool,
+  listTasksTool,
+  completeTaskTool,
+  deleteTaskTool,
+  toToolSpec,
+  type ToolContract,
+  type ToolSpec,
+  type TaskRow,
+} from "@ghost/shared";
 import { getDb } from "../db/client";
-import { SYNC_EVENT } from "../sync/SyncClient";
-import type { TaskRow } from "@ghost/shared";
+import { requestSync, SYNC_EVENT } from "../sync/SyncClient";
 
-// The tools the embedded model can call. Each maps to a real DbApi operation on
-// the local SQLite store, so a tool call actually changes the app. Kept small
-// on purpose — the Tier-0 model stays reliable with a handful of tools
-// (docs/AGENT_DESIGN.md §7). Reminders and notes are intentionally absent: no
-// store backs them yet, and a tool must never be a no-op the model can "call".
+// The client half of the tool registry: each shared contract (name, permission,
+// Zod arg schema — packages/shared/src/tools) is bound here to a runner against
+// the local store. The wire specs the model sees are derived from the same
+// contracts, and runTool validates every model-emitted call against them before
+// anything executes — so the schema the model is shown, the validation rule,
+// and the eval harness (scripts/tool-eval.ts) can never drift apart.
 
-export interface ToolSpec {
-  type: "function";
-  function: {
-    name: string;
-    description: string;
-    parameters: Record<string, unknown>; // JSON Schema
-  };
+export { AGENT_SYSTEM } from "@ghost/shared";
+export type { ToolSpec } from "@ghost/shared";
+
+/** The model-facing tool list, derived from the shared contracts. */
+export const toolSpecs: ToolSpec[] = taskTools.map(toToolSpec);
+
+interface BoundTool {
+  contract: ToolContract;
+  run: (args: unknown) => Promise<string>;
 }
 
-const PRIORITY = ["low", "medium", "high"];
-const STATUS = ["todo", "doing", "done"];
+/** Pair a contract with its runner. The cast is safe because runTool always
+ * parses arguments with the contract's schema before calling run. */
+function bind<A extends z.ZodTypeAny>(
+  contract: ToolContract<A>,
+  run: (args: z.output<A>) => Promise<string>,
+): BoundTool {
+  return { contract, run: run as BoundTool["run"] };
+}
 
-export const toolSpecs: ToolSpec[] = [
-  {
-    type: "function",
-    function: {
-      name: "create_task",
-      description: "Add a task to the user's to-do list.",
-      parameters: {
-        type: "object",
-        properties: {
-          title: { type: "string", description: "Short task title" },
-          priority: { type: "string", enum: PRIORITY },
-          dueAt: { type: "string", description: "Due date/time, ISO 8601 if known" },
-          notes: { type: "string" },
-        },
-        required: ["title"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "list_tasks",
-      description: "List the user's tasks, optionally filtered by status.",
-      parameters: {
-        type: "object",
-        properties: { status: { type: "string", enum: STATUS } },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "complete_task",
-      description: "Mark a task as done, matched by its title.",
-      parameters: {
-        type: "object",
-        properties: { title: { type: "string" } },
-        required: ["title"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "delete_task",
-      description: "Delete a task, matched by its title.",
-      parameters: {
-        type: "object",
-        properties: { title: { type: "string" } },
-        required: ["title"],
-      },
-    },
-  },
-];
-
-/** The model turn's system prompt: who it is and when to use tools. */
-export const AGENT_SYSTEM =
-  "You are Ghost, a local personal assistant. You can manage the user's tasks " +
-  "with the provided tools. Call a tool ONLY when the user asks you to view or " +
-  "change their tasks; for general questions or chit-chat, just answer. After a " +
-  "tool runs, tell the user briefly what happened.";
-
-// A tool mutation writes straight to the store via getDb(), which bypasses the
-// Tasks module's own mutation path — so nudge it to re-read. useTasks already
-// listens for SYNC_EVENT ("local data changed"), so reuse it.
+// A tool mutation writes straight to the store via getDb(), bypassing the Tasks
+// module's own mutation path — so nudge the UI to re-read (useTasks listens for
+// SYNC_EVENT) and nudge the sync loop so the edit pushes now instead of waiting
+// for the 15s interval.
 function notifyDataChanged(): void {
   window.dispatchEvent(new Event(SYNC_EVENT));
+  requestSync();
 }
 
 function findByTitle(tasks: TaskRow[], title: string): TaskRow | undefined {
@@ -99,64 +59,77 @@ function findByTitle(tasks: TaskRow[], title: string): TaskRow | undefined {
 
 /** Coerce a model-supplied date to a valid ISO string, or drop it. The model is
  *  weak at dates (AGENT_DESIGN.md §7), so anything JS can't parse is discarded
- *  rather than passed on to fail schema validation. */
-function toIso(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
+ *  rather than passed on to fail the store's stricter schema. */
+function toIso(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
+const bindings: BoundTool[] = [
+  bind(createTaskTool, async (args) => {
+    const task = await getDb().createTask({
+      title: args.title,
+      priority: args.priority,
+      dueAt: toIso(args.dueAt),
+      notes: args.notes,
+    });
+    return `Created task "${task.title}" (${task.priority} priority).`;
+  }),
+
+  bind(listTasksTool, async (args) => {
+    let tasks = await getDb().listTasks();
+    if (args.status) tasks = tasks.filter((t) => t.status === args.status);
+    if (!tasks.length) return "No matching tasks.";
+    return tasks
+      .map((t) => `- ${t.title} [${t.status}, ${t.priority}]`)
+      .join("\n");
+  }),
+
+  bind(completeTaskTool, async (args) => {
+    const db = getDb();
+    const t = findByTitle(await db.listTasks(), args.title);
+    if (!t) return `No task matching "${args.title}".`;
+    await db.updateTask(t.id, { status: "done" });
+    return `Marked "${t.title}" as done.`;
+  }),
+
+  bind(deleteTaskTool, async (args) => {
+    const db = getDb();
+    const t = findByTitle(await db.listTasks(), args.title);
+    if (!t) return `No task matching "${args.title}".`;
+    await db.deleteTask(t.id);
+    return `Deleted "${t.title}".`;
+  }),
+];
+
+const registry = new Map(bindings.map((b) => [b.contract.name, b]));
+
 /** Execute one tool call. Returns a short human-readable result that is both
- *  shown in the UI and fed back to the model as the tool's output. */
+ *  shown in the UI and fed back to the model as the tool's output — including
+ *  validation failures, which the model can often correct on its next step
+ *  when told exactly what was wrong. */
 export async function runTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<string> {
-  const db = getDb();
+  const tool = registry.get(name);
+  if (!tool) return `Unknown tool: ${name}`;
+
+  const parsed = tool.contract.args.safeParse(args);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `${i.path.join(".") || "(args)"}: ${i.message}`)
+      .join("; ");
+    return `Invalid arguments for ${name} — ${issues}`;
+  }
+
   try {
-    switch (name) {
-      case "create_task": {
-        const title = String(args.title ?? "").trim().slice(0, 200);
-        if (!title) return "A task needs a title.";
-        const priority = PRIORITY.includes(args.priority as string)
-          ? (args.priority as "low" | "medium" | "high")
-          : "medium";
-        const task = await db.createTask({
-          title,
-          priority,
-          dueAt: toIso(args.dueAt),
-          notes: typeof args.notes === "string" ? args.notes : undefined,
-        });
-        notifyDataChanged();
-        return `Created task "${task.title}" (${task.priority} priority).`;
-      }
-      case "list_tasks": {
-        let tasks = await db.listTasks();
-        if (typeof args.status === "string") {
-          tasks = tasks.filter((t) => t.status === args.status);
-        }
-        if (!tasks.length) return "No matching tasks.";
-        return tasks
-          .map((t) => `- ${t.title} [${t.status}, ${t.priority}]`)
-          .join("\n");
-      }
-      case "complete_task": {
-        const t = findByTitle(await db.listTasks(), String(args.title ?? ""));
-        if (!t) return `No task matching "${String(args.title ?? "")}".`;
-        await db.updateTask(t.id, { status: "done" });
-        notifyDataChanged();
-        return `Marked "${t.title}" as done.`;
-      }
-      case "delete_task": {
-        const t = findByTitle(await db.listTasks(), String(args.title ?? ""));
-        if (!t) return `No task matching "${String(args.title ?? "")}".`;
-        await db.deleteTask(t.id);
-        notifyDataChanged();
-        return `Deleted "${t.title}".`;
-      }
-      default:
-        return `Unknown tool: ${name}`;
-    }
+    const result = await tool.run(parsed.data);
+    // Non-read tools may have changed the store; refresh the UI and push. A
+    // no-op run (e.g. "no task matching") triggers a harmless extra refresh.
+    if (tool.contract.permission !== "read") notifyDataChanged();
+    return result;
   } catch (err) {
     return `Tool ${name} failed: ${err instanceof Error ? err.message : String(err)}`;
   }
