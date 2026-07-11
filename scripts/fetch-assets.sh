@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fetch the Tier-0 embedded-model assets (llama-server binary + GGUF weights)
 # into the desktop app's git-ignored drop-in dirs. Idempotent — safe to re-run.
-# See apps/desktop/SIDECAR.md.
+# Works on Linux, macOS, and Windows (Git Bash). See apps/desktop/SIDECAR.md.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,29 +31,53 @@ else
 fi
 
 # --- llama-server binary + its shared libs (platform-specific) ---
-if [ -x "$BIN_DIR/llama-server" ]; then
-  echo "✓ llama-server present: $BIN_DIR/llama-server"
+# Pick the release asset and the names the binary + libraries carry here.
+os="$(uname -s)"; arch="$(uname -m)"
+server_bin="llama-server"
+case "$os/$arch" in
+  Linux/x86_64)   asset="llama-${LLAMA_VERSION}-bin-ubuntu-x64.tar.gz";  libs="so" ;;
+  Darwin/arm64)   asset="llama-${LLAMA_VERSION}-bin-macos-arm64.tar.gz"; libs="dylib" ;;
+  Darwin/x86_64)  asset="llama-${LLAMA_VERSION}-bin-macos-x64.tar.gz";   libs="dylib" ;;
+  MINGW*/x86_64 | MSYS*/x86_64 | CYGWIN*/x86_64)
+    asset="llama-${LLAMA_VERSION}-bin-win-cpu-x64.zip"
+    libs="dll"; server_bin="llama-server.exe" ;;
+  MINGW*/aarch64 | MSYS*/aarch64 | MINGW*/arm64 | MSYS*/arm64)
+    asset="llama-${LLAMA_VERSION}-bin-win-cpu-arm64.zip"
+    libs="dll"; server_bin="llama-server.exe" ;;
+  *)
+    echo "! no automatic llama-server download for $os/$arch."
+    echo "  Grab a build from https://github.com/ggml-org/llama.cpp/releases/tag/${LLAMA_VERSION}"
+    echo "  and place $server_bin + its libraries in $BIN_DIR (see binaries/README.md)."
+    echo "✓ model is in place; only the binary is left to add."
+    exit 0 ;;
+esac
+
+if [ -e "$BIN_DIR/$server_bin" ]; then
+  echo "✓ llama-server present: $BIN_DIR/$server_bin"
 else
-  os="$(uname -s)"; arch="$(uname -m)"
-  case "$os/$arch" in
-    Linux/x86_64) asset="llama-${LLAMA_VERSION}-bin-ubuntu-x64.tar.gz" ;;
-    *)
-      echo "✗ no automatic llama-server download for $os/$arch." >&2
-      echo "  Grab it from https://github.com/ggml-org/llama.cpp/releases/tag/${LLAMA_VERSION}" >&2
-      echo "  and place llama-server + its libraries in $BIN_DIR (see binaries/README.md)." >&2
-      exit 1 ;;
-  esac
   url="https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_VERSION}/${asset}"
   echo "↓ downloading llama-server ($asset)…"
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
-  curl -L --fail -o "$tmp/llama.tar.gz" "$url"
-  tar -xzf "$tmp/llama.tar.gz" -C "$tmp"
+  curl -L --fail -o "$tmp/$asset" "$url"
+  case "$asset" in
+    *.tar.gz) tar -xzf "$tmp/$asset" -C "$tmp" ;;
+    *.zip)
+      # Git Bash doesn't always ship unzip; Windows' own bsdtar reads zips.
+      if command -v unzip >/dev/null 2>&1; then
+        unzip -q "$tmp/$asset" -d "$tmp"
+      elif [ -x "/c/Windows/System32/tar.exe" ]; then
+        /c/Windows/System32/tar.exe -xf "$(cygpath -w "$tmp/$asset")" -C "$(cygpath -w "$tmp")"
+      else
+        echo "✗ need 'unzip' or C:\\Windows\\System32\\tar.exe to extract $asset" >&2
+        exit 1
+      fi ;;
+  esac
   # The archive extracts to a build dir holding the binary next to its libs.
-  src="$(dirname "$(find "$tmp" -name llama-server -type f | head -1)")"
-  cp "$src/llama-server" "$BIN_DIR/"
-  cp "$src"/*.so* "$BIN_DIR/" 2>/dev/null || true
-  chmod +x "$BIN_DIR/llama-server"
+  src="$(dirname "$(find "$tmp" -name "$server_bin" -type f | head -1)")"
+  cp "$src/$server_bin" "$BIN_DIR/"
+  cp "$src"/*."$libs"* "$BIN_DIR/" 2>/dev/null || true
+  chmod +x "$BIN_DIR/$server_bin"
   echo "✓ llama-server + libs saved to $BIN_DIR"
 fi
 

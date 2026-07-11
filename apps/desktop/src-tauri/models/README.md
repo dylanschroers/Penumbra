@@ -6,9 +6,10 @@ Drop the GGUF weights here as:
 model.gguf
 ```
 
-(That exact name is what `src/lib.rs` resolves at runtime. To use a different
-name, update the `resolve("models/model.gguf", …)` call and the `resources`
-entry in `tauri.conf.json`.)
+(That exact name is what `src/lib.rs` resolves at runtime; the whole directory
+ships via the `models/*` resources entry in `tauri.conf.json`. To use a
+different name, update the `resolve("models/model.gguf", …)` call. The easy
+path is `pnpm fetch-assets`, which downloads the pinned weights here.)
 
 ## Recommended model
 

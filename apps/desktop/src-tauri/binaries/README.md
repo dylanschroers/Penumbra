@@ -1,24 +1,26 @@
 # Sidecar binaries
 
-Drop the `llama-server` executable here, named with the Rust **target triple**
-suffix that Tauri expects for an `externalBin`:
+This directory is bundled into the app as a Tauri resource (`bundle.resources`
+in `tauri.conf.json`). At startup the Rust side spawns `llama-server` from here
+— see `../src/lib.rs` and [../../SIDECAR.md](../../SIDECAR.md).
 
-```
-llama-server-<target-triple>[.exe]
-```
+The easy path is `pnpm fetch-assets`, which fills this directory on Linux,
+macOS, and Windows (Git Bash). To do it by hand instead, drop in:
 
-Find your triple with `rustc -Vv | grep host`. Examples:
-
-| Platform | File name |
+| Platform | Files |
 |---|---|
-| Linux x86_64 | `llama-server-x86_64-unknown-linux-gnu` |
-| macOS Apple Silicon | `llama-server-aarch64-apple-darwin` |
-| macOS Intel | `llama-server-x86_64-apple-darwin` |
-| Windows x86_64 | `llama-server-x86_64-pc-windows-msvc.exe` |
+| Linux | `llama-server` + its `*.so*` libraries |
+| macOS | `llama-server` + its `*.dylib` libraries |
+| Windows | `llama-server.exe` + its `*.dll` libraries |
 
-Get the binary from a [llama.cpp release](https://github.com/ggml-org/llama.cpp/releases)
-(the `llama-server` build) or build it yourself, then rename it as above and
-`chmod +x` it on Unix.
+Use the plain names above — no target-triple suffix. (That convention belongs
+to Tauri's `externalBin`, which we deliberately don't use: `llama-server` loads
+sibling shared libraries, so the whole directory ships as resources and the
+binary is spawned from there, where it finds its libs next to itself.)
 
-The actual binaries are git-ignored (they are large and platform-specific). See
-[../../SIDECAR.md](../../SIDECAR.md) for the full activation steps.
+Get the files from a [llama.cpp release](https://github.com/ggml-org/llama.cpp/releases)
+(the binary and its libraries sit together in the archive's build dir), and
+`chmod +x llama-server` on Unix.
+
+The actual binaries are git-ignored (large and platform-specific); only this
+README is committed.
