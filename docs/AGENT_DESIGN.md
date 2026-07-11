@@ -224,8 +224,13 @@ Viable, with one technique doing most of the work, and a firm ceiling.
 - **Constrained decoding is the game.** llama.cpp supports **GBNF grammars /
   JSON-schema-constrained output**, which forces the model to emit valid JSON
   matching a tool's argument schema. This removes the #1 small-model failure
-  (malformed calls). Tool schemas are already Zod → JSON-schema, so they feed the
-  grammar directly.
+  (malformed calls). Tool contracts are defined once in Zod
+  (`packages/shared/src/tools`) and derived to JSON Schema (`toToolSpec`), so
+  the grammar, the runtime validation, and the eval all read the same source.
+  One derivation caveat, handled in `toToolSpec`: llama.cpp expands bounded
+  string repetitions into the grammar, so a large `maxLength` (>~1000) makes it
+  reject the whole request — oversized bounds are stripped from the wire schema
+  and enforced by Zod at the call boundary instead.
 - **Keep it shallow and small.** A *few* well-described tools, single-step
   selection. Small models degrade fast with many tools or long multi-hop loops.
 - **Best small tool-callers:** Qwen3 / Qwen2.5-3B-Instruct (explicitly trained for
@@ -237,35 +242,38 @@ Viable, with one technique doing most of the work, and a firm ceiling.
 
 ### Viability check — measured (✅ passed)
 
-`scripts/tool-eval.mjs` ran 26 labeled utterances against the bundled
-**Qwen3-1.7B Q4** (thinking off), using llama-server's grammar-constrained
-`tools` API with three tools (`create_task`, `set_reminder`, `search_notes`):
+`scripts/tool-eval.ts` (`pnpm tool-eval`) ran 26 labeled utterances against the
+bundled **Qwen3-1.7B Q4** (thinking off), using llama-server's
+grammar-constrained `tools` API. The harness imports the shipped tool contracts
+and system prompt from `@ghost/shared`, so it measures exactly the four tools
+the app exposes (`create_task`, `list_tasks`, `complete_task`, `delete_task`):
 
 | Metric | Result |
 |---|---|
 | Tool-selection accuracy | **24/26 (92%)** |
 | False positives (tool called on chit-chat) | **0** |
-| False negatives (missed a real action) | 2 |
-| Argument JSON validity | 16/16 (100%) |
-| Argument correctness (priority spot-checks) | 4/4 (100%) |
-| Latency (CPU) | avg 3.8 s, max 10.7 s |
+| False negatives (missed a real action) | 1 |
+| Argument JSON validity | 17/17 (100%) |
+| Argument correctness (priority/status spot-checks) | 5/5 (100%) |
+| Latency (CPU) | avg 3.8 s, max 9.9 s |
 
 Verdict: **Tier-0 local tool calling is viable** for a small curated tool set.
 Notes:
 
 - **0 false positives** is the key safety property — it never fabricates an
-  action during questions/greetings. It *under-calls* on softly-phrased actions
-  ("Ping me…", "What did I write about…?"), which is the safe direction.
-- Argument extraction is good (priority parsed from natural language every time);
-  JSON validity is guaranteed by the grammar.
-- **Dates are the untested weak spot** — `priority` was verified, but not whether
-  `dueAt`/`when` resolve to the *correct* date. Use a deterministic date parser
-  for those slots rather than trusting the model.
+  action during questions/greetings. It *under-calls* or mis-picks on idiomatic
+  phrasings ("Tick off…", "Remove … from my list"), which is the safe direction.
+- Argument extraction is good (priority/status parsed from natural language
+  every time); JSON validity is guaranteed by the grammar.
+- **Dates remain the weak spot** — `priority` was verified, but not whether
+  `dueAt` resolves to the *correct* date. The runner already coerces model dates
+  with a deterministic parser and drops what it can't parse.
 - Latency is CPU-bound; a Vulkan/CUDA build would cut it substantially.
 
-Ship it, keep the tool set small, re-measure as it grows, and add deterministic
-date parsing. `scripts/tool-eval.mjs` is the regression check for model/prompt
-changes.
+Ship it, keep the tool set small, and re-measure as it grows.
+`scripts/tool-eval.ts` is the regression check for model/prompt/tool changes —
+because it consumes the shared contracts, adding a tool automatically adds it
+to what the eval exercises (cases still need writing by hand).
 
 ---
 

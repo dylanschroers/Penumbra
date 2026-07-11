@@ -1,5 +1,5 @@
 import type { AgentStatus, ChatMessage } from "./types";
-import type { ToolSpec } from "../agent/tools";
+import type { ToolSpec } from "@ghost/shared";
 
 /** What a tool-using turn emits: each tool run as it happens, then the answer. */
 export type AgentEvent =
