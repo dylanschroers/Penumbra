@@ -3,8 +3,12 @@
 // This is the browser-side counterpart to `drizzle-kit migrate` (which can't
 // run here because the database lives in OPFS, not on a server).
 
-/** Runs SQL and returns rows as arrays of column values. */
-type RawExec = (sql: string, bind?: unknown[]) => unknown[][];
+/** Runs SQL and returns rows as arrays of column values. Sync (sqlite-wasm) and
+ *  async (Tauri IPC) backends both satisfy it; callers always await. */
+export type RawExec = (
+  sql: string,
+  bind?: unknown[],
+) => unknown[][] | Promise<unknown[][]>;
 
 // Vite inlines every migration file's SQL as a string at build time, so the
 // `.sql` files ship inside the worker bundle rather than being fetched.
@@ -15,13 +19,13 @@ const files = import.meta.glob("./migrations/*.sql", {
 }) as Record<string, string>;
 
 /** Returns the names of migrations that were applied this run. */
-export function runMigrations(exec: RawExec): string[] {
-  exec(
+export async function runMigrations(exec: RawExec): Promise<string[]> {
+  await exec(
     "CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)",
   );
 
   const applied = new Set(
-    exec("SELECT name FROM _migrations").map((row) => String(row[0])),
+    (await exec("SELECT name FROM _migrations")).map((row) => String(row[0])),
   );
 
   const pending = Object.keys(files)
@@ -36,16 +40,16 @@ export function runMigrations(exec: RawExec): string[] {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    exec("BEGIN");
+    await exec("BEGIN");
     try {
-      for (const statement of statements) exec(statement);
-      exec("INSERT INTO _migrations (name, applied_at) VALUES (?, ?)", [
+      for (const statement of statements) await exec(statement);
+      await exec("INSERT INTO _migrations (name, applied_at) VALUES (?, ?)", [
         name,
         new Date().toISOString(),
       ]);
-      exec("COMMIT");
+      await exec("COMMIT");
     } catch (err) {
-      exec("ROLLBACK");
+      await exec("ROLLBACK");
       throw err;
     }
   }
