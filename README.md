@@ -9,24 +9,22 @@ reconnect.
 
 - Keeps a full copy of your data on every device, so it works offline and syncs
   in the background once you're back online.
-- Runs a tool-calling AI agent that can create tasks, read your calendar, and
-  check balances on your behalf.
-- Brings tasks, scheduling, finances, and third-party integrations together in
-  one app.
+- Runs a tool-calling AI assistant entirely on your machine: a small model
+  bundled with the desktop app manages your tasks — no cloud, no network.
+- The goal from here: calendar, email, and banking integrations, so one agent
+  can act across all of it (see the roadmap below).
 
 ## How it's built
 
-One headless backend serves thin clients that share its types and sync stream:
+One headless backend serves thin clients that share its types and sync
+protocol:
 
 ```
-   Web · Desktop · Mobile          (each with a local store, works offline)
-            │
-            │  REST + sync stream
+   Web · Desktop                   (each with a local store, works offline;
+            │                       desktop also bundles the local model)
+            │  REST push/pull sync
             ▼
-     Headless server               (modular monolith)
-            │  OAuth + REST
-            ▼
-   Google · banking · model API
+      Sync server (Node)
 ```
 
 The stack is TypeScript throughout: React and Tauri on the clients, a Node sync
@@ -35,8 +33,10 @@ now and will move to Postgres later.
 
 For the full design, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), which
 covers the two data planes, the tool registry, sync, and the reasoning behind
-the stack. The delta-sync engine has its own writeup in
-[docs/SYNC.md](docs/SYNC.md).
+the stack — plus what's planned around this core (integrations, server-side
+agent, mobile). The delta-sync engine has its own writeup in
+[docs/SYNC.md](docs/SYNC.md) and the AI design in
+[docs/AGENT_DESIGN.md](docs/AGENT_DESIGN.md).
 
 ## Getting started
 
@@ -77,6 +77,10 @@ pnpm desktop         # dev window with hot reload
 pnpm desktop:build   # native installers (.msi and .exe on Windows)
 ```
 
+To exercise the bundled AI assistant, fetch the model and `llama-server`
+first — `pnpm fetch-assets` — otherwise the Assistant module just shows
+"Model offline". See [apps/desktop/SIDECAR.md](apps/desktop/SIDECAR.md).
+
 ### Sync across devices
 
 Every client keeps its own full SQLite store and works offline; the server only
@@ -99,23 +103,28 @@ and both status lights are green.
 
 ## Roadmap
 
-The order ships something useful before taking on the hardest part, which is
-sync.
+The ordering shipped something useful before taking on the hardest part
+(sync); what's left builds outward from that core.
 
 - [x] Offline v0: web UI and local SQLite store, with tasks, weather, and the
       workspace canvas working on one device.
 - [x] Sync: sync server and delta-sync engine, so it works across devices with
       last-write-wins.
 - [x] Desktop: the web UI wrapped in Tauri, sharing the same local store.
-- [ ] Agent and integrations: the tool registry and OAuth connectors for
-      calendar, email, and banking.
+- [x] Embedded agent: a small model bundled with the desktop app, calling task
+      tools fully offline.
+- [ ] Integrations: OAuth connectors for calendar, email, and banking, plus the
+      server-side agent that orchestrates them.
 - [ ] Mobile: reuse the API and shared types.
 
 ## Security & privacy
 
-OAuth for every third-party integration, encrypted credentials, and an
-append-only audit log of every agent action. See the security section of
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+Your data stays on your devices, and the AI runs entirely locally — prompts
+never leave the machine. The v0 sync server has **no auth** yet, so keep it on
+localhost or a trusted LAN. OAuth for integrations, encrypted credentials, and
+an append-only audit log of agent actions arrive with the server modules that
+need them. Details: the security section of
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 

@@ -37,7 +37,7 @@ Large, platform-specific files are git-ignored. One command fetches both,
 idempotently, on Linux, macOS, and Windows (Git Bash):
 
 ```bash
-pnpm fetch-assets   # scripts/fetch-assets.sh
+pnpm fetch-assets   # scripts/fetch-assets.mjs → finds a bash, runs fetch-assets.sh
 ```
 
 It downloads the pinned Qwen3-1.7B Q4_K_M weights → `src-tauri/models/model.gguf`

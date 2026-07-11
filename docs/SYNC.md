@@ -7,13 +7,13 @@ in `packages/shared`.
 
 ## Why a custom delta-sync, not PowerSync / ElectricSQL
 
-ARCHITECTURE.md names PowerSync or ElectricSQL but treats the engine as
-"swappable, behind the data layer." Both options mean running an extra sync
-service, and PowerSync would replace the working OPFS + Drizzle client store with
-its own SDK. For **one user, their own devices, last-write-wins**, that is far
-more than the problem needs. So v0 is a small pull/push delta-sync that rides the
-existing REST server and existing client SQLite store. Swapping in a heavier
-engine later stays contained to the `sync/` modules.
+PowerSync and ElectricSQL are the obvious off-the-shelf options, but both mean
+running an extra sync service, and PowerSync would replace the working OPFS +
+Drizzle client store with its own SDK. For **one user, their own devices,
+last-write-wins**, that is far more than the problem needs. So v0 is a small
+pull/push delta-sync that rides the existing REST server and existing client
+SQLite store. Swapping in a heavier engine later stays contained to the
+`sync/` modules.
 
 ## The model
 
