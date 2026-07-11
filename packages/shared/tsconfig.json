@@ -2,11 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",
-    "noEmit": true,
-    // DOM is added only for universal web-standard runtime globals that shared
-    // engine types reference (e.g. AbortSignal). These are present in both the
-    // browser and Node 20+, and the types are erased at runtime.
-    "lib": ["ES2022", "DOM"]
+    "noEmit": true
   },
   "include": ["src"]
 }

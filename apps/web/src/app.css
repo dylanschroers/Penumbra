@@ -627,23 +627,6 @@ body {
   cursor: default;
 }
 
-.agent__think {
-  font-size: 0.8rem;
-  color: var(--muted);
-}
-
-.agent__think-summary {
-  cursor: pointer;
-}
-
-.agent__think-body {
-  margin-top: 0.25rem;
-  padding: 0.4rem 0.55rem;
-  border-left: 2px solid var(--border);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .agent__form {
   display: flex;
   gap: 0.4rem;

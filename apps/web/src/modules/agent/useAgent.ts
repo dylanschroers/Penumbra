@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AgentStatus, ChatMessage } from "@ghost/shared";
-import { localEngine } from "../../engine";
+import { localEngine, type AgentStatus, type ChatMessage } from "../../engine";
 import { AGENT_SYSTEM, runTool, toolSpecs } from "../../agent/tools";
 
 // Drives the agent module: tracks the embedded model's status and runs a
@@ -24,11 +23,18 @@ export function useAgent() {
   }, []);
 
   // Poll status so the pill reflects the model starting/stopping out of band.
+  // Skip ticks while the tab is hidden; the next visible tick catches up.
   useEffect(() => {
     void refreshStatus();
-    const id = setInterval(() => void refreshStatus(), 5000);
+    const id = setInterval(() => {
+      if (!document.hidden) void refreshStatus();
+    }, 5000);
     return () => clearInterval(id);
   }, [refreshStatus]);
+
+  // Cancel an in-flight turn when the module unmounts, so the tool loop stops
+  // instead of patching state that no longer has a component.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   const send = useCallback(
     async (text: string) => {

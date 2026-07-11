@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import type { AgentStatus } from "@ghost/shared";
+import type { AgentStatus } from "../../engine";
 import { useAgent } from "./useAgent";
 
 // The assistant module: a status pill plus a chat against the embedded local
@@ -18,7 +18,6 @@ const STATUS_LABEL: Record<AgentStatus["state"], string> = {
   ready: "Ready",
   no_model: "No model loaded",
   stopped: "Model offline",
-  not_installed: "Model not installed",
 };
 
 function StatusPill({ status }: { status: AgentStatus }) {

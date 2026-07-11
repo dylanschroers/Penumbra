@@ -39,9 +39,9 @@ Opt-in cloud (Anthropic, OpenAI, …)     ─┘
 > Migration note: an earlier `feat/ai-sidebar-unsloth` branch talked to a local
 > Unsloth Studio via the Anthropic SDK — coupling the wire format to
 > Anthropic-compat (the rare dialect) and depending on a separately installed
-> Studio app. That approach is retired. The engine seam here (`packages/shared`
-> inference module) is provider-neutral, `LocalEngine` speaks OpenAI-compatible
-> directly to a bundled `llama-server`, and the `<think>` splitter is shared.
+> Studio app. That approach is retired. The seam here is provider-neutral:
+> `LocalEngine` (`apps/web/src/engine`) speaks OpenAI-compatible directly to a
+> bundled `llama-server`.
 
 ---
 
@@ -99,7 +99,8 @@ All tiers sit behind the §1 seam.
   not need a server (e.g. `createTask`, `setReminder`) via constrained decoding.
 - Model candidate: **Qwen3** family (Apache-2.0 — matches the repo license, which
   matters because bundling redistributes the weights). Small reasoning models
-  earn their size here; the UI already renders a `<think>` disclosure.
+  earn their size here; thinking is off by default for latency
+  (`--reasoning-budget 0`).
 
 ### Tier 1 — Self-hosted server (optional)
 
@@ -135,38 +136,40 @@ Unsloth path did.
 
 ## 5. The engine abstraction
 
-The UI must not know which backend or transport is behind a reply. One interface:
+The UI must not know which backend or transport is behind a reply. Today there
+is exactly one engine — **LocalEngine** (`apps/web/src/engine`), the embedded
+model over OpenAI-compatible HTTP — and it exposes only the two methods the UI
+actually calls:
 
 ```ts
-interface InferenceEngine {
-  getStatus(): EngineStatus;
-  streamReply(messages: ChatMessage[]): AsyncGenerator<ReplyChunk>;
+class LocalEngine {
+  getStatus(): Promise<AgentStatus>;                       // status pill
+  runAgent(messages, opts): AsyncGenerator<AgentEvent>;    // tool loop + answer
 }
 ```
 
-- `ChatMessage` is the shared wire type (`packages/shared`).
-- `ReplyChunk` (`{ kind: "reasoning" | "answer"; text }`) and the
-  `createThinkSplitter()` state machine live in `packages/shared`, so server and
-  client use one copy. The splitter is pure string processing (parses
-  `<think>…</think>` across streamed deltas) and has no server dependency.
+An earlier pass also shipped the formal `InferenceEngine` interface, a shared
+`ReplyChunk` + `createThinkSplitter()` state machine in `packages/shared`, and a
+`RemoteEngine` SSE adapter. None of it had a live caller (the server has no
+`/agent/*` endpoints yet), so it was removed rather than kept as speculative
+surface area — it lives in git history and returns when a second consumer
+exists:
 
-Two implementations, same `ReplyChunk` stream:
+- **RemoteEngine** — the self-hosted or cloud backend; a thin transport adapter
+  that turns the server's SSE frames back into the same event stream. Arrives
+  with the server agent loop (sequencing step 5).
+- **Streaming + think-splitting** — a `streamReply` chunk stream (`reasoning`
+  vs `answer`) and the `<think>` splitter come back when a streaming chat UI
+  exists to consume them.
 
-- **LocalEngine** — the embedded model, in-process. On desktop/mobile it talks to
-  the bundled `llama-server` over OpenAI-compatible HTTP (§6); on web it uses a
-  WASM/WebGPU runtime. This is the default engine.
-- **RemoteEngine** — the self-hosted or cloud backend over SSE, its hand-rolled
-  SSE parser reduced to *just this engine's transport adapter* that turns SSE
-  frames back into `ReplyChunk`s. SSE is a transport detail, not the interface.
-
-Result: the agent module UI (and the "Thinking" disclosure) works unchanged
-regardless of where inference runs.
+On web, `LocalEngine` later gains a WASM/WebGPU backing behind the same class
+(§6); on mobile, a native module. The UI is unaffected either way.
 
 ### Status / readiness
 
-The current Unsloth-specific states (`not_installed → stopped → no_model →
-ready`) generalize to something honest for a bundled/native model, including one
-the remote path never had — download/first-load progress:
+The current states (`stopped → no_model → ready`, `apps/web/src/engine/types.ts`)
+generalize later to something honest for each delivery mode, including one the
+spawned-sidecar path never needs — download/first-load progress:
 
 ```
 unsupported | loading | ready | error        // embedded (bundled: usually straight to loading)
@@ -182,9 +185,11 @@ downloading(progress %) | …                  // web download-once case
 The goal is **zero download after install**. Any platform with an install step can
 bundle the model in its package:
 
-- **Desktop (Tauri):** ship `llama-server` as an `externalBin` sidecar and the
-  GGUF as a `bundle.resources` file. Tauri spawns the sidecar on launch;
-  `LocalEngine` talks to its local OpenAI-compatible port. This reuses the
+- **Desktop (Tauri):** ship `llama-server` **and its shared libraries** plus the
+  GGUF as `bundle.resources` (not `externalBin`, which ships a single file and
+  would strand the libraries — apps/desktop/SIDECAR.md). Tauri spawns the
+  sidecar on launch; `LocalEngine` talks to its local OpenAI-compatible port.
+  This reuses the
   "spawn a local model server, talk HTTP" shape the Unsloth code already had —
   relocated from the Node server into the desktop app, so guidance needs **no
   Ghost server and no network**.
@@ -295,12 +300,13 @@ Designed-for now (so the permission model accounts for it), built later.
 
 ## 10. Sequencing
 
-1. **Shared-seam refactor** — ✅ done. `ReplyChunk` + `createThinkSplitter` live
-   in `packages/shared`; `InferenceEngine` defined; `RemoteEngine` wraps the SSE
-   path.
-2. **Embedded chat (Tier 0)** — *in progress.* `LocalEngine` (OpenAI-compatible)
-   and the agent canvas module are done; still to do: bundle `llama-server` + a
-   Qwen3 GGUF as a Tauri `externalBin` sidecar and pick the model.
+1. **Engine seam** — ✅ done, then trimmed. `LocalEngine` is the one engine; the
+   shared `InferenceEngine` / `ReplyChunk` / `createThinkSplitter` scaffolding
+   and `RemoteEngine` were built ahead of need and removed as dead code until a
+   second backend exists (§5; they live in git history).
+2. **Embedded chat (Tier 0)** — ✅ done. `LocalEngine` (OpenAI-compatible), the
+   agent canvas module, and the bundled `llama-server` sidecar (resources, not
+   `externalBin` — SIDECAR.md) running Qwen3-1.7B Q4.
 3. **Embeddings + retrieval:** bundle the embedding model + local index; ground
    guidance and add semantic search. (Second because it is what makes Tier 0
    genuinely useful.)
@@ -309,6 +315,6 @@ Designed-for now (so the permission model accounts for it), built later.
    larger self-hosted model (the seat where a `RemoteEngine` backend is wired up).
 6. **Autonomous Worker mode:** proactive jobs with pre-authorized scopes + audit.
 
-Web and mobile fall out of the same `InferenceEngine` interface: `LocalEngine`
-gains a WASM/WebGPU backing on web and a native module on mobile, with no UI or
+Web and mobile fall out of the same engine surface: `LocalEngine` gains a
+WASM/WebGPU backing on web and a native module on mobile, with no UI or
 wire-contract changes.

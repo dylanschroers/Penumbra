@@ -5,7 +5,8 @@
 // Usage: node scripts/tool-eval.mjs   (needs llama-server on :8080 with --jinja)
 //   LLM_URL=http://127.0.0.1:8080  MODEL=qwen3-1.7b
 
-const URL = process.env.LLM_URL ?? "http://127.0.0.1:8080";
+// Named BASE_URL so it doesn't shadow the global URL constructor.
+const BASE_URL = process.env.LLM_URL ?? "http://127.0.0.1:8080";
 const MODEL = process.env.MODEL ?? "qwen3-1.7b";
 
 // Tools modeled on the real app: create_task mirrors validation/task.ts.
@@ -99,7 +100,7 @@ const cases = [
 
 async function ask(text) {
   const t0 = Date.now();
-  const res = await fetch(`${URL}/v1/chat/completions`, {
+  const res = await fetch(`${BASE_URL}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
