@@ -94,6 +94,9 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      '@ghost/server':
+        specifier: workspace:^
+        version: link:../server
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
