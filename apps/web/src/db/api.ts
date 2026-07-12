@@ -5,6 +5,7 @@
 //   - desktop: a native SQLite file behind Tauri IPC (./tauriExec.ts)
 // The UI gets a DbApi from ./client.ts and never knows which one it holds.
 
+import type { z } from "zod";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
@@ -12,7 +13,6 @@ import {
   tasks,
   createTaskInput,
   updateTaskInput,
-  type CreateTaskInput,
   type UpdateTaskInput,
   type NewTaskRow,
   type TaskRow,
@@ -109,8 +109,10 @@ export function createDbApi(exec: RawExec) {
         .orderBy(desc(tasks.createdAt));
     },
 
-    /** Validate input, insert a new task, and return the stored row. */
-    async createTask(input: CreateTaskInput): Promise<TaskRow> {
+    /** Validate input, insert a new task, and return the stored row. The param
+     * is the schema's *input* type (priority optional — `.parse` fills its
+     * default), not the output type, which is what this method actually accepts. */
+    async createTask(input: z.input<typeof createTaskInput>): Promise<TaskRow> {
       const db = await ready;
       const data = createTaskInput.parse(input); // throws on invalid input
       const now = new Date().toISOString();
