@@ -56,6 +56,11 @@ jobs:
       # any dependency someone used without declaring it.
       - run: pnpm typecheck
 
+      # Vitest across the workspace (unit + integration). Runs before build:
+      # tests are seconds, the build is the slowest step, so a logic regression
+      # fails fast without waiting on the bundlers.
+      - run: pnpm test
+
       # Prove the artifacts actually build: Vite bundle for the web app, tsup
       # for the server. Typechecking alone doesn't exercise the bundlers'
       # resolution, asset handling, or config.

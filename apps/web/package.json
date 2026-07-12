@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@ghost/shared": "workspace:*",
@@ -28,7 +29,9 @@
     "@types/react-grid-layout": "^1",
     "@vitejs/plugin-react": "^4.3.4",
     "drizzle-kit": "^0.31.10",
+    "happy-dom": "^20.10.6",
     "typescript": "^5.7.2",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "vitest": "^4.1.10"
   }
 }
