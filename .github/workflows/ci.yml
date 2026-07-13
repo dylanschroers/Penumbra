@@ -51,6 +51,11 @@ jobs:
       # "helpfully" resolve new versions nobody tested against.
       - run: pnpm install --frozen-lockfile
 
+      # Biome: formatting + lint + import order, in check mode (no writes, fails
+      # on any diff or diagnostic). First because it's the fastest, most
+      # mechanical gate — a formatting slip shouldn't wait on tsc or the tests.
+      - run: pnpm lint
+
       # `tsc --noEmit` across the workspace (Turborepo fans out per package).
       # Catches type errors and — because the install above is from scratch —
       # any dependency someone used without declaring it.
