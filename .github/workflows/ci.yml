@@ -1,0 +1,72 @@
+# The TypeScript safety net. Runs on a fresh Ubuntu VM on every push, so
+# nothing from any developer machine (a stale node_modules, an uncommitted
+# file) can make a broken commit look green. Each step below is ordered
+# cheapest-first: a failure early on saves the minutes the later steps cost.
+#
+# Later bucket-3 phases append steps here (test after typecheck, lint before
+# it); the skeleton is install → typecheck → build.
+
+name: CI
+
+on:
+  # Every branch push. The repo's flow is direct pushes and local merges (no
+  # PRs), so `push` alone covers feature branches and main. If PRs become the
+  # flow, add a `pull_request:` trigger — and expect same-repo PRs to run
+  # twice (once per trigger) unless the push trigger is narrowed to main.
+  push:
+  # Allows manually re-running from the Actions tab (e.g. to check whether a
+  # failure was transient) without pushing an empty commit.
+  workflow_dispatch:
+
+# Two pushes to the same branch in quick succession: cancel the run for the
+# older commit instead of finishing a result nobody needs. The group key is
+# per-branch, so parallel branches never cancel each other.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      # Clone the repo at the pushed commit. Nothing exists on the runner
+      # until this runs — not even the workflow's own repository.
+      - uses: actions/checkout@v4
+
+      # Install pnpm. No version input: the action reads the `packageManager`
+      # field in package.json, so the pnpm version has exactly one source of
+      # truth (the same one corepack uses locally).
+      - uses: pnpm/action-setup@v4
+
+      # Install Node and restore the pnpm store cache. The cache key is the
+      # hash of pnpm-lock.yaml: same lockfile → packages restored in seconds;
+      # changed lockfile → fresh download, then re-cached for next time.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # --frozen-lockfile: install exactly what pnpm-lock.yaml records, and
+      # fail if package.json and the lockfile disagree. CI must never
+      # "helpfully" resolve new versions nobody tested against.
+      - run: pnpm install --frozen-lockfile
+
+      # Biome: formatting + lint + import order, in check mode (no writes, fails
+      # on any diff or diagnostic). First because it's the fastest, most
+      # mechanical gate — a formatting slip shouldn't wait on tsc or the tests.
+      - run: pnpm lint
+
+      # `tsc --noEmit` across the workspace (Turborepo fans out per package).
+      # Catches type errors and — because the install above is from scratch —
+      # any dependency someone used without declaring it.
+      - run: pnpm typecheck
+
+      # Vitest across the workspace (unit + integration). Runs before build:
+      # tests are seconds, the build is the slowest step, so a logic regression
+      # fails fast without waiting on the bundlers.
+      - run: pnpm test
+
+      # Prove the artifacts actually build: Vite bundle for the web app, tsup
+      # for the server. Typechecking alone doesn't exercise the bundlers'
+      # resolution, asset handling, or config.
+      - run: pnpm build

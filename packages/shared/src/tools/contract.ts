@@ -50,7 +50,10 @@ function stripHugeBounds(node: unknown): void {
     for (const item of node) stripHugeBounds(item);
   } else if (node && typeof node === "object") {
     const obj = node as Record<string, unknown>;
-    if (typeof obj.maxLength === "number" && obj.maxLength > GRAMMAR_MAX_LENGTH) {
+    if (
+      typeof obj.maxLength === "number" &&
+      obj.maxLength > GRAMMAR_MAX_LENGTH
+    ) {
       delete obj.maxLength;
     }
     for (const value of Object.values(obj)) stripHugeBounds(value);

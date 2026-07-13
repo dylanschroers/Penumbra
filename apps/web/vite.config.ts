@@ -1,8 +1,18 @@
-import { defineConfig } from "vite";
+// vitest/config re-exports vite's defineConfig and adds typing for the `test`
+// block below, so the test environment is configured in the same file Vite
+// already reads — no separate vitest.config.
+
 import react from "@vitejs/plugin-react";
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],
+  // Web-package tests run against happy-dom, a lightweight in-process DOM, so
+  // code that touches `window` (e.g. the agent tools' change notification)
+  // runs without a real browser. Node is the default env otherwise.
+  test: {
+    environment: "happy-dom",
+  },
   // react-draggable (used by react-grid-layout) gates a debug log on
   // `process.env.DRAGGABLE_DEBUG`. `process` doesn't exist in the browser, so
   // without this it throws "process is not defined" the moment a drag/resize

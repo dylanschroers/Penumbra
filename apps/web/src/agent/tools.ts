@@ -1,15 +1,15 @@
-import type { z } from "zod";
 import {
-  taskTools,
-  createTaskTool,
-  listTasksTool,
   completeTaskTool,
+  createTaskTool,
   deleteTaskTool,
-  toToolSpec,
+  listTasksTool,
+  type TaskRow,
   type ToolContract,
   type ToolSpec,
-  type TaskRow,
+  taskTools,
+  toToolSpec,
 } from "@ghost/shared";
+import type { z } from "zod";
 import { getDb } from "../db/client";
 import { requestSync, SYNC_EVENT } from "../sync/SyncClient";
 
@@ -20,8 +20,8 @@ import { requestSync, SYNC_EVENT } from "../sync/SyncClient";
 // anything executes — so the schema the model is shown, the validation rule,
 // and the eval harness (scripts/tool-eval.ts) can never drift apart.
 
-export { AGENT_SYSTEM } from "@ghost/shared";
 export type { ToolSpec } from "@ghost/shared";
+export { AGENT_SYSTEM } from "@ghost/shared";
 
 /** The model-facing tool list, derived from the shared contracts. */
 export const toolSpecs: ToolSpec[] = taskTools.map(toToolSpec);

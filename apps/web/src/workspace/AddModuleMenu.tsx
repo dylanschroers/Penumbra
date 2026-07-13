@@ -35,7 +35,7 @@ export function AddModuleMenu({
       <button
         type="button"
         className="btn add-menu__trigger"
-        aria-haspopup="menu"
+        aria-haspopup="true"
         aria-expanded={open}
         aria-label="Add a module"
         onClick={() => setOpen((v) => !v)}
@@ -43,12 +43,14 @@ export function AddModuleMenu({
         +
       </button>
       {open && (
-        <ul className="add-menu__list" role="menu">
+        // A simple disclosure of buttons, not an ARIA menu widget: it has no
+        // arrow-key roving focus, so claiming role="menu" would over-promise.
+        // Native buttons stay focusable and Tab-navigable.
+        <ul className="add-menu__list">
           {MODULES.map((def) => (
-            <li key={def.id} role="none">
+            <li key={def.id}>
               <button
                 type="button"
-                role="menuitem"
                 className="add-menu__item"
                 onClick={() => {
                   onAdd(def.id);

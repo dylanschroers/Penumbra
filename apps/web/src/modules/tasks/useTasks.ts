@@ -1,7 +1,7 @@
+import type { CreateTaskInput, TaskRow, UpdateTaskInput } from "@ghost/shared";
 import { useCallback, useEffect, useState } from "react";
 import { getDb } from "../../db/client";
 import { requestSync, SYNC_EVENT } from "../../sync/SyncClient";
-import type { CreateTaskInput, TaskRow, UpdateTaskInput } from "@ghost/shared";
 
 // The single place the UI touches the repository. Holds the task list in React
 // state and re-reads it after every mutation, so the screen always reflects

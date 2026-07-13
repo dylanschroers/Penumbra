@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import "./app.css";
-import { Workspace } from "./workspace/Workspace";
 import { startSync } from "./sync/SyncClient";
+import { Workspace } from "./workspace/Workspace";
 
 // The app is now a blank workspace canvas. Features live as self-contained
 // modules (see src/modules + the registry) that the user places, drags, and

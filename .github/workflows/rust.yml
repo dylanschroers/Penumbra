@@ -1,0 +1,61 @@
+# Compile-checks the Tauri shell. A separate workflow (not a job in ci.yml)
+# for two reasons: it needs ~2 minutes of Linux system packages the TypeScript
+# checks don't, and the `paths:` filter below skips it entirely for commits
+# that don't touch the Rust side — a docs or web-only push shouldn't pay the
+# Rust toolchain's bill.
+#
+# `cargo check` compiles everything but skips producing final binaries — the
+# fastest full type/borrow-check. `tauri build` (installers, bundling) stays
+# out of CI until there's a release process to need it.
+
+name: Rust
+
+on:
+  push:
+    # Run only when the Rust side (or this workflow itself) changes.
+    paths:
+      - "apps/desktop/src-tauri/**"
+      - ".github/workflows/rust.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tauri on Linux links against the system webview and GTK stacks; these
+      # are the Tauri v2 Ubuntu prerequisites. Without them, compiling the
+      # `tauri` crate fails at its sys-crate build scripts.
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      # Stable Rust toolchain (rustc + cargo). The runner images ship one, but
+      # pinning through an action makes the version explicit and updatable.
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Cache ~/.cargo and target/, keyed on Cargo.lock. First run compiles
+      # every dependency (~ minutes); subsequent runs with an unchanged
+      # lockfile only recompile Ghost's own crate.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      # tauri-build validates at compile time that the configured frontendDist
+      # (../../web/dist) exists. This job deliberately doesn't build the web
+      # app — that's ci.yml's job — so satisfy the check with an empty dir.
+      - name: Stub the frontend dist dir
+        run: mkdir -p ../../web/dist
+
+      - run: cargo check --locked

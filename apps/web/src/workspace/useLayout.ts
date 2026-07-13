@@ -1,28 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ModuleInstance } from "./types";
+import { COLS, firstFreeSlot } from "./grid";
 import { getModule } from "./registry";
-import { COLS } from "./grid";
-
-type Rect = { x: number; y: number; w: number; h: number };
-
-function overlaps(a: Rect, b: Rect): boolean {
-  return (
-    a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
-  );
-}
-
-// First free grid slot scanning left-to-right within a row, then top-to-bottom.
-// New tiles fill gaps and wrap to the next row instead of always extending the
-// page downward. Terminates: once y clears every existing tile, row 0..COLS-w is
-// empty, so a slot always exists.
-function firstFreeSlot(existing: Rect[], w: number, h: number): Rect {
-  for (let y = 0; ; y++) {
-    for (let x = 0; x + w <= COLS; x++) {
-      const candidate = { x, y, w, h };
-      if (!existing.some((tile) => overlaps(candidate, tile))) return candidate;
-    }
-  }
-}
+import type { ModuleInstance } from "./types";
 
 // Workspace layout is user-authored data (Plane A in docs/ARCHITECTURE.md).
 // It will eventually live in the shared SQLite schema and sync across devices;

@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
 import type { CreateTaskInput, TaskPriority } from "@ghost/shared";
+import { type FormEvent, useState } from "react";
 
 // Owns only its own field state. On submit it builds a CreateTaskInput and
 // hands it to the parent; the date input gives "YYYY-MM-DD", which we widen to

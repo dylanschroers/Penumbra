@@ -1,12 +1,12 @@
 import { useMemo } from "react";
-import RGL, { WidthProvider, type Layout } from "react-grid-layout";
+import RGL, { type Layout, WidthProvider } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
-import { getModule } from "./registry";
-import { ModuleFrame } from "./ModuleFrame";
-import { AddModuleMenu } from "./AddModuleMenu";
 import { SyncStatusLight } from "../sync/SyncStatusLight";
+import { AddModuleMenu } from "./AddModuleMenu";
+import { COLS, MARGIN, ROW_HEIGHT } from "./grid";
+import { ModuleFrame } from "./ModuleFrame";
+import { getModule } from "./registry";
 import { useLayout } from "./useLayout";
-import { COLS, ROW_HEIGHT, MARGIN } from "./grid";
 
 // WidthProvider measures the container and feeds `width` to the grid, so we don't
 // have to track it ourselves.

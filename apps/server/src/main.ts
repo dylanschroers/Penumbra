@@ -1,7 +1,8 @@
-import Fastify from "fastify";
 import cors from "@fastify/cors";
+import Fastify from "fastify";
+import { sqlite } from "./db";
+import { createTaskSyncStore } from "./sync/store";
 import { registerTaskSyncRoutes } from "./sync/tasks";
-import "./db"; // open the store + ensure schema on startup
 
 const app = Fastify({ logger: true });
 
@@ -11,7 +12,8 @@ await app.register(cors, { origin: true });
 
 app.get("/health", async () => ({ status: "ok" }));
 
-registerTaskSyncRoutes(app);
+// Build the sync store on the server's database, then wire the routes to it.
+registerTaskSyncRoutes(app, createTaskSyncStore(sqlite));
 
 const port = Number(process.env.PORT ?? 3000);
 app.listen({ port, host: "0.0.0.0" }).catch((err) => {

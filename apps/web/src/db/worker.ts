@@ -3,8 +3,8 @@
 // talks to it via Comlink — see ./client.ts. All database logic lives in
 // ./api.ts; this file supplies only the storage: an OPFS-backed exec primitive.
 
-import * as Comlink from "comlink";
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
+import * as Comlink from "comlink";
 import { createDbApi } from "./api";
 
 // Minimal shapes for the parts of the sqlite-wasm API we use. The package's

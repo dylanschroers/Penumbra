@@ -30,20 +30,46 @@ const cases: Case[] = [
   // create_task
   { text: "Add buy milk to my list", tool: "create_task" },
   { text: "Create a task to finish the quarterly report", tool: "create_task" },
-  { text: "Add a high priority task to file taxes", tool: "create_task", args: { priority: "high" } },
+  {
+    text: "Add a high priority task to file taxes",
+    tool: "create_task",
+    args: { priority: "high" },
+  },
   { text: "Put 'renew passport' on my todo list", tool: "create_task" },
-  { text: "Make a low priority task to clean the garage", tool: "create_task", args: { priority: "low" } },
-  { text: "Add a high-priority task to file taxes by April 15", tool: "create_task", args: { priority: "high" } },
-  { text: "Create a task called draft proposal, medium priority", tool: "create_task", args: { priority: "medium" } },
+  {
+    text: "Make a low priority task to clean the garage",
+    tool: "create_task",
+    args: { priority: "low" },
+  },
+  {
+    text: "Add a high-priority task to file taxes by April 15",
+    tool: "create_task",
+    args: { priority: "high" },
+  },
+  {
+    text: "Create a task called draft proposal, medium priority",
+    tool: "create_task",
+    args: { priority: "medium" },
+  },
   // list_tasks
   { text: "What's on my to-do list?", tool: "list_tasks" },
   { text: "Show me my tasks", tool: "list_tasks" },
-  { text: "Which tasks have I finished?", tool: "list_tasks", args: { status: "done" } },
+  {
+    text: "Which tasks have I finished?",
+    tool: "list_tasks",
+    args: { status: "done" },
+  },
   { text: "List everything I still have to do", tool: "list_tasks" },
   // complete_task
   { text: "Mark buy milk as done", tool: "complete_task" },
-  { text: "I finished the quarterly report, check it off", tool: "complete_task" },
-  { text: "Complete the task about renewing my passport", tool: "complete_task" },
+  {
+    text: "I finished the quarterly report, check it off",
+    tool: "complete_task",
+  },
+  {
+    text: "Complete the task about renewing my passport",
+    tool: "complete_task",
+  },
   { text: "Tick off cleaning the garage", tool: "complete_task" },
   // delete_task
   { text: "Delete the buy milk task", tool: "delete_task" },
@@ -87,12 +113,16 @@ async function ask(text: string): Promise<AskResult> {
   // Fail loudly: a non-OK response (e.g. a schema the server's grammar builder
   // rejects) must not be scored as "the model declined to call a tool".
   if (!res.ok) {
-    throw new Error(`llama-server responded ${res.status}: ${await res.text()}`);
+    throw new Error(
+      `llama-server responded ${res.status}: ${await res.text()}`,
+    );
   }
   const body = (await res.json()) as {
     choices?: Array<{
       message?: {
-        tool_calls?: Array<{ function?: { name?: string; arguments?: string } }>;
+        tool_calls?: Array<{
+          function?: { name?: string; arguments?: string };
+        }>;
       };
     }>;
   };
@@ -112,15 +142,31 @@ async function ask(text: string): Promise<AskResult> {
 
 function pad(value: unknown, n: number): string {
   const s = String(value);
-  return s.length > n ? s.slice(0, n - 1) + "…" : s.padEnd(n);
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s.padEnd(n);
 }
 
-const R = { reset: "\x1b[0m", green: "\x1b[32m", red: "\x1b[31m", dim: "\x1b[2m" };
+const R = {
+  reset: "\x1b[0m",
+  green: "\x1b[32m",
+  red: "\x1b[31m",
+  dim: "\x1b[2m",
+};
 
 const main = async (): Promise<void> => {
-  let sel = 0, fp = 0, fn = 0, argOk = 0, argTotal = 0, validCalls = 0, calls = 0;
+  let sel = 0,
+    fp = 0,
+    fn = 0,
+    argOk = 0,
+    argTotal = 0,
+    validCalls = 0,
+    calls = 0;
   const lat: number[] = [];
-  console.log(pad("utterance", 46), pad("expected", 14), pad("got", 14), "result");
+  console.log(
+    pad("utterance", 46),
+    pad("expected", 14),
+    pad("got", 14),
+    "result",
+  );
   console.log("-".repeat(84));
   for (const c of cases) {
     const r = await ask(c.text);
@@ -129,13 +175,19 @@ const main = async (): Promise<void> => {
     if (selOk) sel++;
     if (c.tool === null && r.name !== null) fp++;
     if (c.tool !== null && r.name === null) fn++;
-    if (r.name) { calls++; if (r.argsValid) validCalls++; }
+    if (r.name) {
+      calls++;
+      if (r.argsValid) validCalls++;
+    }
     // semantic arg spot-check
     let argMark = "";
     if (selOk && c.args) {
       argTotal++;
       const hit = Object.entries(c.args).every(([k, v]) => r.args?.[k] === v);
-      if (hit) { argOk++; argMark = " args✓"; } else argMark = ` args✗(${JSON.stringify(r.args)})`;
+      if (hit) {
+        argOk++;
+        argMark = " args✓";
+      } else argMark = ` args✗(${JSON.stringify(r.args)})`;
     }
     const color = selOk ? R.green : R.red;
     console.log(
@@ -148,12 +200,16 @@ const main = async (): Promise<void> => {
   const n = cases.length;
   const avg = Math.round(lat.reduce((a, b) => a + b, 0) / n);
   console.log("-".repeat(84));
-  console.log(`Tool-selection accuracy : ${sel}/${n} (${((sel / n) * 100).toFixed(0)}%)`);
+  console.log(
+    `Tool-selection accuracy : ${sel}/${n} (${((sel / n) * 100).toFixed(0)}%)`,
+  );
   console.log(`False positives (called on chit-chat): ${fp}`);
   console.log(`False negatives (missed a real action): ${fn}`);
   console.log(`Arg JSON validity       : ${validCalls}/${calls} calls`);
   console.log(`Arg correctness (spot)  : ${argOk}/${argTotal} checked`);
-  console.log(`Latency                 : avg ${avg}ms, max ${Math.max(...lat)}ms`);
+  console.log(
+    `Latency                 : avg ${avg}ms, max ${Math.max(...lat)}ms`,
+  );
 };
 
 main().catch((e: unknown) => {
