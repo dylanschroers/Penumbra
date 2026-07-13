@@ -1,11 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { toToolSpec, type ToolContract } from "./contract";
-import {
-  taskTools,
-  createTaskTool,
-  listTasksTool,
-} from "./tasks";
+import { type ToolContract, toToolSpec } from "./contract";
+import { createTaskTool, listTasksTool, taskTools } from "./tasks";
 
 describe("toToolSpec", () => {
   it("wraps the contract in the OpenAI function-tool shape", () => {

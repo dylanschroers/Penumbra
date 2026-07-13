@@ -68,7 +68,10 @@ function load(): Persisted {
   return { units: defaultUnits(), data: null };
 }
 
-function unitParams(units: Units): { temperature_unit: string; wind_speed_unit: string } {
+function unitParams(units: Units): {
+  temperature_unit: string;
+  wind_speed_unit: string;
+} {
   return units === "imperial"
     ? { temperature_unit: "fahrenheit", wind_speed_unit: "mph" }
     : { temperature_unit: "celsius", wind_speed_unit: "kmh" };

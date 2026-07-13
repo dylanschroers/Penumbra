@@ -1,8 +1,8 @@
-import Fastify from "fastify";
 import cors from "@fastify/cors";
-import { registerTaskSyncRoutes } from "./sync/tasks";
-import { createTaskSyncStore } from "./sync/store";
+import Fastify from "fastify";
 import { sqlite } from "./db";
+import { createTaskSyncStore } from "./sync/store";
+import { registerTaskSyncRoutes } from "./sync/tasks";
 
 const app = Fastify({ logger: true });
 

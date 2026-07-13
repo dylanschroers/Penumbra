@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { localEngine, type AgentStatus, type ChatMessage } from "../../engine";
 import { AGENT_SYSTEM, runTool, toolSpecs } from "../../agent/tools";
+import { type AgentStatus, type ChatMessage, localEngine } from "../../engine";
 
 // Drives the agent module: tracks the embedded model's status and runs a
 // tool-using turn against it (LocalEngine.runAgent — Tier 0, no server). This

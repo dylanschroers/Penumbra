@@ -11,7 +11,8 @@ import { createDbApi, type DbApi } from "./api";
 import { tauriExec } from "./tauriExec";
 
 // Injected into every Tauri v2 webview; absent in ordinary browsers.
-const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const isTauri =
+  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 let worker: Worker | null = null;
 let api: DbApi | null = null;

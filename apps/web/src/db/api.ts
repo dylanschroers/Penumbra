@@ -5,20 +5,20 @@
 //   - desktop: a native SQLite file behind Tauri IPC (./tauriExec.ts)
 // The UI gets a DbApi from ./client.ts and never knows which one it holds.
 
-import type { z } from "zod";
-import { drizzle } from "drizzle-orm/sqlite-proxy";
+import {
+  createTaskInput,
+  type NewTaskRow,
+  type SyncTask,
+  type TaskRow,
+  tasks,
+  type UpdateTaskInput,
+  updateTaskInput,
+} from "@ghost/shared";
 import { desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import {
-  tasks,
-  createTaskInput,
-  updateTaskInput,
-  type UpdateTaskInput,
-  type NewTaskRow,
-  type TaskRow,
-  type SyncTask,
-} from "@ghost/shared";
-import { runMigrations, type RawExec } from "./migrator";
+import { drizzle } from "drizzle-orm/sqlite-proxy";
+import type { z } from "zod";
+import { type RawExec, runMigrations } from "./migrator";
 
 // Single-user for now. Every row still carries a userId (see ARCHITECTURE.md →
 // "leave the door open for more"), so multi-user later is a query change, not

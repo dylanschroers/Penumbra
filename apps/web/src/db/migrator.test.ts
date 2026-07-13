@@ -5,9 +5,9 @@
 // migrator inlines the .sql files with Vite's import.meta.glob, which is why
 // this runs under Vitest (Vite's transform pipeline) and not a bare Node runner.
 
-import { describe, it, expect } from "vitest";
 import Database from "better-sqlite3";
-import { runMigrations, type RawExec } from "./migrator";
+import { describe, expect, it } from "vitest";
+import { type RawExec, runMigrations } from "./migrator";
 import { betterSqliteExec } from "./testing";
 
 function tableNames(db: Database.Database): string[] {

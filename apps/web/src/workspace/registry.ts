@@ -1,8 +1,8 @@
-import type { ModuleDefinition } from "./types";
-import { TasksModule } from "../modules/tasks/TasksModule";
-import { ColorPickerModule } from "../modules/color/ColorPickerModule";
-import { WeatherModule } from "../modules/weather/WeatherModule";
 import { AgentModule } from "../modules/agent/AgentModule";
+import { ColorPickerModule } from "../modules/color/ColorPickerModule";
+import { TasksModule } from "../modules/tasks/TasksModule";
+import { WeatherModule } from "../modules/weather/WeatherModule";
+import type { ModuleDefinition } from "./types";
 
 // The module registry. Adding a future module (weather, notes, …) is one entry
 // here plus its component — the canvas, the "add module" menu, and persistence

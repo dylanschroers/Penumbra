@@ -11,9 +11,9 @@
 // stores cannot drift. The DDL mirrors client migrations 0000_init +
 // 0001_add_sync_columns. A later move to Postgres is contained to this module.
 
-import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import type { SyncTask } from "@ghost/shared";
+import type Database from "better-sqlite3";
 
 export interface TaskSyncStore {
   /** Identity of this database ("epoch"), returned with every response. Revs
@@ -58,7 +58,9 @@ CREATE TABLE IF NOT EXISTS meta (
       .get() as { value: string } | undefined;
     if (row) return row.value;
     const id = randomUUID();
-    db.prepare(`INSERT INTO meta (key, value) VALUES ('instance_id', ?)`).run(id);
+    db.prepare(`INSERT INTO meta (key, value) VALUES ('instance_id', ?)`).run(
+      id,
+    );
     return id;
   })();
 

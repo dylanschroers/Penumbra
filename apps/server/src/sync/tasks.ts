@@ -3,8 +3,8 @@
 // The server is the merge authority, but the merge itself lives in the store.
 // See docs/SYNC.md for the protocol.
 
-import type { FastifyInstance } from "fastify";
 import { pushTasksInput } from "@ghost/shared";
+import type { FastifyInstance } from "fastify";
 import type { TaskSyncStore } from "./store";
 
 export function registerTaskSyncRoutes(

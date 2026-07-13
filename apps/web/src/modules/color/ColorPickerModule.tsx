@@ -1,15 +1,15 @@
-import { useEffect, useState } from "react";
 // Import from the meta package (a direct dependency) rather than the individual
 // @uiw/react-color-* packages, which are transitive and not resolvable under
 // pnpm's strict node_modules. It re-exports the components and color-convert.
 import {
-  Wheel,
-  ShadeSlider,
+  type HsvaColor,
   hexToHsva,
   hsvaToHex,
+  ShadeSlider,
   validHex,
-  type HsvaColor,
+  Wheel,
 } from "@uiw/react-color";
+import { useEffect, useState } from "react";
 
 // A small, self-contained color tool: a hue/saturation wheel, a light↔dark shade
 // slider, and a two-way hex box, with a click-to-copy swatch. The last color is

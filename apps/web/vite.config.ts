@@ -1,8 +1,9 @@
 // vitest/config re-exports vite's defineConfig and adds typing for the `test`
 // block below, so the test environment is configured in the same file Vite
 // already reads — no separate vitest.config.
-import { defineConfig } from "vitest/config";
+
 import react from "@vitejs/plugin-react";
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],

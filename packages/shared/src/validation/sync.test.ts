@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { syncTask } from "./sync";
 import { createTaskInput, updateTaskInput } from "./task";
 
@@ -25,7 +25,11 @@ describe("syncTask wire schema", () => {
   });
 
   it("accepts a tombstoned (deleted) row carrying its full data", () => {
-    const deleted = { ...fullRow, deletedAt: "2026-01-02T00:00:00.000Z", rev: 5 };
+    const deleted = {
+      ...fullRow,
+      deletedAt: "2026-01-02T00:00:00.000Z",
+      rev: 5,
+    };
     expect(syncTask.safeParse(deleted).success).toBe(true);
   });
 });

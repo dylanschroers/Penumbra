@@ -5,8 +5,8 @@
 // Every test starts from a freshly migrated store, so these also exercise the
 // migrations end to end. No DOM here — plain Node is faster and more honest.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { SyncTask } from "@ghost/shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDb } from "./testing";
 
 // A full sync-wire row with sensible defaults; override what a test cares about.
@@ -148,10 +148,18 @@ describe("last-write-wins (applyServerRows)", () => {
   it("ignores a strictly older incoming row", async () => {
     const { api } = createTestDb();
     await api.applyServerRows([
-      syncRow({ id: "1", title: "current", updatedAt: "2026-01-02T00:00:00.000Z" }),
+      syncRow({
+        id: "1",
+        title: "current",
+        updatedAt: "2026-01-02T00:00:00.000Z",
+      }),
     ]);
     const changed = await api.applyServerRows([
-      syncRow({ id: "1", title: "stale", updatedAt: "2026-01-01T00:00:00.000Z" }),
+      syncRow({
+        id: "1",
+        title: "stale",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
     ]);
     expect(changed).toBe(0);
     expect((await api.listTasks())[0]!.title).toBe("current");
@@ -160,7 +168,9 @@ describe("last-write-wins (applyServerRows)", () => {
   it("resolves an updatedAt tie in favor of the incoming (server) row", async () => {
     const { api } = createTestDb();
     const t = "2026-01-01T00:00:00.000Z";
-    await api.applyServerRows([syncRow({ id: "1", title: "first", updatedAt: t })]);
+    await api.applyServerRows([
+      syncRow({ id: "1", title: "first", updatedAt: t }),
+    ]);
     const changed = await api.applyServerRows([
       syncRow({ id: "1", title: "second", updatedAt: t }),
     ]);

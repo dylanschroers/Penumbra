@@ -4,8 +4,8 @@
 // on startup, on an interval, when the network returns, and (debounced) right
 // after a local edit. See docs/SYNC.md.
 
-import { getDb } from "../db/client";
 import type { PullTasksResult } from "@ghost/shared";
+import { getDb } from "../db/client";
 
 const SERVER_URL: string =
   import.meta.env.VITE_SERVER_URL ?? "http://localhost:3000";
@@ -35,7 +35,9 @@ export function getSyncStatus(): SyncStatus {
 function setStatus(next: SyncStatus): void {
   if (status === next) return;
   status = next;
-  window.dispatchEvent(new CustomEvent<SyncStatus>(SYNC_STATUS_EVENT, { detail: next }));
+  window.dispatchEvent(
+    new CustomEvent<SyncStatus>(SYNC_STATUS_EVENT, { detail: next }),
+  );
 }
 
 let active = false; // a sync loop is running in this tab

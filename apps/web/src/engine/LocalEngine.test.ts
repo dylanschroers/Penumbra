@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { LocalEngine, type AgentEvent } from "./LocalEngine";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { type AgentEvent, LocalEngine } from "./LocalEngine";
 
 // The engine's only outside contact is HTTP to the local model, so a mocked
 // fetch lets us script the model's replies and assert the loop's behavior
@@ -49,7 +49,10 @@ beforeEach(() => mockFetch.mockReset());
 describe("getStatus", () => {
   it("reports ready with the loaded model id", async () => {
     mockFetch.mockResolvedValue(res({ data: [{ id: "qwen3" }] }));
-    expect(await engine.getStatus()).toEqual({ state: "ready", model: "qwen3" });
+    expect(await engine.getStatus()).toEqual({
+      state: "ready",
+      model: "qwen3",
+    });
   });
 
   it("reports no_model when the server lists none", async () => {
@@ -75,7 +78,9 @@ describe("getStatus", () => {
 describe("runAgent", () => {
   it("yields a single answer and strips <think> blocks", async () => {
     mockFetch.mockResolvedValueOnce(answerReply("<think>secret</think>Hello"));
-    const events = await collect(engine.runAgent([{ role: "user", content: "hi" }], opts()));
+    const events = await collect(
+      engine.runAgent([{ role: "user", content: "hi" }], opts()),
+    );
     expect(events).toEqual([{ kind: "answer", text: "Hello" }]);
   });
 
@@ -84,7 +89,9 @@ describe("runAgent", () => {
       .mockResolvedValueOnce(toolReply("create_task", '{"title":"x"}'))
       .mockResolvedValueOnce(answerReply("done"));
     const o = opts();
-    const events = await collect(engine.runAgent([{ role: "user", content: "add x" }], o));
+    const events = await collect(
+      engine.runAgent([{ role: "user", content: "add x" }], o),
+    );
 
     expect(o.runTool).toHaveBeenCalledWith("create_task", { title: "x" });
     expect(events).toEqual([
@@ -113,7 +120,9 @@ describe("runAgent", () => {
     // The model asks for a tool on every turn and never answers.
     mockFetch.mockResolvedValue(toolReply("create_task", '{"title":"x"}'));
     const o = opts();
-    const events = await collect(engine.runAgent([{ role: "user", content: "x" }], o));
+    const events = await collect(
+      engine.runAgent([{ role: "user", content: "x" }], o),
+    );
 
     expect(o.runTool).toHaveBeenCalledTimes(4); // MAX_TOOL_STEPS
     expect(events.at(-1)).toEqual({

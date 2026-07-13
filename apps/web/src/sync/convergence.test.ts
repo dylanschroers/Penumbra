@@ -9,11 +9,11 @@
 // serverId. SyncClient's own wrapper (fetch, timers, status light) is
 // browser-bound and stays covered by app runs, not this test.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import Database from "better-sqlite3";
 import { createTaskSyncStore, type TaskSyncStore } from "@ghost/server/sync";
-import { createTestDb } from "../db/testing";
+import Database from "better-sqlite3";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DbApi } from "../db/api";
+import { createTestDb } from "../db/testing";
 
 function makeServer(): TaskSyncStore {
   return createTaskSyncStore(new Database(":memory:"));

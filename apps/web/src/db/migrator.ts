@@ -35,8 +35,7 @@ export async function runMigrations(exec: RawExec): Promise<string[]> {
   for (const path of pending) {
     const name = basename(path);
     // drizzle-kit separates statements with this marker.
-    const statements = files[path]!
-      .split("--> statement-breakpoint")
+    const statements = files[path]!.split("--> statement-breakpoint")
       .map((s) => s.trim())
       .filter(Boolean);
 

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { type FormEvent, useState } from "react";
 import type { AgentStatus } from "../../engine";
 import { useAgent } from "./useAgent";
 
@@ -57,8 +57,10 @@ export function AgentModule() {
           </p>
         ) : (
           messages.map((m, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: append-only chat log, never reordered or removed
             <div key={i} className={`agent__msg agent__msg--${m.role}`}>
               {m.steps?.map((s, j) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: a message's tool steps are fixed once rendered
                 <div key={j} className="agent__tool" title={s.result}>
                   🔧 {TOOL_LABEL[s.name] ?? s.name}
                 </div>

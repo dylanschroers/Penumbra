@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ModuleInstance } from "./types";
-import { getModule } from "./registry";
 import { COLS, firstFreeSlot } from "./grid";
+import { getModule } from "./registry";
+import type { ModuleInstance } from "./types";
 
 // Workspace layout is user-authored data (Plane A in docs/ARCHITECTURE.md).
 // It will eventually live in the shared SQLite schema and sync across devices;

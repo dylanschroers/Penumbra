@@ -1,9 +1,14 @@
-import type { AgentStatus, ChatMessage } from "./types";
 import type { ToolSpec } from "@ghost/shared";
+import type { AgentStatus, ChatMessage } from "./types";
 
 /** What a tool-using turn emits: each tool run as it happens, then the answer. */
 export type AgentEvent =
-  | { kind: "tool"; name: string; args: Record<string, unknown>; result: string }
+  | {
+      kind: "tool";
+      name: string;
+      args: Record<string, unknown>;
+      result: string;
+    }
   | { kind: "answer"; text: string };
 
 /** Options for a tool-using turn: the tools, the system prompt, and how to run
@@ -21,7 +26,8 @@ const MAX_TOOL_STEPS = 4;
 // is what makes guidance work fully offline. On desktop/mobile the app spawns
 // and bundles that server (see docs/AGENT_DESIGN.md → "Local model delivery");
 // here we only need its address.
-const DEFAULT_URL = import.meta.env.VITE_LOCAL_LLM_URL ?? "http://127.0.0.1:8080";
+const DEFAULT_URL =
+  import.meta.env.VITE_LOCAL_LLM_URL ?? "http://127.0.0.1:8080";
 const DEFAULT_MODEL = import.meta.env.VITE_LOCAL_LLM_MODEL ?? "local";
 // Cap generation so a small model can't run away (Qwen3 thinking can otherwise
 // emit thousands of tokens).
@@ -107,7 +113,11 @@ export class LocalEngine {
         return;
       }
 
-      convo.push({ role: "assistant", content: msg.content ?? "", tool_calls: calls });
+      convo.push({
+        role: "assistant",
+        content: msg.content ?? "",
+        tool_calls: calls,
+      });
       for (const call of calls) {
         let args: Record<string, unknown> = {};
         try {
@@ -120,7 +130,10 @@ export class LocalEngine {
         convo.push({ role: "tool", tool_call_id: call.id, content: result });
       }
     }
-    yield { kind: "answer", text: "I hit the tool-step limit before finishing." };
+    yield {
+      kind: "answer",
+      text: "I hit the tool-step limit before finishing.",
+    };
   }
 }
 

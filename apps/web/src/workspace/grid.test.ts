@@ -1,18 +1,18 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { COLS, firstFreeSlot, overlaps } from "./grid";
 
 describe("overlaps", () => {
   it("detects shared area", () => {
-    expect(overlaps({ x: 0, y: 0, w: 4, h: 4 }, { x: 2, y: 2, w: 4, h: 4 })).toBe(
-      true,
-    );
+    expect(
+      overlaps({ x: 0, y: 0, w: 4, h: 4 }, { x: 2, y: 2, w: 4, h: 4 }),
+    ).toBe(true);
   });
 
   it("treats edge-touching tiles as non-overlapping", () => {
     // {0..2} and {2..4} share only the boundary line, not area.
-    expect(overlaps({ x: 0, y: 0, w: 2, h: 2 }, { x: 2, y: 0, w: 2, h: 2 })).toBe(
-      false,
-    );
+    expect(
+      overlaps({ x: 0, y: 0, w: 2, h: 2 }, { x: 2, y: 0, w: 2, h: 2 }),
+    ).toBe(false);
   });
 });
 

@@ -14,8 +14,18 @@ const candidates =
   process.platform === "win32"
     ? [
         "bash.exe", // on PATH (Git Bash terminal, WSL shim, etc.)
-        join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe"),
-        join(process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)", "Git", "bin", "bash.exe"),
+        join(
+          process.env.ProgramFiles ?? "C:\\Program Files",
+          "Git",
+          "bin",
+          "bash.exe",
+        ),
+        join(
+          process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)",
+          "Git",
+          "bin",
+          "bash.exe",
+        ),
       ]
     : ["bash"];
 

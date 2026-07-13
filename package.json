@@ -11,12 +11,15 @@
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "lint": "biome check .",
+    "format": "biome check --write .",
     "desktop": "pnpm --filter @ghost/desktop dev:desktop",
     "desktop:build": "pnpm --filter @ghost/desktop build:desktop",
     "fetch-assets": "node scripts/fetch-assets.mjs",
     "tool-eval": "tsx scripts/tool-eval.ts"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.3",
     "@ghost/shared": "workspace:^",
     "@types/node": "^22.10.5",
     "tsx": "^4.19.2",

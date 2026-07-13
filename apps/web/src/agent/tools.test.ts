@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { TaskRow } from "@ghost/shared";
-import { runTool } from "./tools";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getDb } from "../db/client";
 import { requestSync } from "../sync/SyncClient";
+import { runTool } from "./tools";
 
 // tools.ts reaches for the real local store and the sync loop; both are
 // replaced so runTool can be exercised in isolation. The mock factories are
@@ -118,7 +118,9 @@ describe("list_tasks", () => {
     fakeDb({
       listTasks: vi
         .fn()
-        .mockResolvedValue([task({ title: "a", status: "todo", priority: "high" })]),
+        .mockResolvedValue([
+          task({ title: "a", status: "todo", priority: "high" }),
+        ]),
     });
     const result = await runTool("list_tasks", {});
     expect(result).toContain("- a [todo, high]");
@@ -129,10 +131,12 @@ describe("list_tasks", () => {
 describe("complete_task title matching", () => {
   it("prefers an exact title match over a substring, case-insensitively", async () => {
     const db = fakeDb({
-      listTasks: vi.fn().mockResolvedValue([
-        task({ id: "long", title: "buy milk and eggs" }),
-        task({ id: "exact", title: "buy milk" }),
-      ]),
+      listTasks: vi
+        .fn()
+        .mockResolvedValue([
+          task({ id: "long", title: "buy milk and eggs" }),
+          task({ id: "exact", title: "buy milk" }),
+        ]),
       updateTask: vi.fn().mockResolvedValue(task({ id: "exact" })),
     });
     await runTool("complete_task", { title: "BUY MILK" });
