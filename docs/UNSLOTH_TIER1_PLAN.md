@@ -24,6 +24,11 @@ A literal `git merge` would conflict on `main.ts`, `App.tsx`, and Biome
 formatting, and would re‑introduce the superseded architecture. Instead we cut a
 fresh branch off `main` and port the valuable pieces re‑shaped to Tier‑1.
 
+Because the branch is **not** merged, none of its files ever land on `main`.
+There is no "delete the superseded code" step — the sidebar, the top‑level
+`useAgent.ts`, `validation/agent.ts`, and the Anthropic loop are simply never
+ported. The salvage ledger (§5) is the complete account of what crosses over.
+
 ### Key finding — Unsloth is on the seam
 
 Unsloth Studio exposes OpenAI‑compatible endpoints on the same `:8888` the
@@ -50,8 +55,8 @@ The model runs server‑side in all cases (GPU placement). The open question is
 where a **tool** runs when the model emits a call.
 
 - **Server‑store (chosen default).** The server binds the shared tool contracts
-  to its own `createTaskSyncStore(sqlite)` and executes in‑process; the sync
-  engine converges effects to clients. The client is not in the turn loop.
+  to its own task store and executes in‑process; the sync engine converges
+  effects to clients. The client is not in the turn loop.
 - **Proxy‑to‑client (deferred).** The server bounces each tool call to the
   client, which runs it against the browser store and returns the result.
 
@@ -62,27 +67,91 @@ where a **tool** runs when the model emits a call.
 | Acts on user's exact on‑screen state | needs pre‑turn sync flush | ✅ inherently |
 | Client‑only state (canvas/UI, "what am I looking at") | ❌ invisible | ✅ reachable |
 | Audit / trust co‑location (§8) | ✅ server | split (client executes) |
-| New code | server tool runner | bidirectional transport + loop parking |
+| New code | server task store + tool runner | bidirectional transport + loop parking |
 
 **Decision:** default **server‑store** for the current task tools — it is the
 only model that supports the §8 autonomous roadmap, it is lowest‑latency for the
 multi‑step work Tier 1 exists for, it co‑locates audit, and it reuses the sync
-engine. Mitigate staleness with a **pre‑turn client→server sync flush**. Add
-**proxy** later, narrowly, only for genuinely client‑only tools, gated so
-headless turns never depend on it. The `AgentOptions.runTool` callback already
-absorbs both: the server supplies it for server‑store; a forwarder supplies it
-for proxy — routable per tool.
+engine. Add **proxy** later, narrowly, only for genuinely client‑only tools,
+gated so headless turns never depend on it.
+
+### Convergence is two‑way, and both directions need a nudge
+
+Server‑store means the turn reads and writes the *server's* database, while the
+user is looking at the *client's*. Sync closes the gap in both directions, but
+only on its 15s interval (`INTERVAL_MS`, `apps/web/src/sync/SyncClient.ts`), so
+each direction needs an explicit prod:
+
+- **Pre‑turn flush (client → server).** Before the turn starts, the client
+  pushes pending edits and the server applies them, so the model reasons about
+  what the user actually sees rather than up‑to‑15s‑stale state.
+- **Post‑tool nudge (server → client).** After each tool event, the client
+  pulls, so a created task appears immediately. Tier 0 gets this for free —
+  `runTool` calls `notifyDataChanged()` (`apps/web/src/agent/tools.ts`) because
+  it wrote to the local store. Tier 1 has no such local write, so `RemoteEngine`
+  must call `requestSync()` on every tool event. **Without this the round trip
+  looks broken** — the answer arrives and the task shows up fifteen seconds
+  later.
 
 ---
 
-## 3. Major steps
+## 3. The server has no task CRUD — this is the real work
 
-### Phase 1 — Formalize the engine seam (no behavior change)
+The single largest under‑estimate to avoid. It is tempting to describe the
+server tool runner as "the mirror of `apps/web/src/agent/tools.ts`, with the
+contracts already shared." The contracts *are* shared, but the **store beneath
+them is not**, and the two sides are not the same shape:
+
+| | Client | Server |
+|---|---|---|
+| Surface | `DbApi` — `listTasks`/`createTask`/`updateTask`/`deleteTask` (`apps/web/src/db/api.ts`) | `TaskSyncStore` — `pull(since)` / `push(rows)` only (`apps/server/src/sync/store.ts`) |
+| Driver | Drizzle | better‑sqlite3 direct |
+| Validation | `createTaskInput` / `updateTaskInput` Zod parse | none — `push` trusts `SyncTask` rows |
+
+`TaskSyncStore` is a *replication* interface, not a CRUD one. There is nothing
+to bind the contracts to yet, so Phase 3 must build a server‑side task store
+first. Four traps live in that build:
+
+1. **The `rev` trap — silent data loss.** `pull` selects `WHERE rev > ?` and
+   revs are assigned **only** inside `applyPush`. A tool that inserts a row
+   directly leaves `rev` NULL, and that task is invisible to every client
+   forever, with no error anywhere. Server writes **must** go through the
+   rev‑stamping path. Assume this one will be hit if it is not designed for.
+2. **`userId` has no server‑side source.** The client stamps
+   `LOCAL_USER_ID = "local"` (`apps/web/src/db/api.ts`); the server has no user
+   identity at all, and `tasks.user_id` is `NOT NULL`. The server store adopts
+   the same constant, from a shared definition, until auth exists.
+3. **`listTasks` is not `pull`.** `pull` returns rev‑ordered rows *including
+   tombstones*. The `list_tasks` tool needs live rows only (`deleted_at IS
+   NULL`) ordered by `created_at desc`, matching what the user sees.
+4. **Validation must be reused, not re‑typed.** The server binds the same
+   `createTaskInput` / `updateTaskInput` schemas from `@ghost/shared`, so
+   defaults (e.g. `priority`) fill identically on both sides.
+
+Budget Phase 3 accordingly: it is the project, not a mechanical mirror.
+
+---
+
+## 4. Major steps
+
+### Phase 1 — Formalize the engine seam
 - Extract an `Engine` interface (`getStatus`, `runAgent`) in
   `apps/web/src/engine/types.ts`; make `LocalEngine implements Engine`.
+- **Shape the interface for both implementations, not just the one that
+  exists.** Today `runAgent(messages, opts, signal)` takes
+  `opts = { tools, system, runTool }`. For `RemoteEngine` all three are
+  server‑owned, so a client passing `toolSpecs` / `AGENT_SYSTEM` / `runTool`
+  would hand over arguments the engine ignores — the shape that ages badly.
+  Instead: **`runAgent(messages, signal)`**, with tools, system prompt, and
+  `runTool` bound at **construction**. `LocalEngine`'s factory closes over the
+  client bindings; `RemoteEngine` closes over nothing. This makes Phase 1 a
+  slightly larger refactor and Phase 4 nearly free.
+- `MAX_TOOL_STEPS` moves from a module constant to engine‑owned config for the
+  same reason: 4 is a small‑model budget, and Tier 1 exists *for* multi‑step
+  work.
 - Point `modules/agent/useAgent.ts` at an `engine` chosen by a factory in
-  `engine/index.ts` (default `local`). Nothing observable changes — safe
-  scaffolding, its own commit.
+  `engine/index.ts` (default `local`). Behavior is unchanged; the call site and
+  the interface shape are not. Its own commit.
 
 ### Phase 2 — Server‑side Unsloth engine (OpenAI seam)
 - Server agent loop = `LocalEngine`'s `/v1/chat/completions` request shape +
@@ -91,20 +160,37 @@ for proxy — routable per tool.
 - Drop `@anthropic-ai/sdk`, the `unsloth connect claude` handshake, and any tool
   translation. Keep only a trivial `/v1/models` status probe.
 
-### Phase 3 — Server‑side tool runner (the real net‑new work)
-- Bind the shared contracts (`createTaskTool`, `listTasksTool`, …) to
-  `createTaskSyncStore(sqlite)` — the server mirror of `apps/web/src/agent/tools.ts`.
-  Contracts are already shared, so this is small and clean
-  (`packages/shared/src/tools/contract.ts` predicted it).
-- Add the pre‑turn sync flush.
+### Phase 3 — Server task store + tool runner (the real net‑new work)
+- Build the server‑side task store described in §3, routing every write through
+  rev stamping and reusing the shared Zod schemas.
+- Bind the shared contracts (`createTaskTool`, `listTasksTool`, …) to it,
+  mirroring the *structure* of `apps/web/src/agent/tools.ts` — same
+  `bind`/registry/`safeParse` discipline, different backing store.
+- Add the pre‑turn sync flush (§2).
+- Tests: rev assignment (a tool‑created task is pullable by a client at
+  `since = 0`), tombstone filtering, and schema‑default parity with the client.
 
-### Phase 4 — Client `RemoteEngine` behind the existing module
+### Phase 4 — Client `RemoteEngine`, routes, and auth
 - `RemoteEngine implements Engine` forwards `runAgent` / `getStatus` to the
-  server's `/agent/*` (SSE). The existing `AgentModule` + `useAgent` render it
-  unchanged — this replaces the branch's bespoke sidebar.
-- Wire `/agent/chat` and `/agent/status` into `main`'s current `apps/server/src/main.ts`
-  shape (top‑level `await app.register`, `createTaskSyncStore`), not the branch's
-  stale copy.
+  server's `/agent/*` (SSE), and calls `requestSync()` on each tool event (§2).
+  The existing `AgentModule` + `useAgent` render it unchanged.
+- Wire `/agent/chat` and `/agent/status` into `main`'s current
+  `apps/server/src/main.ts` shape (top‑level `await app.register`,
+  `createTaskSyncStore`), not the branch's stale copy.
+- **Auth — new requirement, not inherited.** The server today has no auth and
+  reflects any origin (`main.ts`; deliberate for v0 per docs/SYNC.md). That
+  posture is defensible for sync endpoints, which move task data. `/agent/chat`
+  is a different class of exposure: an unauthenticated endpoint on `0.0.0.0`
+  that runs a model with **write and delete** tools against the store and
+  consumes GPU. Minimum bar before this endpoint exists: a shared‑secret header
+  (`GHOST_AGENT_TOKEN`) **or** binding the agent routes to localhost, plus a
+  note in docs/SYNC.md that the v0 no‑auth stance now has an actuator behind it.
+- **Abort semantics.** `useAgent` aborts via `AbortController`; over SSE, client
+  disconnect must cancel the server's in‑flight model call and stop the tool
+  loop. Tools mutate, so state the rule explicitly: **partial effects stand** —
+  an aborted turn leaves already‑executed tool writes in place rather than
+  attempting rollback, and the tool events already streamed tell the user what
+  happened.
 
 ### Phase 5 — Reconcile types & status
 - One `AgentStatus` in the shared location (server + client are now both
@@ -112,54 +198,58 @@ for proxy — routable per tool.
   the branch's richer states (`not_installed`, etc.); the server can detect them
   and §5 sanctions richer readiness.
 
-### Phase 6 — Drop the superseded branch code
-- `AgentSidebar.tsx`, the top‑level `useAgent.ts`, the `App.tsx` flex `.layout`
-  and `.agent*` CSS, `packages/shared/src/validation/agent.ts`, and the SSE‑only
-  `loop.ts` design.
-- Optionally shelve the `<think>` splitter behind a `// planned: streaming` note
-  — the one client artifact worth keeping for the later streaming UI.
-
-### Phase 7 — Guardrails (all before PR)
+### Phase 6 — Guardrails (all before PR)
 - **Biome** format + lint every new file (CI enforces it — the most likely CI
   failure).
 - `pnpm typecheck` across `apps/web`, `apps/server`, `packages/shared`.
-- Add a `RemoteEngine` test mirroring `engine/LocalEngine.test.ts` and a
-  server‑tool‑runner test; run the full Vitest suite.
+- Add a `RemoteEngine` test mirroring `engine/LocalEngine.test.ts`, plus the
+  Phase 3 store tests; run the full Vitest suite.
 - `pnpm tool-eval` against the Unsloth model; record the numbers as §7 did.
 - Verify the round trip end‑to‑end: status pill → chat → tool call → task
-  appears on the client via sync.
+  appears on the client via sync **without waiting for the 15s interval**.
 
-### Phase 8 — PR
-- Open against `main` with small commits following Phases 1→7 so it reviews
+### Phase 7 — PR
+- Open against `main` with small commits following Phases 1→6 so it reviews
   cleanly.
 
-**Effort concentration:** Phases 3 (server tool runner) and 4 (RemoteEngine +
-routes) are ~all the real work; 1, 5, 6 are mechanical; 2 shrank to near‑nothing
-once Unsloth turned out to be OpenAI‑compatible.
+**Effort concentration:** Phase 3 is the project. Phase 4 is real but bounded
+(transport, auth, abort). Phases 1 and 5 are mechanical, and Phase 2 shrank to
+near‑nothing once Unsloth turned out to be OpenAI‑compatible. Any estimate that
+treats Phase 3 as a mechanical mirror of the client tools is wrong by several
+times — see §3.
 
 ---
 
-## 4. Salvage ledger
+## 5. Salvage ledger
 
 | From `feat/ai-sidebar-unsloth` | Disposition |
 |---|---|
 | The idea: Unsloth as a stronger server‑side agent | **Keep** — becomes Tier 1 |
-| `<think>` streaming splitter (`agent/loop.ts`) | **Shelve** for the streaming UI |
-| Richer `AgentStatus` states | **Fold** into the shared status type |
+| `<think>` streaming splitter (`agent/loop.ts`) | **Port**, shelved behind a `// planned: streaming` note — the one client artifact worth carrying over |
+| Richer `AgentStatus` states | **Fold** into the shared status type (Phase 5) |
 | `unsloth connect claude` handshake (`agent/unsloth.ts`) | **Drop** — Studio has a plain key + `/v1/models` |
 | `@anthropic-ai/sdk`, Anthropic message loop | **Drop** — off the OpenAI seam |
 | `AgentSidebar.tsx`, top‑level `useAgent.ts`, `App.tsx` layout, sidebar CSS | **Drop** — superseded by the canvas module |
 | `validation/agent.ts` in `@ghost/shared` | **Drop** — reconcile into the shared status type |
 
+"Drop" means *never ported* — see §1. Nothing needs deleting from `main`.
+
 ---
 
-## 5. Open decisions
+## 6. Open decisions
 
 - **Engine selection** — env var (`VITE_ENGINE` / server config) vs. auto‑detect
   (prefer Unsloth when its `/v1/models` answers, else Tier‑0 llama‑server).
+  Phase 1's factory needs a shape, so **decide this before Phase 1**; env var is
+  the low‑commitment answer and the factory internals can change later.
 - **Studio credentials on the server** — env (`UNSLOTH_BASE_URL`,
   `UNSLOTH_API_KEY`, `UNSLOTH_MODEL`) is the v0 answer; revisit if the server
   ever manages multiple Studio instances.
+- **Agent‑route auth** — shared secret vs. localhost bind (Phase 4). Either
+  clears the v0 bar; the choice depends on whether Tier 1 is meant to serve
+  other devices on the LAN, which is also what §8's autonomous mode will need.
 - **Finetuning / benchmarking pipeline** — orthogonal to this seam; it
   co‑locates on the same GPU host and reuses `scripts/tool-eval.ts` + the shared
   contracts as its evaluation target. Tracked separately.
+</content>
+</invoke>
