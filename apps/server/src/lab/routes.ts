@@ -232,7 +232,7 @@ export function registerLabRoutes(
     if (suite.kind === "general" && !(await lmEvalAvailable())) {
       return reply.code(409).send({
         error: "lm_eval_missing",
-        message: "pip install lm-eval to run general suites",
+        message: "pip install 'lm-eval[api]' to run general suites",
       });
     }
 

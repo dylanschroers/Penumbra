@@ -197,7 +197,10 @@ export function parseLmEvalResults(raw: string): TaskScore[] {
     for (const [key, value] of Object.entries(metrics)) {
       if (typeof value !== "number" || Number.isNaN(value)) continue;
       if (key === "alias" || key.startsWith("  ")) continue;
-      if (key.includes("stderr")) continue;
+      // stderr is a confidence interval and sample_len is a row count; neither
+      // is a score, and charting them beside accuracy is actively misleading.
+      // (sample_len showed up in a live gsm8k run as a flat "1.000".)
+      if (key.includes("stderr") || key === "sample_len") continue;
       out.push({ task, metric: key, value });
     }
   }

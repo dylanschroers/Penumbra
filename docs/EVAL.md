@@ -106,7 +106,24 @@ A useful property of this half: because scoring is pure TypeScript in
 Python, no subprocess, and no way for the benchmark to drift from the tool specs
 the app actually ships.
 
-## 5. What this does not cover
+## 5. Running the general suite
+
+`lm-evaluation-harness` is an **optional** dependency, detected at runtime and
+reported by `GET /lab/status`. Install it into a venv rather than system Python:
+
+```bash
+python3 -m venv .venv-lmeval
+.venv-lmeval/bin/pip install 'lm-eval[api]'
+LM_EVAL_BIN=$PWD/.venv-lmeval/bin/lm_eval pnpm --filter @ghost/server dev
+```
+
+**The `[api]` extra is required, not optional.** A plain `pip install lm-eval`
+installs fine and then fails at run time with
+`ModuleNotFoundError: ... ['tenacity']` the moment an API model is used — which
+is our only mode, since we benchmark over an OpenAI-compatible endpoint rather
+than loading weights in-process. Verified the hard way against a live run.
+
+## 6. What this does not cover
 
 - **Multi-step loops.** The eval grades one turn. It does not catch loop-level
   failures — a live Tier-1 run had the 1.5B model call `create_task` twice for

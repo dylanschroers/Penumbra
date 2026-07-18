@@ -1,6 +1,6 @@
 # Ghost Model Lab: fine-tuning + benchmarking pipeline (v1, manual)
 
-> Status: approved plan, not yet implemented. Drafted 2026-07-14.
+> Status: **M1–M4 implemented 2026-07-18.** Drafted 2026-07-14.
 > **Reconciled 2026-07-18** against the Tier-1 agent work
 > ([UNSLOTH_TIER1_PLAN.md](UNSLOTH_TIER1_PLAN.md), now implemented). The design
 > holds; several code references it was written against no longer exist, and are
@@ -128,7 +128,7 @@ the no-server path for a quick local check.
 - Default general suite `general-v1`: `ifeval, gsm8k, mmlu_pro, bbh_cot_fewshot, gpqa_main_cot_zeroshot, math_hard` (drop/flag MuSR per fact 6). Suite defined as data in shared package so UI and server agree.
 - Precondition check before spawning: the target model must be loaded in Studio (`/api/inference/status`); load the GGUF if needed. Refuse to start while a training job is running (VRAM eviction).
 - Parse lm-eval's `results.json`, persist per-task scores to `lab_scores`, stream stdout lines as SSE progress.
-- One-time setup documented + checked at runtime: `pip install lm-eval` available on PATH; `GET /lab/status` reports `lm_eval` presence. **[reconciled]** `AgentStatus` does *not* report CLI presence — it is `stopped | no_model | ready`, derived from probing `/v1/models`, and reports nothing about any CLI. Model Lab needs its own status shape. Keep it honest in the same way: report what was actually probed, and do not report "ready" off something merely installed but not runnable (the exact bug fixed in `OpenAiEngine.getStatus`, where Studio lists downloaded-but-unloaded models).
+- One-time setup documented + checked at runtime: **`pip install 'lm-eval[api]'`** — the extra is required, not optional: a plain install fails at run time with a missing `tenacity` the moment an API model is used, which is our only mode (found by a live run). `LM_EVAL_BIN` points at the binary, so a venv install works; `GET /lab/status` reports `lm_eval` presence. **[reconciled]** `AgentStatus` does *not* report CLI presence — it is `stopped | no_model | ready`, derived from probing `/v1/models`, and reports nothing about any CLI. Model Lab needs its own status shape. Keep it honest in the same way: report what was actually probed, and do not report "ready" off something merely installed but not runnable (the exact bug fixed in `OpenAiEngine.getStatus`, where Studio lists downloaded-but-unloaded models).
 
 ### M4 — Model Lab UI (web)
 

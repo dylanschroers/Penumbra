@@ -1,5 +1,6 @@
 import { AgentModule } from "../modules/agent/AgentModule";
 import { ColorPickerModule } from "../modules/color/ColorPickerModule";
+import { LabModule } from "../modules/lab/LabModule";
 import { TasksModule } from "../modules/tasks/TasksModule";
 import { WeatherModule } from "../modules/weather/WeatherModule";
 import type { ModuleDefinition } from "./types";
@@ -31,6 +32,14 @@ export const MODULES: ModuleDefinition[] = [
     defaultSize: { w: 7, h: 8 },
     minSize: { w: 6, h: 7 },
     Component: WeatherModule,
+  },
+  {
+    id: "lab",
+    title: "Model Lab",
+    // Wide: the benchmark table compares runs side by side.
+    defaultSize: { w: 12, h: 10 },
+    minSize: { w: 8, h: 8 },
+    Component: LabModule,
   },
   {
     id: "agent",

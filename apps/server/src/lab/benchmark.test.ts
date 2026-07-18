@@ -150,6 +150,7 @@ describe("parseLmEvalResults", () => {
         alias: "gsm8k",
         "exact_match,strict-match": 0.42,
         "exact_match_stderr,strict-match": 0.013,
+        sample_len: 1,
       },
       ifeval: { alias: "ifeval", "prompt_level_strict_acc,none": 0.31 },
     },
@@ -175,6 +176,14 @@ describe("parseLmEvalResults", () => {
     const metrics = parseLmEvalResults(raw).map((s) => s.metric);
     expect(metrics.some((m) => m.includes("stderr"))).toBe(false);
     expect(metrics).not.toContain("alias");
+  });
+
+  // Seen in a live gsm8k run: a row count rendered beside accuracy as "1.000",
+  // which reads like a perfect score.
+  it("drops sample_len, which is a count rather than a score", () => {
+    expect(parseLmEvalResults(raw).map((s) => s.metric)).not.toContain(
+      "sample_len",
+    );
   });
 
   it("survives an empty or resultless file", () => {
