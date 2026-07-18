@@ -77,6 +77,46 @@ describe("getStatus", () => {
     expect(await engine.getStatus()).toEqual({ state: "no_model" });
   });
 
+  // Unsloth Studio lists downloaded-but-unloaded models alongside loaded ones,
+  // each carrying a `loaded` flag. Reporting the first entry blindly would show
+  // "ready" for a model sitting on disk that cannot serve a completion.
+  it("picks the loaded model when the backend flags them", async () => {
+    mockFetch.mockResolvedValue(
+      res({
+        data: [
+          { id: "on-disk-only", loaded: false },
+          { id: "resident", loaded: true },
+        ],
+      }),
+    );
+    expect(await engine.getStatus()).toEqual({
+      state: "ready",
+      model: "resident",
+    });
+  });
+
+  it("reports no_model when every listed model is unloaded", async () => {
+    mockFetch.mockResolvedValue(
+      res({
+        data: [
+          { id: "a", loaded: false },
+          { id: "b", loaded: false },
+        ],
+      }),
+    );
+    expect(await engine.getStatus()).toEqual({ state: "no_model" });
+  });
+
+  // llama-server omits the flag and lists only what is resident, so the first
+  // entry is servable — the Tier-0 behavior must not regress.
+  it("uses the first entry when the backend omits the loaded flag", async () => {
+    mockFetch.mockResolvedValue(res({ data: [{ id: "qwen3" }, { id: "b" }] }));
+    expect(await engine.getStatus()).toEqual({
+      state: "ready",
+      model: "qwen3",
+    });
+  });
+
   it("reports stopped on a non-OK response", async () => {
     mockFetch.mockResolvedValue(res({}, false, 503));
     expect(await engine.getStatus()).toEqual({ state: "stopped" });
@@ -188,6 +228,19 @@ describe("configuration", () => {
       "Content-Type": "application/json",
       Authorization: "Bearer sk-test",
     });
+  });
+
+  // Unsloth Studio hands client-supplied tools through to the model only while
+  // neither flag is set; either one asks Studio to run its OWN tool loop
+  // against its MCP registry, silently taking the turn away from Ghost's
+  // server-side tools (studio/backend/routes/inference.py →
+  // _explicit_studio_tool_loop_requested). Nothing should ever add these.
+  it("never asks the backend to run its own tool loop", async () => {
+    mockFetch.mockResolvedValueOnce(answerReply("hi"));
+    await collect(engine.runAgent([{ role: "user", content: "x" }]));
+    const body = bodyOf(0);
+    expect(body).not.toHaveProperty("enable_tools");
+    expect(body).not.toHaveProperty("mcp_enabled");
   });
 
   it("sends the configured model id", async () => {

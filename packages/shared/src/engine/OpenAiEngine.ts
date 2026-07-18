@@ -84,8 +84,22 @@ export class OpenAiEngine implements Engine {
         signal: AbortSignal.timeout(this.statusTimeoutMs),
       });
       if (!res.ok) return { state: "stopped" };
-      const body = (await res.json()) as { data?: Array<{ id?: string }> };
-      const model = body.data?.[0]?.id;
+      const body = (await res.json()) as {
+        data?: Array<{ id?: string; loaded?: boolean }>;
+      };
+      const entries = body.data ?? [];
+
+      // The two backends list different things. llama-server advertises only
+      // what it has resident and omits `loaded` entirely, so the first entry is
+      // servable. Unsloth Studio also lists models that are merely downloaded,
+      // marking each `loaded: true|false` — taking entries[0] there would
+      // report "ready" off a model sitting on disk, and the next completion
+      // would fail against a backend with nothing loaded. (Verified against
+      // studio/backend/routes/inference.py → _openai_catalog_objects.)
+      const loaded = entries.find((m) => m.loaded === true);
+      const marksLoaded = entries.some((m) => typeof m.loaded === "boolean");
+      const model = loaded?.id ?? (marksLoaded ? undefined : entries[0]?.id);
+
       return model ? { state: "ready", model } : { state: "no_model" };
     } catch {
       return { state: "stopped" };

@@ -29,7 +29,7 @@ There is no "delete the superseded code" step — the sidebar, the top‑level
 `useAgent.ts`, `validation/agent.ts`, and the Anthropic loop are simply never
 ported. The salvage ledger (§5) is the complete account of what crosses over.
 
-### Key finding — Unsloth is on the seam
+### Key finding — Unsloth is on the seam (verified against Studio's source)
 
 Unsloth Studio exposes OpenAI‑compatible endpoints on the same `:8888` the
 branch already used:
@@ -46,6 +46,33 @@ branch already used:
 `unsloth connect claude` handshake, and any OpenAI↔Anthropic translation are all
 **unnecessary**. The `<think>` splitter is kept only for the later streaming UI
 (AGENT_DESIGN.md §5), not for tool calls.
+
+**Confirmed by reading `studio/backend` in the Unsloth checkout** (rather than
+taken on trust): `/v1/models` and `/v1/chat/completions` mount at
+`main.py → app.include_router(inference_router, prefix="/v1")`, auth is
+`HTTPBearer()` validating `sk-unsloth-…` keys, and `tools` / `tool_choice`
+follow OpenAI semantics including forced‑function objects and `"none"`. Two
+details that the OpenAI seam does *not* imply, and that cost correctness:
+
+1. **`/v1/models` lists unloaded models too.** `_openai_catalog_objects()`
+   returns loaded models *plus* every downloaded GGUF, distinguished only by a
+   `loaded: true|false` flag. llama‑server, by contrast, omits the flag and
+   lists only what is resident. Reading `data[0].id` — correct for Tier 0 —
+   reports `ready` on Studio off a model sitting on disk, and the next
+   completion then fails. `getStatus()` now prefers a `loaded: true` entry and
+   falls back to `data[0]` only when no entry carries the flag.
+2. **Never send `enable_tools` or `mcp_enabled`.** Those ask Studio to run *its
+   own* tool loop against its MCP registry. Studio passes client‑supplied tools
+   through only while both are absent (`_explicit_studio_tool_loop_requested`,
+   and the `_sf_client_tools` gate). Setting either would silently take the turn
+   away from Ghost's server‑side tools — a direct conflict with §2. A test pins
+   their absence from the request body.
+
+**Still unverified:** no live Studio has answered. The checkout has no Python
+stack installed (no fastapi, no torch), and this machine's GPU is a 3 GB
+Maxwell card, so a real model run is a separate exercise. Source agreement is
+strong evidence for the wire contract but says nothing about how a real model
+drives the tool loop — that remains the Phase 3 prerequisite.
 
 ---
 
@@ -175,10 +202,13 @@ Budget Phase 3 accordingly: it is the project, not a mechanical mirror.
   `fetch`/`Response`/`AbortSignal` family, and `apps/server` gained Vitest —
   which Phase 3's store tests need anyway.
 
-**Not yet exercised against a live Studio.** No Studio instance was reachable
-when this landed, so `UnslothEngine` is unit‑tested only (config resolution,
-headers, step budget) and the protocol is covered by the shared `OpenAiEngine`
-tests. First live run happens in Phase 3, when it has tools to call.
+**Not yet exercised against a live Studio.** `UnslothEngine` is unit‑tested
+(config resolution, headers, step budget), the protocol is covered by the shared
+`OpenAiEngine` tests, and an integration test drives a real turn over HTTP
+against a fake Studio — which catches our bugs but cannot validate our reading
+of Studio, since the fake encodes the same assumptions. The wire contract was
+instead checked against Studio's source (§1), which is what surfaced the
+`loaded`‑flag bug. First live run happens in Phase 3, when it has tools to call.
 
 ### Phase 3 — Server task store + tool runner (the real net‑new work)
 - Build the server‑side task store described in §3, routing every write through
