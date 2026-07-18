@@ -310,8 +310,14 @@ describing Phase 3 as a mirror of the client tools; it was closer to 4x that.
 - **Agent‑route auth** — shared secret vs. localhost bind (Phase 4). Either
   clears the v0 bar; the choice depends on whether Tier 1 is meant to serve
   other devices on the LAN, which is also what §8's autonomous mode will need.
-- ~~**Finetuning / benchmarking pipeline**~~ — scaffolded; see
-  [EVAL.md](EVAL.md). Cases, scoring, and training‑set generation moved into
+- ~~**Finetuning / benchmarking pipeline**~~ — the full pipeline has its own
+  approved design in [model_lab_plan.md](model_lab_plan.md) (Studio's
+  `/api/train/*`, `lm-evaluation-harness`, a Model Lab UI module). That doc was
+  drafted against the unmerged `feat/ai-sidebar-unsloth` branch and has been
+  reconciled with what this plan actually built — chiefly that Studio
+  credentials come from env rather than an `unsloth connect` handshake, and that
+  `/lab/*` must reuse the agent routes' auth gate. The tool-calling half is
+  scaffolded here; see [EVAL.md](EVAL.md). Cases, scoring, and training‑set generation moved into
   `@ghost/shared` beside the contracts, runs append to `bench/results.jsonl`,
   and each run emits a rejection‑sampled `trainset.jsonl` plus the worklist of
   cases it could not label. The training loop itself (running Unsloth SFT on

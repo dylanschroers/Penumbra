@@ -1,10 +1,16 @@
 # Ghost Model Lab: fine-tuning + benchmarking pipeline (v1, manual)
 
 > Status: approved plan, not yet implemented. Drafted 2026-07-14.
+> **Reconciled 2026-07-18** against the Tier-1 agent work
+> ([UNSLOTH_TIER1_PLAN.md](UNSLOTH_TIER1_PLAN.md), now implemented). The design
+> holds; several code references it was written against no longer exist, and are
+> corrected below. Changes are marked **[reconciled]**.
 
 ## Context
 
-Ghost's next major addition: fine-tune local models and benchmark them, driven from the Ghost app. The Unsloth Studio backend Ghost already connects to (via `unsloth connect` in [apps/server/src/agent/unsloth.ts](../apps/server/src/agent/unsloth.ts)) turns out to be a full training server with a REST API, so the training half is orchestration, not ML plumbing. Benchmarking has no Studio support, so Ghost drives EleutherAI's `lm-evaluation-harness` as a subprocess against Studio's OpenAI-compatible endpoint.
+Ghost's next major addition: fine-tune local models and benchmark them, driven from the Ghost app. The Unsloth Studio backend Ghost connects to turns out to be a full training server with a REST API, so the training half is orchestration, not ML plumbing.
+
+**[reconciled]** This was written expecting `apps/server/src/agent/unsloth.ts` and its `unsloth connect` handshake from the `feat/ai-sidebar-unsloth` branch. That branch was never merged — the Tier-1 plan dropped the handshake as unnecessary on the OpenAI seam — so **that file does not exist**. Studio credentials now come from environment configuration in [apps/server/src/agent/UnslothEngine.ts](../apps/server/src/agent/UnslothEngine.ts): `UNSLOTH_BASE_URL`, `UNSLOTH_API_KEY`, `UNSLOTH_MODEL`. The Model Lab reads the same three variables rather than shelling out to the CLI. This is strictly simpler and removes the CLI from the runtime dependency set; the only thing lost is auto-discovery of the key, which the operator now pastes into `.env` once. Benchmarking has no Studio support, so Ghost drives EleutherAI's `lm-evaluation-harness` as a subprocess against Studio's OpenAI-compatible endpoint.
 
 **Decisions:**
 
@@ -17,7 +23,7 @@ Ghost's next major addition: fine-tune local models and benchmark them, driven f
 
 (Confirmed by reading the Unsloth Studio backend source, `studio/backend` in the unsloth repo.)
 
-1. **Auth**: the `sk-unsloth-*` key that `unsloth connect claude --no-launch` prints is an **unscoped admin API key**; it works on `/api/train/*`, `/api/datasets/*`, `/api/export/*`, and `/v1/*` alike. Ghost's existing `getConnection()` already obtains it — reuse as-is.
+1. **Auth**: the `sk-unsloth-*` key is an **unscoped admin API key**; it works on `/api/train/*`, `/api/datasets/*`, `/api/export/*`, and `/v1/*` alike. This is the fact the whole design leans on and it still holds — one key covers training and inference. **[reconciled]** ~~Ghost's existing `getConnection()` already obtains it~~ — there is no `getConnection()`. Read `UNSLOTH_API_KEY` from the environment, the same value `UnslothEngine` already uses for `/v1`. Obtain it once from `unsloth run`'s console output or Studio → Settings → API.
 2. **Training routes** (prefix `/api/train`): `POST /start` (payload `TrainingStartRequest`: `model_name`, `training_type: "LoRA/QLoRA"`, `format_type`, `learning_rate`, `batch_size`, `hf_dataset` or `local_datasets: [path]`, `max_steps`/`num_epochs`, LoRA fields with sane defaults), `GET /status`, `GET /progress` (**SSE**: `progress`/`heartbeat`/`complete`/`error` events with step/loss/eta), `GET /metrics`, `POST /stop`, `GET /runs`, `GET /runs/{id}`.
 3. **One training run at a time** (Studio enforces it; second `/start` returns `status:"error"`). Starting training may **evict the loaded inference model** if VRAM is tight (12 GB TITAN Xp: assume it will).
 4. **Datasets**: `POST /api/datasets/upload` (multipart; `.csv/.json/.jsonl/.parquet`) → `{stored_path}` → pass in `local_datasets`. Or pass an HF repo id via `hf_dataset`. `POST /api/datasets/check-format` validates before training.
@@ -26,6 +32,13 @@ Ghost's next major addition: fine-tune local models and benchmark them, driven f
    - Primary path: benchmark the **exported GGUF** via `local-completions`/`local-chat-completions`.
    - Use **generative task variants** (CoT + answer extraction) which don't need logprobs: `mmlu_pro` (generative CoT in lm-eval), `gpqa_*_cot_zeroshot`, `bbh_cot_fewshot`, `ifeval`, `gsm8k`, `math_hard`. MuSR is loglikelihood-only → include only if the GGUF `/v1/completions` logprobs path proves out during implementation; otherwise drop it.
 7. Hardware: TITAN Xp 12 GB, **Pascal** (no bf16, fp16 only) — constrain v1 to ≤8B models, QLoRA only, and set `load_in_4bit: true`.
+   **[reconciled — needs confirmation]** The development machine this was
+   verified on reports a **GTX 970M, 3 GB, Maxwell**, not a TITAN Xp. Either the
+   TITAN Xp is a separate GPU host (which the Tier-1 design assumes exists and
+   is the right place for Studio), or this constraint is wrong. It is load-
+   bearing: 3 GB will not QLoRA an 8B model, and a Maxwell card is below what
+   current Unsloth builds target. **Confirm which machine hosts Studio before
+   M2**, because the answer sets the model-size ceiling for the whole plan.
 
 ## Architecture
 
@@ -47,9 +60,11 @@ Ghost server owns: the Studio bearer, a **job record** per pipeline stage (SQLit
 ### M1 — Shared contracts + server plumbing
 
 - `packages/shared/src/validation/lab.ts`: Zod schemas for the wire — `FinetuneRequest` (model id, dataset source `{kind:"hf",id}|{kind:"upload"}`, hyperparams subset: lr, epochs/max_steps, lora_r), `LabJob` (`id, kind: finetune|export|benchmark, state: queued|running|done|failed, progress, error, createdAt`), `BenchmarkRequest` (model ref, suite, samplesPerTask), `BenchmarkResult` (per-task scores + metadata: model, suite version, samples, seed, duration). Export from `packages/shared/src/index.ts` alongside the existing agent schemas.
-- `apps/server/src/lab/studio.ts`: typed Studio client. Reuses `getConnection()`/`resetConnection()` from [agent/unsloth.ts](../apps/server/src/agent/unsloth.ts) for the bearer; thin `fetch` wrappers for the train/dataset/export routes above.
+- `apps/server/src/lab/studio.ts`: typed Studio client; thin `fetch` wrappers for the train/dataset/export routes above. **[reconciled]** For the bearer, read `UNSLOTH_API_KEY`/`UNSLOTH_BASE_URL` from the environment — the same source [agent/UnslothEngine.ts](../apps/server/src/agent/UnslothEngine.ts) uses, so inference and training can never end up pointed at different Studios. Note Studio's convention that the header is *omitted entirely* when no key is set, rather than sent empty.
 - `apps/server/src/lab/jobs.ts`: job table + helpers in the existing better-sqlite3 db ([apps/server/src/db.ts](../apps/server/src/db.ts) pattern). Tables: `lab_jobs`, `lab_runs` (fine-tune runs: base model, dataset, hyperparams, output_dir, gguf_path), `lab_scores` (benchmark results keyed by model ref + suite + samples).
-- Routes in a new `apps/server/src/lab/routes.ts` registered from `main.ts` (mirror `registerTaskSyncRoutes`): `POST /lab/finetune`, `POST /lab/datasets/upload` (multipart proxy to Studio), `POST /lab/export`, `POST /lab/benchmark`, `GET /lab/jobs`, `GET /lab/jobs/:id/events` (SSE relay, reusing the exact SSE write pattern from `POST /agent/chat` in [main.ts](../apps/server/src/main.ts)), `GET /lab/runs`, `GET /lab/scores`.
+- Routes in a new `apps/server/src/lab/routes.ts` registered from `main.ts` (mirror `registerTaskSyncRoutes`): `POST /lab/finetune`, `POST /lab/datasets/upload` (multipart proxy to Studio), `POST /lab/export`, `POST /lab/benchmark`, `GET /lab/jobs`, `GET /lab/jobs/:id/events` (SSE relay), `GET /lab/runs`, `GET /lab/scores`.
+- **[reconciled]** The SSE write pattern now lives in [agent/routes.ts](../apps/server/src/agent/routes.ts), not `main.ts` — copy `send()` and the `req.raw.on("close")` abort wiring from `POST /agent/chat`.
+- **[reconciled — new requirement]** These routes must sit behind the **same gate** as the agent routes (`requireAuth` in `agent/routes.ts`: bearer token when `GHOST_AGENT_TOKEN` is set, loopback only otherwise). `/lab/*` is a strictly more dangerous actuator than `/agent/chat` — it spawns training jobs, writes files, and can evict the loaded model. It must never be the one unauthenticated endpoint on the box. Factor `requireAuth` out of `agent/routes.ts` into something both can import.
 
 ### M2 — Fine-tune + export flow (server)
 
@@ -59,11 +74,11 @@ Ghost server owns: the Studio bearer, a **job record** per pipeline stage (SQLit
 
 ### M3 — Benchmark runner (server)
 
-- `apps/server/src/lab/benchmark.ts`: spawn `lm_eval --model local-chat-completions --model_args model=<id>,base_url=<studio>/v1/chat/completions,num_concurrent=1,max_retries=3 --tasks <suite> --limit <samples> --seed 42 --apply_chat_template --output_path <scratch>` with `OPENAI_API_KEY=<studio bearer>`. Spawn pattern mirrors `runConnect()` in [agent/unsloth.ts](../apps/server/src/agent/unsloth.ts).
+- `apps/server/src/lab/benchmark.ts`: spawn `lm_eval --model local-chat-completions --model_args model=<id>,base_url=<studio>/v1/chat/completions,num_concurrent=1,max_retries=3 --tasks <suite> --limit <samples> --seed 42 --apply_chat_template --output_path <scratch>` with `OPENAI_API_KEY=<studio bearer>`. **[reconciled]** There is no `runConnect()` to mirror — no subprocess spawning exists in the server today, so this is net-new rather than a copy. Use `node:child_process.spawn` with the job's abort signal wired to `kill()`, matching how `POST /agent/chat` cancels an in-flight turn on client disconnect.
 - Default suite `general-v1`: `ifeval, gsm8k, mmlu_pro, bbh_cot_fewshot, gpqa_main_cot_zeroshot, math_hard` (drop/flag MuSR per fact 6). Suite defined as data in shared package so UI and server agree.
 - Precondition check before spawning: the target model must be loaded in Studio (`/api/inference/status`); load the GGUF if needed. Refuse to start while a training job is running (VRAM eviction).
 - Parse lm-eval's `results.json`, persist per-task scores to `lab_scores`, stream stdout lines as SSE progress.
-- One-time setup documented + checked at runtime: `pip install lm-eval` available on PATH; `GET /lab/status` reports `lm_eval` presence the same way `AgentStatus` reports the `unsloth` CLI today.
+- One-time setup documented + checked at runtime: `pip install lm-eval` available on PATH; `GET /lab/status` reports `lm_eval` presence. **[reconciled]** `AgentStatus` does *not* report CLI presence — it is `stopped | no_model | ready`, derived from probing `/v1/models`, and reports nothing about any CLI. Model Lab needs its own status shape. Keep it honest in the same way: report what was actually probed, and do not report "ready" off something merely installed but not runnable (the exact bug fixed in `OpenAiEngine.getStatus`, where Studio lists downloaded-but-unloaded models).
 
 ### M4 — Model Lab UI (web)
 
@@ -71,12 +86,12 @@ Ghost server owns: the Studio bearer, a **job record** per pipeline stage (SQLit
   1. **Fine-tune**: base-model picker (from Studio `/api/models/local` via server), dataset (HF id or file upload), minimal hyperparams, start button, live loss/progress (SSE).
   2. **Runs**: past runs from `/lab/runs`, export-to-GGUF button per run.
   3. **Benchmarks**: pick model (base or fine-tuned GGUF) + suite, run, live progress; results table comparing scores across models/runs, subset size labeled on every score.
-- `apps/web/src/modules/lab/useLab.ts`: SSE client hook copying the hand-rolled frame parser from [useAgent.ts](../apps/web/src/useAgent.ts).
+- `apps/web/src/modules/lab/useLab.ts`: SSE client hook. **[reconciled]** The path is [modules/agent/useAgent.ts](../apps/web/src/modules/agent/useAgent.ts), and that hook holds no frame parser — it is UI state only. The SSE frame parser lives in [engine/RemoteEngine.ts](../apps/web/src/engine/RemoteEngine.ts) as `readFrames()`, which already handles frames split across chunk boundaries. Reuse or extract that rather than hand-rolling a third parser.
 
 ## Explicitly out of scope (v1)
 
 - Scheduled/automatic retraining, auto-promotion, regression gates.
-- App-specific tool-calling benchmark suite (needs the agent tool registry + audit log to exist first; BFCL-style suite is the natural v2).
+- App-specific tool-calling benchmark suite. **[reconciled — partially exists]** The blocker named here (an agent tool registry) is gone: shared tool contracts exist, and a tool-calling eval now ships in `packages/shared/src/eval` with scoring, run history in `bench/results.jsonl`, and rejection-sampled training-data export — see [EVAL.md](EVAL.md). It is complementary to this plan, not overlapping: that measures *"does the model call the right Ghost tool"*; `lm-eval` measures general ability. **The natural join:** Model Lab's Benchmarks tab should show both, and its fine-tune step can consume `bench/trainset.jsonl` directly as a `local_datasets` entry — it is already emitted in the chat format Studio's SFT trainer reads. The remaining v2 work is a BFCL-style multi-turn suite; the audit log is still absent.
 - Training-data generation from agent usage (audit log doesn't exist yet).
 - Multi-GPU, non-QLoRA training, >8B models.
 
