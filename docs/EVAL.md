@@ -92,7 +92,21 @@ teaches *that model* very little. The scaffold is useful for three things:
 A wrong turn is never emitted as training data; teaching a model its own
 mistakes is worse than not training at all.
 
-## 4. What this does not cover
+## 4. Where this sits in the bigger picture
+
+This is the **personal** half of a two-family benchmark
+([model_lab_plan.md](model_lab_plan.md) M3): it grades the model on Ghost's own
+job. The **general** half runs academic suites via `lm-evaluation-harness` and
+grades raw capability. Both are first-class, and they are never averaged
+together — a model can gain reasoning ability while getting worse at calling
+`create_task`, and a single blended number would hide exactly that.
+
+A useful property of this half: because scoring is pure TypeScript in
+`@ghost/shared`, the server can run it **in-process** as a Model Lab job. No
+Python, no subprocess, and no way for the benchmark to drift from the tool specs
+the app actually ships.
+
+## 5. What this does not cover
 
 - **Multi-step loops.** The eval grades one turn. It does not catch loop-level
   failures — a live Tier-1 run had the 1.5B model call `create_task` twice for

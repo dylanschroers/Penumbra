@@ -31,14 +31,36 @@ Ghost's next major addition: fine-tune local models and benchmark them, driven f
 6. **Benchmark endpoint constraints**: `/v1/chat/completions` works for any loaded model but **rejects `logprobs`**. `/v1/completions` is a passthrough to llama-server and **only works with a GGUF model loaded** (llama.cpp supports logprobs). Consequence:
    - Primary path: benchmark the **exported GGUF** via `local-completions`/`local-chat-completions`.
    - Use **generative task variants** (CoT + answer extraction) which don't need logprobs: `mmlu_pro` (generative CoT in lm-eval), `gpqa_*_cot_zeroshot`, `bbh_cot_fewshot`, `ifeval`, `gsm8k`, `math_hard`. MuSR is loglikelihood-only → include only if the GGUF `/v1/completions` logprobs path proves out during implementation; otherwise drop it.
-7. Hardware: TITAN Xp 12 GB, **Pascal** (no bf16, fp16 only) — constrain v1 to ≤8B models, QLoRA only, and set `load_in_4bit: true`.
-   **[reconciled — needs confirmation]** The development machine this was
-   verified on reports a **GTX 970M, 3 GB, Maxwell**, not a TITAN Xp. Either the
-   TITAN Xp is a separate GPU host (which the Tier-1 design assumes exists and
-   is the right place for Studio), or this constraint is wrong. It is load-
-   bearing: 3 GB will not QLoRA an 8B model, and a Maxwell card is below what
-   current Unsloth builds target. **Confirm which machine hosts Studio before
-   M2**, because the answer sets the model-size ceiling for the whole plan.
+7. Hardware: the **server host's** GPU — TITAN Xp 12 GB, **Pascal** (no bf16,
+   fp16 only) — constrains v1 to ≤8B models, QLoRA only, `load_in_4bit: true`.
+   **[resolved 2026-07-18]** Studio runs on the **Ghost server host**, the
+   machine with the powerful GPU, and is reached *only* through the server. A
+   development laptop's GPU (this one reports a GTX 970M 3 GB) is irrelevant to
+   this constraint: it never runs Studio. Confirm the server host's actual card
+   at deploy time, since it sets the model-size ceiling for the whole plan.
+
+## Deployment topology (decided)
+
+Studio is **co-located with the Ghost server** on the GPU host, and every client
+reaches it *through* the server. This is the same shape the Tier-1 agent already
+takes, and the reasons compound:
+
+- **The GPU is where the model must be.** Powerful models cannot run on a
+  laptop or a phone; the server host is the only machine with the hardware.
+- **The Studio admin key never leaves the server.** It is an *unscoped* key
+  (fact 1) — it can start training jobs and write files. Shipping it to a
+  browser would put full training control in every client. `UNSLOTH_API_KEY` is
+  server-side configuration and no client ever sees it.
+- **One reachable surface.** Clients talk to `/agent/*` and `/lab/*` behind the
+  server's own auth gate; Studio's port need not be exposed to the LAN at all.
+- **Tools run beside the model.** The Tier-1 server-store decision
+  ([UNSLOTH_TIER1_PLAN.md](UNSLOTH_TIER1_PLAN.md) §2) already puts tool
+  execution in-process with the model. Training and benchmarking land on the
+  same host for the same reason.
+
+**Rule this implies:** no client-side code ever holds a Studio URL or key.
+`RemoteEngine` already obeys this — it knows only the Ghost server. Model Lab's
+UI must too: it talks to `/lab/*`, never to Studio.
 
 ## Architecture
 
@@ -74,8 +96,36 @@ Ghost server owns: the Studio bearer, a **job record** per pipeline stage (SQLit
 
 ### M3 — Benchmark runner (server)
 
+**Two suite families, both first-class (decided 2026-07-18).** A model is judged
+on how it performs *everywhere* and how it performs *here*. These answer
+different questions and neither substitutes for the other:
+
+| | **General** (`lm-eval`) | **Personal** (Ghost tool-calling) |
+|---|---|---|
+| Question | How capable is this model at all? | Does it work as *my* assistant? |
+| Source | EleutherAI academic suites | `packages/shared/src/eval`, the shipped tool contracts |
+| Comparable to | Public leaderboard numbers | Only to Ghost's own history |
+| Runs as | Spawned `lm_eval` Python subprocess | **In-process TypeScript** — the logic is already pure and imported |
+| Catches | Reasoning/knowledge regressions | Wrong tool, bad args, firing during chit-chat |
+
+The asymmetry in *how they run* is worth keeping: the general suite is a
+subprocess because lm-eval is Python; the personal suite is a direct function
+call because `scoreCase`/`summarize` are pure TypeScript in the shared package.
+No subprocess, no Python, no drift from the specs the app ships.
+
+**Do not average them into one score.** A model can gain five points of MMLU
+while getting worse at calling `create_task`. They are reported side by side,
+always, and a promotion decision needs both to hold.
+
+**Storage.** `lab_scores` carries a `suite_kind: "general" | "personal"`
+discriminator so both families share one history table and one comparison view.
+The personal family's existing `BenchmarkRecord`
+(`packages/shared/src/eval/scoring.ts`) is already the right shape — reuse it
+rather than inventing a second one, and keep `bench/results.jsonl` working as
+the no-server path for a quick local check.
+
 - `apps/server/src/lab/benchmark.ts`: spawn `lm_eval --model local-chat-completions --model_args model=<id>,base_url=<studio>/v1/chat/completions,num_concurrent=1,max_retries=3 --tasks <suite> --limit <samples> --seed 42 --apply_chat_template --output_path <scratch>` with `OPENAI_API_KEY=<studio bearer>`. **[reconciled]** There is no `runConnect()` to mirror — no subprocess spawning exists in the server today, so this is net-new rather than a copy. Use `node:child_process.spawn` with the job's abort signal wired to `kill()`, matching how `POST /agent/chat` cancels an in-flight turn on client disconnect.
-- Default suite `general-v1`: `ifeval, gsm8k, mmlu_pro, bbh_cot_fewshot, gpqa_main_cot_zeroshot, math_hard` (drop/flag MuSR per fact 6). Suite defined as data in shared package so UI and server agree.
+- Default general suite `general-v1`: `ifeval, gsm8k, mmlu_pro, bbh_cot_fewshot, gpqa_main_cot_zeroshot, math_hard` (drop/flag MuSR per fact 6). Suite defined as data in shared package so UI and server agree.
 - Precondition check before spawning: the target model must be loaded in Studio (`/api/inference/status`); load the GGUF if needed. Refuse to start while a training job is running (VRAM eviction).
 - Parse lm-eval's `results.json`, persist per-task scores to `lab_scores`, stream stdout lines as SSE progress.
 - One-time setup documented + checked at runtime: `pip install lm-eval` available on PATH; `GET /lab/status` reports `lm_eval` presence. **[reconciled]** `AgentStatus` does *not* report CLI presence — it is `stopped | no_model | ready`, derived from probing `/v1/models`, and reports nothing about any CLI. Model Lab needs its own status shape. Keep it honest in the same way: report what was actually probed, and do not report "ready" off something merely installed but not runnable (the exact bug fixed in `OpenAiEngine.getStatus`, where Studio lists downloaded-but-unloaded models).
@@ -91,7 +141,16 @@ Ghost server owns: the Studio bearer, a **job record** per pipeline stage (SQLit
 ## Explicitly out of scope (v1)
 
 - Scheduled/automatic retraining, auto-promotion, regression gates.
-- App-specific tool-calling benchmark suite. **[reconciled — partially exists]** The blocker named here (an agent tool registry) is gone: shared tool contracts exist, and a tool-calling eval now ships in `packages/shared/src/eval` with scoring, run history in `bench/results.jsonl`, and rejection-sampled training-data export — see [EVAL.md](EVAL.md). It is complementary to this plan, not overlapping: that measures *"does the model call the right Ghost tool"*; `lm-eval` measures general ability. **The natural join:** Model Lab's Benchmarks tab should show both, and its fine-tune step can consume `bench/trainset.jsonl` directly as a `local_datasets` entry — it is already emitted in the chat format Studio's SFT trainer reads. The remaining v2 work is a BFCL-style multi-turn suite; the audit log is still absent.
+- ~~App-specific tool-calling benchmark suite~~ — **promoted into v1** (decided
+  2026-07-18); see M3. The blocker named here (an agent tool registry) is gone,
+  and the suite already exists in `packages/shared/src/eval` — see
+  [EVAL.md](EVAL.md). Its fine-tune companion `bench/trainset.jsonl` can feed
+  the training step directly as a `local_datasets` entry, since it is already
+  emitted in the chat format Studio's SFT trainer reads.
+- Still out of scope: a **BFCL-style multi-turn** tool suite. Today's personal
+  suite grades one turn, so it cannot see loop-level faults — a live run had a
+  1.5B model call `create_task` twice and create a duplicate task, which scores
+  as a clean pass. This needs the audit log, which does not exist.
 - Training-data generation from agent usage (audit log doesn't exist yet).
 - Multi-GPU, non-QLoRA training, >8B models.
 
