@@ -18,7 +18,8 @@
     "@fastify/cors": "^11.2.0",
     "@ghost/shared": "workspace:*",
     "better-sqlite3": "^12.11.1",
-    "fastify": "^5.2.0"
+    "fastify": "^5.2.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

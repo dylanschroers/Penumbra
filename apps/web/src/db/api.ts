@@ -7,6 +7,7 @@
 
 import {
   createTaskInput,
+  LOCAL_USER_ID,
   type NewTaskRow,
   type SyncTask,
   type TaskRow,
@@ -22,8 +23,8 @@ import { type RawExec, runMigrations } from "./migrator";
 
 // Single-user for now. Every row still carries a userId (see ARCHITECTURE.md →
 // "leave the door open for more"), so multi-user later is a query change, not
-// a schema migration.
-const LOCAL_USER_ID = "local";
+// a schema migration. The id itself is shared with the server, which stamps the
+// same owner on tasks its agent creates.
 
 // Client-only sync bookkeeping table. Mirrors migration 0002_outbox.sql; it is
 // deliberately NOT in the shared schema because the server has no outbox. Each
