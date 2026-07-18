@@ -32,3 +32,7 @@ apps/desktop/src-tauri/binaries/*
 !apps/desktop/src-tauri/binaries/README.md
 apps/desktop/src-tauri/models/*
 !apps/desktop/src-tauri/models/README.md
+
+# benchmark runs and generated training data (see docs/EVAL.md). Results are a
+# local record of a specific machine and model; regenerate rather than commit.
+bench/

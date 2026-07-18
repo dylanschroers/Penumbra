@@ -4,11 +4,16 @@
 // on startup, on an interval, when the network returns, and (debounced) right
 // after a local edit. See docs/SYNC.md.
 
-import type { PullTasksResult } from "@ghost/shared";
+import { normalizeBaseUrl, type PullTasksResult } from "@ghost/shared";
 import { getDb } from "../db/client";
 
-const SERVER_URL: string =
-  import.meta.env.VITE_SERVER_URL ?? "http://localhost:3000";
+// Normalized because a scheme-less VITE_SERVER_URL (e.g. "192.168.1.50:3000")
+// turns every request into a *relative* path: the dev server answers it with
+// its SPA fallback, so sync gets 200 OK full of HTML and reports itself
+// "disconnected" rather than misconfigured.
+const SERVER_URL: string = normalizeBaseUrl(
+  import.meta.env.VITE_SERVER_URL ?? "http://localhost:3000",
+);
 const INTERVAL_MS = 15_000;
 const DEBOUNCE_MS = 800;
 

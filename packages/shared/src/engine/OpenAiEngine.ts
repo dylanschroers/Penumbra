@@ -1,3 +1,4 @@
+import { normalizeBaseUrl } from "../net";
 import type {
   AgentEvent,
   AgentStatus,
@@ -67,7 +68,7 @@ export class OpenAiEngine implements Engine {
 
   constructor(config: OpenAiEngineConfig) {
     this.bindings = config.bindings;
-    this.baseURL = config.baseURL.replace(/\/+$/, "");
+    this.baseURL = normalizeBaseUrl(config.baseURL);
     this.model = config.model;
     this.headers = config.headers ?? {};
     this.label = config.label ?? "model";

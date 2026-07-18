@@ -68,11 +68,19 @@ details that the OpenAI seam does *not* imply, and that cost correctness:
    away from Ghost's server‑side tools — a direct conflict with §2. A test pins
    their absence from the request body.
 
-**Still unverified:** no live Studio has answered. The checkout has no Python
-stack installed (no fastapi, no torch), and this machine's GPU is a 3 GB
-Maxwell card, so a real model run is a separate exercise. Source agreement is
-strong evidence for the wire contract but says nothing about how a real model
-drives the tool loop — that remains the Phase 3 prerequisite.
+**Verified live against a real model.** Studio itself still has not answered —
+the checkout has no Python stack installed and this machine's GPU is a 3 GB
+Maxwell card — but the seam was exercised end to end against the bundled
+`llama-server` + Qwen2.5‑1.5B GGUF, which speaks the identical protocol. Status
+probe, tool call, tool result fed back, final answer, and the full Tier‑1 round
+trip (`/agent/chat` → server‑side tool → rev‑stamped row → `/sync/tasks`) all
+work. Two things that surfaced only by running it:
+
+- `/v1/models` on llama‑server carries **no** `loaded` flag, confirming the
+  fallback branch added for Studio's flagged catalog.
+- The 1.5B model called `create_task` **twice** for one request, creating a
+  duplicate task. The loop is correct; the model is weak. This is an argument
+  for Tier 1, and it is invisible to a single‑turn eval (docs/EVAL.md §4).
 
 ---
 
@@ -210,7 +218,7 @@ of Studio, since the fake encodes the same assumptions. The wire contract was
 instead checked against Studio's source (§1), which is what surfaced the
 `loaded`‑flag bug. First live run happens in Phase 3, when it has tools to call.
 
-### Phase 3 — Server task store + tool runner (the real net‑new work)
+### Phase 3 — Server task store + tool runner ✅ done
 - Build the server‑side task store described in §3, routing every write through
   rev stamping and reusing the shared Zod schemas.
 - Bind the shared contracts (`createTaskTool`, `listTasksTool`, …) to it,
@@ -220,7 +228,7 @@ instead checked against Studio's source (§1), which is what surfaced the
 - Tests: rev assignment (a tool‑created task is pullable by a client at
   `since = 0`), tombstone filtering, and schema‑default parity with the client.
 
-### Phase 4 — Client `RemoteEngine`, routes, and auth
+### Phase 4 — Client `RemoteEngine`, routes, and auth ✅ done
 - `RemoteEngine implements Engine` forwards `runAgent` / `getStatus` to the
   server's `/agent/*` (SSE), and calls `requestSync()` on each tool event (§2).
   The existing `AgentModule` + `useAgent` render it unchanged.
@@ -242,11 +250,15 @@ instead checked against Studio's source (§1), which is what surfaced the
   attempting rollback, and the tool events already streamed tell the user what
   happened.
 
-### Phase 5 — Richer status states
-- The type move happened in Phase 2, which needed it. What remains: fold in the
-  branch's richer readiness states (`not_installed`, etc.) once the server can
-  actually detect them — AGENT_DESIGN.md §5 sanctions this, and Phase 4's status
-  route is what makes it observable.
+### Phase 5 — Engine selection ✅ done (states deferred)
+- The type move happened in Phase 2, which needed it. Selection is now
+  `ResolvingEngine`: probe candidates in preference order, take the first that
+  reports ready. That is what makes the server a *preferred* backend and the
+  embedded model a working fallback, rather than a build‑time choice that is
+  wrong whenever reality disagrees.
+- **Deferred:** the branch's richer readiness states (`not_installed`, download
+  progress). Nothing detects them yet, and inventing states no producer emits
+  would be speculative.
 
 ### Phase 6 — Guardrails (all before PR)
 - **Biome** format + lint every new file (CI enforces it — the most likely CI
@@ -262,12 +274,11 @@ instead checked against Studio's source (§1), which is what surfaced the
 - Open against `main` with small commits following Phases 1→6 so it reviews
   cleanly.
 
-**Effort concentration:** Phase 3 is the project. Phase 4 is real but bounded
-(transport, auth, abort). Phases 1 and 2 are done and were mechanical, as
-predicted — Unsloth being OpenAI‑compatible held up, and the whole Tier‑1 engine
-came to one config wrapper over a shared loop. Phase 5 is small. Any estimate
-that treats Phase 3 as a mechanical mirror of the client tools is wrong by
-several times — see §3.
+**Effort concentration, in hindsight:** Phase 3 was the project, as predicted —
+the server had no CRUD at all, and the `rev` trap was real. Phase 4 was bounded
+but larger than "transport" suggests once auth and abort were taken seriously.
+Phases 1, 2, and 5 were mechanical. The original estimate's one bad call was
+describing Phase 3 as a mirror of the client tools; it was closer to 4x that.
 
 ---
 
@@ -299,8 +310,11 @@ several times — see §3.
 - **Agent‑route auth** — shared secret vs. localhost bind (Phase 4). Either
   clears the v0 bar; the choice depends on whether Tier 1 is meant to serve
   other devices on the LAN, which is also what §8's autonomous mode will need.
-- **Finetuning / benchmarking pipeline** — orthogonal to this seam; it
-  co‑locates on the same GPU host and reuses `scripts/tool-eval.ts` + the shared
-  contracts as its evaluation target. Tracked separately.
+- ~~**Finetuning / benchmarking pipeline**~~ — scaffolded; see
+  [EVAL.md](EVAL.md). Cases, scoring, and training‑set generation moved into
+  `@ghost/shared` beside the contracts, runs append to `bench/results.jsonl`,
+  and each run emits a rejection‑sampled `trainset.jsonl` plus the worklist of
+  cases it could not label. The training loop itself (running Unsloth SFT on
+  that file) is still out of scope here.
 </content>
 </invoke>

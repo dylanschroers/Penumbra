@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   Engine,
 } from "@ghost/shared";
+import { normalizeBaseUrl } from "@ghost/shared";
 import { flushSync, requestSync } from "../sync/SyncClient";
 
 // Tier 1: the model runs on a Ghost server, and so do its tools. This engine is
@@ -61,7 +62,7 @@ export class RemoteEngine implements Engine {
   private readonly headers: Record<string, string>;
 
   constructor(config: RemoteEngineConfig = {}) {
-    this.baseURL = (config.baseURL ?? DEFAULT_URL).replace(/\/+$/, "");
+    this.baseURL = normalizeBaseUrl(config.baseURL ?? DEFAULT_URL);
     this.headers = config.token
       ? { Authorization: `Bearer ${config.token}` }
       : {};
