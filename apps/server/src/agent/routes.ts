@@ -1,15 +1,14 @@
 import type { AgentEvent, ChatMessage, Engine } from "@ghost/shared";
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { requireAuth } from "../http/auth";
 
 // The Tier-1 agent's HTTP surface. Two routes: readiness for the status pill,
 // and a chat turn that streams tool runs as they happen.
 //
-// These are a different class of endpoint from /sync/tasks. Sync moves task
-// data; this one is an *actuator* — it runs a model with write and delete tools
-// against the store, and it costs GPU. The server's v0 no-auth posture
-// (docs/SYNC.md) was written for the former, so these routes carry their own
-// gate (see requireAuth).
+// These are a different class of endpoint from /sync/tasks: an *actuator* that
+// runs a model with write and delete tools and costs GPU. They sit behind
+// ../http/auth, shared with the lab routes.
 
 const chatBody = z.object({
   messages: z.array(
@@ -19,38 +18,6 @@ const chatBody = z.object({
     }),
   ),
 });
-
-/** Loopback callers are already inside the trust boundary the v0 model assumes. */
-function isLoopback(ip: string): boolean {
-  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
-}
-
-/**
- * Gate for the agent routes.
- *
- * With GHOST_AGENT_TOKEN set, callers present it as a bearer token — that is
- * what makes the agent reachable from another device on the LAN. Without it,
- * only loopback is served, so an unconfigured server can never expose a
- * write-capable model to the network by accident. There is deliberately no
- * "open to everyone" mode.
- */
-function requireAuth(token: string | undefined) {
-  return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    if (!token) {
-      if (isLoopback(req.ip)) return;
-      await reply.code(403).send({
-        error: "agent_local_only",
-        message:
-          "Agent routes serve loopback only until GHOST_AGENT_TOKEN is set.",
-      });
-      return;
-    }
-    const header = req.headers.authorization;
-    if (header !== `Bearer ${token}`) {
-      await reply.code(401).send({ error: "unauthorized" });
-    }
-  };
-}
 
 export interface AgentRouteOptions {
   engine: Engine;

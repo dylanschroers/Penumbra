@@ -36,3 +36,7 @@ apps/desktop/src-tauri/models/*
 # benchmark runs and generated training data (see docs/EVAL.md). Results are a
 # local record of a specific machine and model; regenerate rather than commit.
 bench/
+
+# Local Python venv for lm-evaluation-harness (docs/EVAL.md). Not committed:
+# it is a machine-local tool install, not part of the app.
+.venv-lmeval/

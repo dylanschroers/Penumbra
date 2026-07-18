@@ -1,0 +1,283 @@
+import Database from "better-sqlite3";
+import Fastify, { type FastifyInstance } from "fastify";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createLabStore, type LabStore } from "./jobs";
+import { registerLabRoutes } from "./routes";
+import type { StudioClient } from "./studio";
+
+/** Studio stand-in; only the methods a given test exercises are supplied. */
+function fakeStudio(over: Partial<StudioClient> = {}): StudioClient {
+  return {
+    baseURL: "http://studio",
+    reachable: async () => true,
+    startTraining: async () => {},
+    listRuns: async () => [],
+    async *trainingProgress() {},
+    loadCheckpoint: async () => {},
+    exportGguf: async () => {},
+    exportStatus: async () => ({ status: "complete" }),
+    ...over,
+  } as unknown as StudioClient;
+}
+
+let app: FastifyInstance;
+let store: LabStore;
+
+beforeEach(() => {
+  store = createLabStore(new Database(":memory:"));
+});
+afterEach(() => app?.close());
+
+async function build(studio = fakeStudio(), token?: string) {
+  app = Fastify();
+  registerLabRoutes(app, { store, studio, token });
+  await app.ready();
+  return app;
+}
+
+/** Jobs run in the background; wait for one to settle. */
+async function settle(id: string, tries = 40) {
+  for (let i = 0; i < tries; i++) {
+    const job = store.getJob(id);
+    if (job && (job.state === "done" || job.state === "failed")) return job;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return store.getJob(id);
+}
+
+const finetuneBody = {
+  baseModel: "qwen",
+  dataset: { kind: "hf", id: "tatsu-lab/alpaca" },
+};
+
+describe("auth", () => {
+  // /lab is a stronger actuator than /agent/chat: it spawns training and writes
+  // files. It must never be the one unauthenticated endpoint on the box.
+  it("refuses a non-loopback caller with no token configured", async () => {
+    const app = await build();
+    const res = await app.inject({
+      method: "GET",
+      url: "/lab/status",
+      remoteAddress: "192.168.1.50",
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("gates the mutating routes too", async () => {
+    const app = await build(fakeStudio(), "secret");
+    for (const url of ["/lab/finetune", "/lab/export", "/lab/benchmark"]) {
+      const res = await app.inject({ method: "POST", url, payload: {} });
+      expect(res.statusCode).toBe(401);
+    }
+  });
+});
+
+describe("GET /lab/status", () => {
+  it("reports Studio reachability and the suite catalog", async () => {
+    const app = await build();
+    const body = (await app.inject({ url: "/lab/status" })).json();
+
+    expect(body.studio).toBe("ready");
+    expect(body.suites.map((s: { id: string }) => s.id)).toContain(
+      "ghost-tools-v1",
+    );
+  });
+
+  it("says so honestly when Studio is down", async () => {
+    const app = await build(fakeStudio({ reachable: async () => false }));
+    expect((await app.inject({ url: "/lab/status" })).json().studio).toBe(
+      "stopped",
+    );
+  });
+});
+
+describe("POST /lab/finetune", () => {
+  it("accepts and returns a job to follow", async () => {
+    const app = await build();
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/finetune",
+      payload: finetuneBody,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({
+      jobId: expect.any(String),
+      runId: expect.any(String),
+    });
+  });
+
+  it("rejects a malformed request without creating a job", async () => {
+    const app = await build();
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/finetune",
+      payload: { baseModel: "" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(store.listJobs()).toEqual([]);
+  });
+
+  // The GPU host cannot run anything heavier, so a client must not be able to
+  // ask for full fine-tuning or 16-bit.
+  it("forces QLoRA and 4-bit regardless of the request", async () => {
+    let sent: Record<string, unknown> = {};
+    const app = await build(
+      fakeStudio({
+        startTraining: async (body) => {
+          sent = body as unknown as Record<string, unknown>;
+        },
+      }),
+    );
+    const { jobId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/finetune",
+        payload: finetuneBody,
+      })
+    ).json();
+    await settle(jobId);
+
+    expect(sent).toMatchObject({
+      training_type: "LoRA/QLoRA",
+      load_in_4bit: true,
+      hf_dataset: "tatsu-lab/alpaca",
+    });
+  });
+
+  it("records the output dir the run produced", async () => {
+    const app = await build(
+      fakeStudio({
+        async *trainingProgress() {
+          yield { event: "progress", data: { step: 1, total_steps: 2 } };
+          yield { event: "complete", data: {} };
+        },
+        listRuns: async () => [{ output_dir: "/runs/42" }],
+      }),
+    );
+    const { jobId, runId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/finetune",
+        payload: finetuneBody,
+      })
+    ).json();
+
+    expect((await settle(jobId))?.state).toBe("done");
+    expect(store.getRun(runId)?.outputDir).toBe("/runs/42");
+  });
+
+  it("surfaces a training error on the job rather than losing it", async () => {
+    const app = await build(
+      fakeStudio({
+        async *trainingProgress() {
+          yield { event: "error", data: { message: "CUDA OOM" } };
+        },
+      }),
+    );
+    const { jobId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/finetune",
+        payload: finetuneBody,
+      })
+    ).json();
+
+    const job = await settle(jobId);
+    expect(job?.state).toBe("failed");
+    expect(job?.error).toContain("CUDA OOM");
+  });
+});
+
+describe("POST /lab/export", () => {
+  it("refuses a run that has no checkpoint yet", async () => {
+    const app = await build();
+    const job = store.createJob("finetune");
+    const run = store.createRun({
+      jobId: job.id,
+      baseModel: "q",
+      dataset: "d",
+      outputDir: null,
+      ggufPath: null,
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/export",
+      payload: { runId: run.id },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("no_checkpoint");
+  });
+
+  it("404s an unknown run", async () => {
+    const app = await build();
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/export",
+      payload: { runId: "nope" },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("records the gguf path once the export settles", async () => {
+    const app = await build();
+    const job = store.createJob("finetune");
+    const run = store.createRun({
+      jobId: job.id,
+      baseModel: "q",
+      dataset: "d",
+      outputDir: "/runs/7",
+      ggufPath: null,
+    });
+
+    const { jobId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/export",
+        payload: { runId: run.id },
+      })
+    ).json();
+
+    expect((await settle(jobId))?.state).toBe("done");
+    expect(store.getRun(run.id)?.ggufPath).toBe("/runs/7/gguf");
+  });
+});
+
+describe("POST /lab/benchmark", () => {
+  it("rejects an unknown suite", async () => {
+    const app = await build();
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/benchmark",
+      payload: { model: "q", suite: "made-up" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("unknown_suite");
+  });
+
+  it("accepts a personal-suite run", async () => {
+    const app = await build();
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/benchmark",
+      payload: { model: "q", suite: "ghost-tools-v1", samplesPerTask: 1 },
+    });
+    expect(res.statusCode).toBe(202);
+  });
+});
+
+describe("GET /lab/jobs/:id", () => {
+  it("returns the job", async () => {
+    const app = await build();
+    const job = store.createJob("benchmark");
+    expect((await app.inject({ url: `/lab/jobs/${job.id}` })).json().id).toBe(
+      job.id,
+    );
+  });
+
+  it("404s an unknown id", async () => {
+    const app = await build();
+    expect((await app.inject({ url: "/lab/jobs/nope" })).statusCode).toBe(404);
+  });
+});

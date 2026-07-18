@@ -57,7 +57,7 @@ describe("auth", () => {
       remoteAddress: "192.168.1.50",
     });
     expect(res.statusCode).toBe(403);
-    expect(res.json().error).toBe("agent_local_only");
+    expect(res.json().error).toBe("local_only");
   });
 
   it("accepts a remote caller presenting the token", async () => {

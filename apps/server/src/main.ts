@@ -4,6 +4,8 @@ import { registerAgentRoutes } from "./agent/routes";
 import { createServerTools } from "./agent/tools";
 import { UnslothEngine } from "./agent/UnslothEngine";
 import { sqlite } from "./db";
+import { createLabStore } from "./lab/jobs";
+import { registerLabRoutes } from "./lab/routes";
 import { createServerTaskStore } from "./store/tasks";
 import { createTaskSyncStore } from "./sync/store";
 import { registerTaskSyncRoutes } from "./sync/tasks";
@@ -28,6 +30,10 @@ const tasks = createServerTaskStore(sqlite, sync);
 registerAgentRoutes(app, {
   engine: new UnslothEngine({ bindings: createServerTools(tasks) }),
 });
+
+// Model Lab: fine-tuning and benchmarking against the Studio on this host
+// (docs/model_lab_plan.md). Same gate as the agent routes.
+registerLabRoutes(app, { store: createLabStore(sqlite) });
 
 const port = Number(process.env.PORT ?? 3000);
 app.listen({ port, host: "0.0.0.0" }).catch((err) => {
