@@ -1,10 +1,12 @@
-// Types for talking to a model backend. These lived in @ghost/shared while a
-// server-side agent seam was planned; the client is their only consumer today,
-// so they live here until a second consumer exists (see docs/AGENT_DESIGN.md →
-// "The engine abstraction"). Tier 1 makes the server that second consumer and
-// moves them back — docs/UNSLOTH_TIER1_PLAN.md → Phase 5.
+// The seam between the app and whatever model backend answers it.
+//
+// These types lived in apps/web/src/engine while the client was their only
+// consumer. Tier 1 makes the server the second consumer — it implements the
+// same Engine against Unsloth Studio — so they move here, which is where the
+// original note in that file said they belonged once this happened
+// (docs/AGENT_DESIGN.md → "The engine abstraction").
 
-import type { ToolSpec } from "@ghost/shared";
+import type { ToolSpec } from "../tools";
 
 export type ChatRole = "user" | "assistant";
 
@@ -15,9 +17,9 @@ export interface ChatMessage {
 }
 
 /**
- * Readiness of the embedded model, for the status pill:
- *  - stopped:  nothing answering on the local port
- *  - no_model: the server is up but reports no loaded model
+ * Readiness of the model backend, for the status pill:
+ *  - stopped:  nothing answering at the configured address
+ *  - no_model: the backend is up but reports no loaded model
  *  - ready:    /v1/chat/completions will work
  */
 export type AgentState = "stopped" | "no_model" | "ready";
@@ -43,10 +45,9 @@ export type AgentEvent =
  * system prompt, and how to execute a call.
  *
  * Bound when an engine is *constructed*, not passed per turn. Tier 0 binds the
- * client store (engine/index.ts closes over agent/tools.ts). Tier 1's
- * RemoteEngine binds nothing at all — the server owns the tools, the prompt,
- * and execution — so a per-turn parameter would be handed over and ignored by
- * half the implementations (docs/UNSLOTH_TIER1_PLAN.md → Phase 1).
+ * client store; Tier 1's server binds its own. A per-turn parameter would be
+ * supplied by a caller that, in the remote case, has no say in any of it
+ * (docs/UNSLOTH_TIER1_PLAN.md → Phase 1).
  */
 export interface ToolBindings {
   tools: ToolSpec[];
@@ -56,8 +57,8 @@ export interface ToolBindings {
 
 /**
  * A model backend that can report readiness and run a tool-using turn. Tier 0's
- * LocalEngine talks to an embedded llama-server; Tier 1's RemoteEngine will
- * forward to a Ghost server. The module picks one via createEngine().
+ * LocalEngine talks to an embedded llama-server; Tier 1's UnslothEngine talks
+ * to Unsloth Studio. Both are OpenAiEngine underneath — see ./OpenAiEngine.
  */
 export interface Engine {
   /** Backend readiness for the status pill. Never throws; reports a state. */

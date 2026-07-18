@@ -1,6 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    // DOM is here for the web-standard fetch/Response/AbortSignal family, which
+    // src/engine uses and which both runtimes implement (browser natively, Node
+    // 18+ via undici). It is NOT licence to use browser-only globals: this
+    // package runs on the server too, so window/document/localStorage are typed
+    // but off-limits.
+    "lib": ["ES2022", "DOM"],
     "rootDir": "src",
     "noEmit": true
   },

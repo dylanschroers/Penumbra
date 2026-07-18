@@ -7,11 +7,12 @@
 // imports (its tools are injected, which is what keeps it testable), and the
 // wiring to the client store happens here instead.
 
+import type { Engine, ToolBindings } from "@ghost/shared";
 import { AGENT_SYSTEM, runTool, toolSpecs } from "../agent/tools";
 import { LocalEngine } from "./LocalEngine";
-import type { Engine, ToolBindings } from "./types";
 
-export { LocalEngine, type LocalEngineConfig } from "./LocalEngine";
+// The engine types are shared with the server (docs/UNSLOTH_TIER1_PLAN.md →
+// Phase 2); re-exported here so app code keeps importing them from one place.
 export type {
   AgentEvent,
   AgentState,
@@ -20,7 +21,8 @@ export type {
   ChatRole,
   Engine,
   ToolBindings,
-} from "./types";
+} from "@ghost/shared";
+export { LocalEngine, type LocalEngineConfig } from "./LocalEngine";
 
 /** Tier 0 runs tools in the browser, against the client's own store. */
 const clientBindings: ToolBindings = {

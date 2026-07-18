@@ -134,9 +134,9 @@ Budget Phase 3 accordingly: it is the project, not a mechanical mirror.
 
 ## 4. Major steps
 
-### Phase 1 — Formalize the engine seam
-- Extract an `Engine` interface (`getStatus`, `runAgent`) in
-  `apps/web/src/engine/types.ts`; make `LocalEngine implements Engine`.
+### Phase 1 — Formalize the engine seam ✅ done
+- Extract an `Engine` interface (`getStatus`, `runAgent`); make
+  `LocalEngine implements Engine`.
 - **Shape the interface for both implementations, not just the one that
   exists.** Today `runAgent(messages, opts, signal)` takes
   `opts = { tools, system, runTool }`. For `RemoteEngine` all three are
@@ -153,12 +153,32 @@ Budget Phase 3 accordingly: it is the project, not a mechanical mirror.
   `engine/index.ts` (default `local`). Behavior is unchanged; the call site and
   the interface shape are not. Its own commit.
 
-### Phase 2 — Server‑side Unsloth engine (OpenAI seam)
-- Server agent loop = `LocalEngine`'s `/v1/chat/completions` request shape +
-  `Authorization: Bearer`, with `baseURL` / key / model from env, pointed at the
-  server's Studio.
-- Drop `@anthropic-ai/sdk`, the `unsloth connect claude` handshake, and any tool
-  translation. Keep only a trivial `/v1/models` status probe.
+### Phase 2 — Server‑side Unsloth engine (OpenAI seam) ✅ done
+- **Absorbed Phase 5.** The engine types had to move to `@ghost/shared` first:
+  `apps/server` cannot import from `apps/web`, and the server engine is exactly
+  the second consumer the types were waiting for. `packages/shared/src/engine`
+  now holds `Engine`, `AgentStatus`, `AgentEvent`, and `ToolBindings`.
+- **Extracted `OpenAiEngine` rather than copying the loop.** Both tiers speak
+  the same protocol, and after Phase 1 the only difference left was
+  configuration — so the ~70 lines of tool‑call accumulation, malformed‑JSON
+  handling, step budget, and `<think>` stripping live in `@ghost/shared` once.
+  `LocalEngine` and `UnslothEngine` are thin config wrappers. The shared module
+  is deliberately environment‑free (no `import.meta.env`, no `process.env`);
+  each side's wrapper reads its own configuration and passes it in.
+- `UnslothEngine` (`apps/server/src/agent`) adds `UNSLOTH_BASE_URL` /
+  `UNSLOTH_API_KEY` / `UNSLOTH_MODEL`, a conditional `Authorization: Bearer`
+  (Studio on a trusted LAN may run keyless, and an empty bearer is rejected as
+  malformed), and a tool‑step budget of 8 against Tier 0's 4.
+- Dropped, as planned: `@anthropic-ai/sdk`, the `unsloth connect claude`
+  handshake, all tool translation. Status is a plain `/v1/models` probe.
+- `packages/shared` gained the `DOM` lib for the standard
+  `fetch`/`Response`/`AbortSignal` family, and `apps/server` gained Vitest —
+  which Phase 3's store tests need anyway.
+
+**Not yet exercised against a live Studio.** No Studio instance was reachable
+when this landed, so `UnslothEngine` is unit‑tested only (config resolution,
+headers, step budget) and the protocol is covered by the shared `OpenAiEngine`
+tests. First live run happens in Phase 3, when it has tools to call.
 
 ### Phase 3 — Server task store + tool runner (the real net‑new work)
 - Build the server‑side task store described in §3, routing every write through
@@ -192,11 +212,11 @@ Budget Phase 3 accordingly: it is the project, not a mechanical mirror.
   attempting rollback, and the tool events already streamed tell the user what
   happened.
 
-### Phase 5 — Reconcile types & status
-- One `AgentStatus` in the shared location (server + client are now both
-  consumers — the "second consumer" `engine/types.ts` was waiting for). Fold in
-  the branch's richer states (`not_installed`, etc.); the server can detect them
-  and §5 sanctions richer readiness.
+### Phase 5 — Richer status states
+- The type move happened in Phase 2, which needed it. What remains: fold in the
+  branch's richer readiness states (`not_installed`, etc.) once the server can
+  actually detect them — AGENT_DESIGN.md §5 sanctions this, and Phase 4's status
+  route is what makes it observable.
 
 ### Phase 6 — Guardrails (all before PR)
 - **Biome** format + lint every new file (CI enforces it — the most likely CI
@@ -213,10 +233,11 @@ Budget Phase 3 accordingly: it is the project, not a mechanical mirror.
   cleanly.
 
 **Effort concentration:** Phase 3 is the project. Phase 4 is real but bounded
-(transport, auth, abort). Phases 1 and 5 are mechanical, and Phase 2 shrank to
-near‑nothing once Unsloth turned out to be OpenAI‑compatible. Any estimate that
-treats Phase 3 as a mechanical mirror of the client tools is wrong by several
-times — see §3.
+(transport, auth, abort). Phases 1 and 2 are done and were mechanical, as
+predicted — Unsloth being OpenAI‑compatible held up, and the whole Tier‑1 engine
+came to one config wrapper over a shared loop. Phase 5 is small. Any estimate
+that treats Phase 3 as a mechanical mirror of the client tools is wrong by
+several times — see §3.
 
 ---
 
@@ -238,10 +259,10 @@ times — see §3.
 
 ## 6. Open decisions
 
-- **Engine selection** — env var (`VITE_ENGINE` / server config) vs. auto‑detect
-  (prefer Unsloth when its `/v1/models` answers, else Tier‑0 llama‑server).
-  Phase 1's factory needs a shape, so **decide this before Phase 1**; env var is
-  the low‑commitment answer and the factory internals can change later.
+- ~~**Engine selection**~~ — settled in Phase 1: env var (`VITE_ENGINE`,
+  default `local`), chosen for low commitment. Auto‑detect (prefer Unsloth when
+  its `/v1/models` answers, else Tier‑0 llama‑server) stays open as a later
+  refinement; it is contained to the factory in `apps/web/src/engine/index.ts`.
 - **Studio credentials on the server** — env (`UNSLOTH_BASE_URL`,
   `UNSLOTH_API_KEY`, `UNSLOTH_MODEL`) is the v0 answer; revisit if the server
   ever manages multiple Studio instances.

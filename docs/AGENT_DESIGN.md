@@ -90,25 +90,35 @@ measures exactly where that line sits.
 
 ## 5. The engine abstraction
 
-The UI must not know which backend or transport is behind a reply. There is
-exactly one engine — **`LocalEngine`** (`apps/web/src/engine`), the embedded
-model over OpenAI-compatible HTTP — exposing only what the UI calls:
+The UI must not know which backend or transport is behind a reply. It talks to
+an **`Engine`** (`packages/shared/src/engine`), exposing only what the UI calls:
 
 ```ts
-class LocalEngine {
-  getStatus(): Promise<AgentStatus>;                       // status pill
-  runAgent(messages, opts): AsyncGenerator<AgentEvent>;    // tool loop + answer
+interface Engine {
+  getStatus(): Promise<AgentStatus>;                     // status pill
+  runAgent(messages, signal?): AsyncGenerator<AgentEvent>; // tool loop + answer
 }
 ```
 
-The tool loop is bounded and non-streaming; the caller supplies `runTool`
-because tools touch app state, not the engine. Readiness is
-`stopped | no_model | ready` (`engine/types.ts`).
+Two implementations exist, both thin configuration over the shared
+**`OpenAiEngine`** — llama-server and Unsloth Studio speak the same
+OpenAI-compatible protocol, so the loop is written once:
 
-Planned, behind the same surface: a `RemoteEngine` transport adapter (arrives
-with the Tier-1 server agent), streaming with `<think>`-splitting (arrives with
-a streaming chat UI), and richer readiness states for delivery modes that need
-download progress. Earlier speculative versions of these were built and then
+- **`LocalEngine`** (`apps/web/src/engine`) — Tier 0, the embedded model.
+- **`UnslothEngine`** (`apps/server/src/agent`) — Tier 1, Studio on the GPU
+  host, adding a bearer token and a longer tool-step budget. It has no route in
+  front of it yet (see below).
+
+The tool loop is bounded and non-streaming. Tools touch app state rather than
+the engine, so `runTool` — with the tool specs and system prompt — is bound when
+an engine is *constructed*: Tier 0 binds the browser store, Tier 1 binds the
+server's. Readiness is `stopped | no_model | ready`
+(`packages/shared/src/engine/types.ts`).
+
+Planned, behind the same surface: a `RemoteEngine` transport adapter letting the
+client reach `UnslothEngine` over `/agent/*` (arrives with the Tier-1 routes),
+streaming with `<think>`-splitting (arrives with a streaming chat UI), and
+richer readiness states for delivery modes that need download progress. Earlier speculative versions of these were built and then
 removed (principle 6 in ARCHITECTURE.md); they live in git history.
 
 ---
