@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { type AgentEvent, LocalEngine } from "./LocalEngine";
+import { LocalEngine } from "./LocalEngine";
+import type { AgentEvent } from "./types";
 
 // The engine's only outside contact is HTTP to the local model, so a mocked
 // fetch lets us script the model's replies and assert the loop's behavior
@@ -37,12 +38,20 @@ async function collect(gen: AsyncGenerator<AgentEvent>): Promise<AgentEvent[]> {
   return out;
 }
 
-const engine = new LocalEngine("http://test", "m");
-const opts = () => ({
-  tools: [],
-  system: "sys",
-  runTool: vi.fn().mockResolvedValue("ok"),
-});
+/** An engine with its own mock runTool. Tools are bound at construction, so a
+ *  test that asserts on tool execution builds an engine to reach the spy. */
+function makeEngine() {
+  const runTool = vi.fn().mockResolvedValue("ok");
+  const engine = new LocalEngine({
+    bindings: { tools: [], system: "sys", runTool },
+    baseURL: "http://test",
+    model: "m",
+  });
+  return { engine, runTool };
+}
+
+/** For tests that never touch a tool. */
+const engine = makeEngine().engine;
 
 beforeEach(() => mockFetch.mockReset());
 
@@ -79,7 +88,7 @@ describe("runAgent", () => {
   it("yields a single answer and strips <think> blocks", async () => {
     mockFetch.mockResolvedValueOnce(answerReply("<think>secret</think>Hello"));
     const events = await collect(
-      engine.runAgent([{ role: "user", content: "hi" }], opts()),
+      engine.runAgent([{ role: "user", content: "hi" }]),
     );
     expect(events).toEqual([{ kind: "answer", text: "Hello" }]);
   });
@@ -88,12 +97,12 @@ describe("runAgent", () => {
     mockFetch
       .mockResolvedValueOnce(toolReply("create_task", '{"title":"x"}'))
       .mockResolvedValueOnce(answerReply("done"));
-    const o = opts();
+    const { engine, runTool } = makeEngine();
     const events = await collect(
-      engine.runAgent([{ role: "user", content: "add x" }], o),
+      engine.runAgent([{ role: "user", content: "add x" }]),
     );
 
-    expect(o.runTool).toHaveBeenCalledWith("create_task", { title: "x" });
+    expect(runTool).toHaveBeenCalledWith("create_task", { title: "x" });
     expect(events).toEqual([
       { kind: "tool", name: "create_task", args: { title: "x" }, result: "ok" },
       { kind: "answer", text: "done" },
@@ -104,30 +113,44 @@ describe("runAgent", () => {
     mockFetch
       .mockResolvedValueOnce(toolReply("create_task", "{bad"))
       .mockResolvedValueOnce(answerReply("done"));
-    const o = opts();
-    await collect(engine.runAgent([{ role: "user", content: "x" }], o));
-    expect(o.runTool).toHaveBeenCalledWith("create_task", {});
+    const { engine, runTool } = makeEngine();
+    await collect(engine.runAgent([{ role: "user", content: "x" }]));
+    expect(runTool).toHaveBeenCalledWith("create_task", {});
   });
 
   it("throws on a non-OK model response", async () => {
     mockFetch.mockResolvedValue(res({}, false, 500));
     await expect(
-      collect(engine.runAgent([{ role: "user", content: "x" }], opts())),
+      collect(engine.runAgent([{ role: "user", content: "x" }])),
     ).rejects.toThrow("local model responded 500");
   });
 
   it("stops at the tool-step limit instead of looping forever", async () => {
     // The model asks for a tool on every turn and never answers.
     mockFetch.mockResolvedValue(toolReply("create_task", '{"title":"x"}'));
-    const o = opts();
+    const { engine, runTool } = makeEngine();
     const events = await collect(
-      engine.runAgent([{ role: "user", content: "x" }], o),
+      engine.runAgent([{ role: "user", content: "x" }]),
     );
 
-    expect(o.runTool).toHaveBeenCalledTimes(4); // MAX_TOOL_STEPS
+    expect(runTool).toHaveBeenCalledTimes(4); // DEFAULT_MAX_TOOL_STEPS
     expect(events.at(-1)).toEqual({
       kind: "answer",
       text: "I hit the tool-step limit before finishing.",
     });
+  });
+
+  // Tier 1 will want a larger budget than the small-model default.
+  it("honors a configured tool-step limit", async () => {
+    mockFetch.mockResolvedValue(toolReply("create_task", '{"title":"x"}'));
+    const runTool = vi.fn().mockResolvedValue("ok");
+    const engine = new LocalEngine({
+      bindings: { tools: [], system: "sys", runTool },
+      baseURL: "http://test",
+      maxToolSteps: 7,
+    });
+
+    await collect(engine.runAgent([{ role: "user", content: "x" }]));
+    expect(runTool).toHaveBeenCalledTimes(7);
   });
 });

@@ -1,25 +1,10 @@
-import type { ToolSpec } from "@ghost/shared";
-import type { AgentStatus, ChatMessage } from "./types";
-
-/** What a tool-using turn emits: each tool run as it happens, then the answer. */
-export type AgentEvent =
-  | {
-      kind: "tool";
-      name: string;
-      args: Record<string, unknown>;
-      result: string;
-    }
-  | { kind: "answer"; text: string };
-
-/** Options for a tool-using turn: the tools, the system prompt, and how to run
- *  a call (the caller owns execution, since tools touch app state). */
-export interface AgentOptions {
-  tools: ToolSpec[];
-  system: string;
-  runTool: (name: string, args: Record<string, unknown>) => Promise<string>;
-}
-
-const MAX_TOOL_STEPS = 4;
+import type {
+  AgentEvent,
+  AgentStatus,
+  ChatMessage,
+  Engine,
+  ToolBindings,
+} from "./types";
 
 // Tier 0: the embedded model. Talks *directly* to a local OpenAI-compatible
 // server (llama.cpp's `llama-server`), with no Ghost server in the path — this
@@ -32,12 +17,33 @@ const DEFAULT_MODEL = import.meta.env.VITE_LOCAL_LLM_MODEL ?? "local";
 // Cap generation so a small model can't run away (Qwen3 thinking can otherwise
 // emit thousands of tokens).
 const MAX_TOKENS = 512;
+// How many tool rounds one turn may take. This is a *small-model* budget: four
+// is enough for the single-step task edits Tier 0 handles, and low enough that
+// a confused model gives up quickly. Engine-owned rather than module-level
+// because Tier 1 exists for longer multi-step work and will want more
+// (docs/UNSLOTH_TIER1_PLAN.md → Phase 1).
+const DEFAULT_MAX_TOOL_STEPS = 4;
 
-export class LocalEngine {
-  constructor(
-    private readonly baseURL: string = DEFAULT_URL,
-    private readonly model: string = DEFAULT_MODEL,
-  ) {}
+export interface LocalEngineConfig {
+  /** Tools, prompt, and executor for every turn this engine runs. */
+  bindings: ToolBindings;
+  baseURL?: string;
+  model?: string;
+  maxToolSteps?: number;
+}
+
+export class LocalEngine implements Engine {
+  private readonly bindings: ToolBindings;
+  private readonly baseURL: string;
+  private readonly model: string;
+  private readonly maxToolSteps: number;
+
+  constructor(config: LocalEngineConfig) {
+    this.bindings = config.bindings;
+    this.baseURL = config.baseURL ?? DEFAULT_URL;
+    this.model = config.model ?? DEFAULT_MODEL;
+    this.maxToolSteps = config.maxToolSteps ?? DEFAULT_MAX_TOOL_STEPS;
+  }
 
   /** Backend readiness for the status pill. Never throws; reports a state. */
   async getStatus(): Promise<AgentStatus> {
@@ -57,12 +63,13 @@ export class LocalEngine {
   // A tool-using turn: call the model with tools, run any tool calls it emits,
   // feed the results back, and repeat until it answers (bounded). Non-streaming
   // — tool turns are short, and streamed tool-call parsing isn't worth it yet.
-  // The caller supplies runTool because tools touch app state, not the engine.
+  // Tools touch app state rather than the engine, so execution stays with the
+  // bindings this engine was constructed with.
   async *runAgent(
     messages: ChatMessage[],
-    opts: AgentOptions,
     signal?: AbortSignal,
   ): AsyncGenerator<AgentEvent> {
+    const { tools, system, runTool } = this.bindings;
     type OaiMsg = {
       role: string;
       content: string | null;
@@ -70,18 +77,18 @@ export class LocalEngine {
       tool_call_id?: string;
     };
     const convo: OaiMsg[] = [
-      { role: "system", content: opts.system },
+      { role: "system", content: system },
       ...messages.map((m) => ({ role: m.role, content: m.content })),
     ];
 
-    for (let step = 0; step < MAX_TOOL_STEPS; step++) {
+    for (let step = 0; step < this.maxToolSteps; step++) {
       const res = await fetch(`${this.baseURL}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: this.model,
           messages: convo,
-          tools: opts.tools,
+          tools,
           tool_choice: "auto",
           max_tokens: MAX_TOKENS,
           temperature: 0,
@@ -125,7 +132,7 @@ export class LocalEngine {
         } catch {
           // leave args empty; runTool reports the failure
         }
-        const result = await opts.runTool(call.function.name, args);
+        const result = await runTool(call.function.name, args);
         yield { kind: "tool", name: call.function.name, args, result };
         convo.push({ role: "tool", tool_call_id: call.id, content: result });
       }
@@ -136,6 +143,3 @@ export class LocalEngine {
     };
   }
 }
-
-/** The default embedded engine: a local llama-server on VITE_LOCAL_LLM_URL. */
-export const localEngine = new LocalEngine();

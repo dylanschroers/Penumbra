@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AGENT_SYSTEM, runTool, toolSpecs } from "../../agent/tools";
-import { type AgentStatus, type ChatMessage, localEngine } from "../../engine";
+import { type AgentStatus, type ChatMessage, engine } from "../../engine";
 
-// Drives the agent module: tracks the embedded model's status and runs a
-// tool-using turn against it (LocalEngine.runAgent — Tier 0, no server). This
-// hook owns only UI concerns: message state, the busy flag, and abort. Tool
-// execution lives in ../../agent/tools; the model just decides what to call.
+// Drives the agent module: tracks the model's status and runs a tool-using turn
+// against it. This hook owns only UI concerns: message state, the busy flag,
+// and abort. Which backend answers (Tier 0's embedded model today, a server
+// engine later) and which tools it runs are both settled in ../../engine, so
+// nothing here changes when Tier 1 lands.
 
 /** One tool the model ran during a turn, shown inline in the thread. */
 export type ToolStep = { name: string; result: string };
@@ -19,7 +19,7 @@ export function useAgent() {
   const abortRef = useRef<AbortController | null>(null);
 
   const refreshStatus = useCallback(async () => {
-    setStatus(await localEngine.getStatus());
+    setStatus(await engine.getStatus());
   }, []);
 
   // Poll status so the pill reflects the model starting/stopping out of band.
@@ -68,11 +68,7 @@ export function useAgent() {
         });
 
       try {
-        for await (const ev of localEngine.runAgent(
-          history,
-          { tools: toolSpecs, system: AGENT_SYSTEM, runTool },
-          controller.signal,
-        )) {
+        for await (const ev of engine.runAgent(history, controller.signal)) {
           if (ev.kind === "tool") {
             patch((m) => ({
               ...m,
