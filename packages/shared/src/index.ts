@@ -2,6 +2,7 @@
 
 export * from "./engine";
 export * from "./eval";
+export * from "./identity";
 export * from "./lab";
 export * from "./net";
 export * from "./schema";

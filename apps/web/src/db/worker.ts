@@ -3,6 +3,7 @@
 // talks to it via Comlink — see ./client.ts. All database logic lives in
 // ./api.ts; this file supplies only the storage: an OPFS-backed exec primitive.
 
+import { LOCAL_DB_FILE, LOCAL_DB_POOL } from "@ghost/shared";
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import * as Comlink from "comlink";
 import { createDbApi } from "./api";
@@ -40,8 +41,8 @@ async function init(): Promise<(sql: string, bind?: unknown[]) => unknown[][]> {
       sqlite3 as unknown as {
         installOpfsSAHPoolVfs(opts: { name: string }): Promise<SAHPoolUtil>;
       }
-    ).installOpfsSAHPoolVfs({ name: "ghost" })) satisfies SAHPoolUtil;
-    sqliteDb = new poolUtil.OpfsSAHPoolDb("/ghost.db");
+    ).installOpfsSAHPoolVfs({ name: LOCAL_DB_POOL })) satisfies SAHPoolUtil;
+    sqliteDb = new poolUtil.OpfsSAHPoolDb(`/${LOCAL_DB_FILE}`);
   } catch (err) {
     console.error(
       "[ghost] OPFS is unavailable — the local store cannot persist here:",

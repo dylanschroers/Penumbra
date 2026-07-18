@@ -1,3 +1,4 @@
+import { STORAGE_NAMESPACE } from "@ghost/shared";
 // Import from the meta package (a direct dependency) rather than the individual
 // @uiw/react-color-* packages, which are transitive and not resolvable under
 // pnpm's strict node_modules. It re-exports the components and color-convert.
@@ -14,7 +15,7 @@ import { useEffect, useState } from "react";
 // A small, self-contained color tool: a hue/saturation wheel, a light↔dark shade
 // slider, and a two-way hex box, with a click-to-copy swatch. The last color is
 // remembered in localStorage. No DB, no server — pure client UI state.
-const STORAGE_KEY = "ghost.color-picker.hex.v1";
+const STORAGE_KEY = `${STORAGE_NAMESPACE}.color-picker.hex.v1`;
 const DEFAULT_HEX = "#4f46e5"; // matches --primary
 const WHEEL_SIZE = 180; // static, per design
 

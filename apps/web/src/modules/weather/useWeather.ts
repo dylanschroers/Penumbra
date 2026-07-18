@@ -1,3 +1,4 @@
+import { STORAGE_NAMESPACE } from "@ghost/shared";
 import { useCallback, useEffect, useState } from "react";
 
 // Weather is Plane B data (docs/ARCHITECTURE.md): truth lives at the provider,
@@ -32,7 +33,7 @@ export interface WeatherData {
   fetchedAt: number; // epoch ms
 }
 
-const STORAGE_KEY = "ghost.weather.v1";
+const STORAGE_KEY = `${STORAGE_NAMESPACE}.weather.v1`;
 const GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search";
 const FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
 
