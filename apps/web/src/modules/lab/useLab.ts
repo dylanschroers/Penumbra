@@ -4,11 +4,11 @@ import type {
   LabJob,
   LabRun,
   SuiteDefinition,
-} from "@ghost/shared";
-import { normalizeBaseUrl } from "@ghost/shared";
+} from "@penumbra/shared";
+import { normalizeBaseUrl } from "@penumbra/shared";
 import { useCallback, useEffect, useState } from "react";
 
-// Drives the Model Lab module. Everything goes through the Ghost server's
+// Drives the Model Lab module. Everything goes through the Penumbra server's
 // /lab/* routes — never to Studio directly, because the Studio key is an
 // unscoped admin credential that must not reach a browser
 // (docs/model_lab_plan.md → Deployment topology).

@@ -1,17 +1,17 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Ghost",
+  "productName": "Penumbra",
   "version": "0.1.0",
   "identifier": "local.placeholder.assistant",
   "build": {
-    "beforeDevCommand": "pnpm --filter @ghost/web dev",
+    "beforeDevCommand": "pnpm --filter @penumbra/web dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "pnpm --filter @ghost/web build",
+    "beforeBuildCommand": "pnpm --filter @penumbra/web build",
     "frontendDist": "../../web/dist"
   },
   "app": {
     "windows": [
-      { "label": "main", "title": "Ghost", "width": 1280, "height": 800 }
+      { "label": "main", "title": "Penumbra", "width": 1280, "height": 800 }
     ],
     "security": { "csp": null }
   },

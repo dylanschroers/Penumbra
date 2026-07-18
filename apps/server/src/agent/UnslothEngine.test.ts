@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UnslothEngine } from "./UnslothEngine";
 
-// The OpenAI protocol loop is tested once, in @ghost/shared's OpenAiEngine
+// The OpenAI protocol loop is tested once, in @penumbra/shared's OpenAiEngine
 // tests. UnslothEngine only resolves Tier-1 configuration — address, model,
 // credentials — so that is all this file checks.
 const mockFetch = vi.fn();

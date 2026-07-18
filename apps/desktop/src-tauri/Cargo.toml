@@ -1,11 +1,11 @@
 [package]
-name = "ghost-desktop"
+name = "penumbra-desktop"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 
 [lib]
-name = "ghost_desktop_lib"
+name = "penumbra_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

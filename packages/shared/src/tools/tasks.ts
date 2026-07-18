@@ -62,7 +62,7 @@ export const taskTools = [
  * client code) because the eval harness must test the exact prompt the app
  * ships — prompt and tool set regress together. */
 export const AGENT_SYSTEM =
-  "You are Ghost, a local personal assistant. You can manage the user's tasks " +
+  "You are Penumbra, a local personal assistant. You can manage the user's tasks " +
   "with the provided tools. Call a tool ONLY when the user asks you to view or " +
   "change their tasks; for general questions or chit-chat, just answer. After a " +
   "tool runs, tell the user briefly what happened.";

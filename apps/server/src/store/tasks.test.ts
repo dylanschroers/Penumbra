@@ -46,7 +46,7 @@ describe("createTask", () => {
     db.prepare(
       `INSERT INTO tasks (id, user_id, title, priority, status,
          created_at, updated_at)
-       VALUES ('x', 'local', 'ghost row', 'medium', 'todo', '2026-01-01', '2026-01-01')`,
+       VALUES ('x', 'local', 'penumbra row', 'medium', 'todo', '2026-01-01', '2026-01-01')`,
     ).run();
 
     expect(db.prepare("SELECT COUNT(*) AS n FROM tasks").get()).toEqual({

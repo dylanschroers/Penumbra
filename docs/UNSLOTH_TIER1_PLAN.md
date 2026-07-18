@@ -1,4 +1,4 @@
-# Ghost — Tier‑1 Unsloth Agent: Integration Plan
+# Penumbra — Tier‑1 Unsloth Agent: Integration Plan
 
 Companion to [AGENT_DESIGN.md](AGENT_DESIGN.md). Same convention: present tense
 means it exists in the repo today; everything here is **planned** unless noted.
@@ -65,7 +65,7 @@ details that the OpenAI seam does *not* imply, and that cost correctness:
    own* tool loop against its MCP registry. Studio passes client‑supplied tools
    through only while both are absent (`_explicit_studio_tool_loop_requested`,
    and the `_sf_client_tools` gate). Setting either would silently take the turn
-   away from Ghost's server‑side tools — a direct conflict with §2. A test pins
+   away from Penumbra's server‑side tools — a direct conflict with §2. A test pins
    their absence from the request body.
 
 **Verified live against a real model.** Studio itself still has not answered —
@@ -160,7 +160,7 @@ first. Four traps live in that build:
    tombstones*. The `list_tasks` tool needs live rows only (`deleted_at IS
    NULL`) ordered by `created_at desc`, matching what the user sees.
 4. **Validation must be reused, not re‑typed.** The server binds the same
-   `createTaskInput` / `updateTaskInput` schemas from `@ghost/shared`, so
+   `createTaskInput` / `updateTaskInput` schemas from `@penumbra/shared`, so
    defaults (e.g. `priority`) fill identically on both sides.
 
 Budget Phase 3 accordingly: it is the project, not a mechanical mirror.
@@ -189,14 +189,14 @@ Budget Phase 3 accordingly: it is the project, not a mechanical mirror.
   the interface shape are not. Its own commit.
 
 ### Phase 2 — Server‑side Unsloth engine (OpenAI seam) ✅ done
-- **Absorbed Phase 5.** The engine types had to move to `@ghost/shared` first:
+- **Absorbed Phase 5.** The engine types had to move to `@penumbra/shared` first:
   `apps/server` cannot import from `apps/web`, and the server engine is exactly
   the second consumer the types were waiting for. `packages/shared/src/engine`
   now holds `Engine`, `AgentStatus`, `AgentEvent`, and `ToolBindings`.
 - **Extracted `OpenAiEngine` rather than copying the loop.** Both tiers speak
   the same protocol, and after Phase 1 the only difference left was
   configuration — so the ~70 lines of tool‑call accumulation, malformed‑JSON
-  handling, step budget, and `<think>` stripping live in `@ghost/shared` once.
+  handling, step budget, and `<think>` stripping live in `@penumbra/shared` once.
   `LocalEngine` and `UnslothEngine` are thin config wrappers. The shared module
   is deliberately environment‑free (no `import.meta.env`, no `process.env`);
   each side's wrapper reads its own configuration and passes it in.
@@ -241,7 +241,7 @@ instead checked against Studio's source (§1), which is what surfaced the
   is a different class of exposure: an unauthenticated endpoint on `0.0.0.0`
   that runs a model with **write and delete** tools against the store and
   consumes GPU. Minimum bar before this endpoint exists: a shared‑secret header
-  (`GHOST_AGENT_TOKEN`) **or** binding the agent routes to localhost, plus a
+  (`PENUMBRA_AGENT_TOKEN`) **or** binding the agent routes to localhost, plus a
   note in docs/SYNC.md that the v0 no‑auth stance now has an actuator behind it.
 - **Abort semantics.** `useAgent` aborts via `AbortController`; over SSE, client
   disconnect must cancel the server's in‑flight model call and stop the tool
@@ -292,7 +292,7 @@ describing Phase 3 as a mirror of the client tools; it was closer to 4x that.
 | `unsloth connect claude` handshake (`agent/unsloth.ts`) | **Drop** — Studio has a plain key + `/v1/models` |
 | `@anthropic-ai/sdk`, Anthropic message loop | **Drop** — off the OpenAI seam |
 | `AgentSidebar.tsx`, top‑level `useAgent.ts`, `App.tsx` layout, sidebar CSS | **Drop** — superseded by the canvas module |
-| `validation/agent.ts` in `@ghost/shared` | **Drop** — reconcile into the shared status type |
+| `validation/agent.ts` in `@penumbra/shared` | **Drop** — reconcile into the shared status type |
 
 "Drop" means *never ported* — see §1. Nothing needs deleting from `main`.
 
@@ -318,7 +318,7 @@ describing Phase 3 as a mirror of the client tools; it was closer to 4x that.
   credentials come from env rather than an `unsloth connect` handshake, and that
   `/lab/*` must reuse the agent routes' auth gate. The tool-calling half is
   scaffolded here; see [EVAL.md](EVAL.md). Cases, scoring, and training‑set generation moved into
-  `@ghost/shared` beside the contracts, runs append to `bench/results.jsonl`,
+  `@penumbra/shared` beside the contracts, runs append to `bench/results.jsonl`,
   and each run emits a rejection‑sampled `trainset.jsonl` plus the worklist of
   cases it could not label. The training loop itself (running Unsloth SFT on
   that file) is still out of scope here.

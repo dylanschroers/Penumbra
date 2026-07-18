@@ -1,10 +1,10 @@
-# Ghost — Agent & AI Design
+# Penumbra — Agent & AI Design
 
 Companion to [ARCHITECTURE.md](ARCHITECTURE.md); this is the AI detail. Same
 convention: present tense means it exists in the repo, and planned work is
 marked as such.
 
-The single organizing constraint: **Ghost has no hard dependency on any cloud
+The single organizing constraint: **Penumbra has no hard dependency on any cloud
 AI provider.** Local usability is the floor. A self-hosted server unlocks more;
 cloud is an opt-in escalation the user chooses, never something the app
 assumes.
@@ -19,7 +19,7 @@ The one thing every model backend has in common is a tiny config triple:
 { baseURL, model, apiKey? }  →  OpenAI-compatible client  →  caller
 ```
 
-Ghost standardizes on the **OpenAI-compatible** chat API
+Penumbra standardizes on the **OpenAI-compatible** chat API
 (`/v1/chat/completions`) because it is the lingua franca of local inference —
 llama.cpp's `llama-server`, Ollama, vLLM, and LM Studio all speak it natively —
 and cloud providers sit behind it directly or through a thin adapter. Nothing
@@ -64,7 +64,7 @@ All tiers sit behind the §1 seam.
   thinking off for latency (`--reasoning-budget 0`). Zero download, fully
   offline, private. Scope: guidance, Q&A, and single-step local tool calls
   against the task registry (§7).
-- **Tier 1 — Self-hosted (planned).** The Ghost server runs a larger model
+- **Tier 1 — Self-hosted (planned).** The Penumbra server runs a larger model
   (7–14B) for the full tool registry and multi-step agent work. Model size is
   a config knob, not a new tier.
 - **Opt-in cloud (planned).** Point the same seam at Anthropic / OpenAI /
@@ -171,7 +171,7 @@ Viable, with one technique doing most of the work, and a firm ceiling.
 `scripts/tool-eval.ts` (`pnpm tool-eval`) ran 26 labeled utterances against the
 bundled **Qwen3-1.7B Q4** (thinking off), using llama-server's
 grammar-constrained `tools` API. The harness imports the shipped tool contracts
-and system prompt from `@ghost/shared`, so it measures exactly the four tools
+and system prompt from `@penumbra/shared`, so it measures exactly the four tools
 the app exposes (`create_task`, `list_tasks`, `complete_task`, `delete_task`):
 
 | Metric | Result |

@@ -47,7 +47,7 @@ jobs:
 
       # Cache ~/.cargo and target/, keyed on Cargo.lock. First run compiles
       # every dependency (~ minutes); subsequent runs with an unchanged
-      # lockfile only recompile Ghost's own crate.
+      # lockfile only recompile Penumbra's own crate.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri

@@ -11,7 +11,7 @@ importers:
       '@biomejs/biome':
         specifier: ^2.5.3
         version: 2.5.3
-      '@ghost/shared':
+      '@penumbra/shared':
         specifier: workspace:^
         version: link:packages/shared
       '@types/node':
@@ -38,7 +38,7 @@ importers:
       '@fastify/cors':
         specifier: ^11.2.0
         version: 11.2.0
-      '@ghost/shared':
+      '@penumbra/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       better-sqlite3:
@@ -72,7 +72,7 @@ importers:
 
   apps/web:
     dependencies:
-      '@ghost/shared':
+      '@penumbra/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@sqlite.org/sqlite-wasm':
@@ -103,7 +103,7 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
-      '@ghost/server':
+      '@penumbra/server':
         specifier: workspace:^
         version: link:../server
       '@types/better-sqlite3':

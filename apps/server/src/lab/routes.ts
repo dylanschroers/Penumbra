@@ -5,7 +5,7 @@ import {
   finetuneRequest,
   type LabJob,
   SUITES,
-} from "@ghost/shared";
+} from "@penumbra/shared";
 import type { FastifyInstance } from "fastify";
 import { requireAuth } from "../http/auth";
 import { lmEvalAvailable, runBenchmark } from "./benchmark";
@@ -35,7 +35,7 @@ export function registerLabRoutes(
     studio = new StudioClient(),
     inferenceURL,
     apiKey = process.env.UNSLOTH_API_KEY,
-    token = process.env.GHOST_AGENT_TOKEN,
+    token = process.env.PENUMBRA_AGENT_TOKEN,
   }: LabRouteOptions,
 ): void {
   const preHandler = requireAuth(token);

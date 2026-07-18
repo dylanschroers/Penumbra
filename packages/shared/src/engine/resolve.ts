@@ -2,7 +2,7 @@ import type { AgentStatus, Engine } from "./types";
 
 // Which backend answers, when more than one could.
 //
-// Ghost has two: the embedded model (Tier 0, offline, always present) and a
+// Penumbra has two: the embedded model (Tier 0, offline, always present) and a
 // server-side one (Tier 1, stronger, sometimes present). Neither is
 // unconditionally right — Tier 1 is better when reachable, Tier 0 is the
 // fallback that keeps guidance working with no server at all. Rather than

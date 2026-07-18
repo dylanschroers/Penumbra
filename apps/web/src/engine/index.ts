@@ -5,7 +5,11 @@
 // tools are injected, which is what keeps it testable), and the wiring to the
 // client store happens here instead.
 
-import { type Engine, ResolvingEngine, type ToolBindings } from "@ghost/shared";
+import {
+  type Engine,
+  ResolvingEngine,
+  type ToolBindings,
+} from "@penumbra/shared";
 import { AGENT_SYSTEM, runTool, toolSpecs } from "../agent/tools";
 import { LocalEngine } from "./LocalEngine";
 import { RemoteEngine } from "./RemoteEngine";
@@ -20,7 +24,7 @@ export type {
   ChatRole,
   Engine,
   ToolBindings,
-} from "@ghost/shared";
+} from "@penumbra/shared";
 export { LocalEngine, type LocalEngineConfig } from "./LocalEngine";
 export { RemoteEngine, type RemoteEngineConfig } from "./RemoteEngine";
 

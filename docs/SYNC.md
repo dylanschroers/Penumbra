@@ -1,4 +1,4 @@
-# Ghost — Sync engine (Plane A)
+# Penumbra — Sync engine (Plane A)
 
 How owned, local-first data (today: tasks) reconciles across a user's devices.
 This is the design the code references throughout; read it before touching

@@ -1,4 +1,4 @@
-import type { AgentEvent, Engine } from "@ghost/shared";
+import type { AgentEvent, Engine } from "@penumbra/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerAgentRoutes } from "./routes";

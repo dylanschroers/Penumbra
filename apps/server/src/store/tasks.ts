@@ -5,7 +5,7 @@ import {
   type SyncTask,
   type UpdateTaskInput,
   updateTaskInput,
-} from "@ghost/shared";
+} from "@penumbra/shared";
 import type Database from "better-sqlite3";
 import type { z } from "zod";
 import type { TaskSyncStore } from "../sync/store";

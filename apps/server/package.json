@@ -1,5 +1,5 @@
 {
-  "name": "@ghost/server",
+  "name": "@penumbra/server",
   "version": "0.0.0",
   "private": true,
   "license": "Apache-2.0",
@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
-    "@ghost/shared": "workspace:*",
+    "@penumbra/shared": "workspace:*",
     "better-sqlite3": "^12.11.1",
     "fastify": "^5.2.0",
     "zod": "^3.24.1"

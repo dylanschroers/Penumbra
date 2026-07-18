@@ -1,4 +1,4 @@
-import { STORAGE_NAMESPACE } from "@ghost/shared";
+import { STORAGE_NAMESPACE } from "@penumbra/shared";
 import { useCallback, useEffect, useState } from "react";
 
 // Weather is Plane B data (docs/ARCHITECTURE.md): truth lives at the provider,

@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { SuiteDefinition } from "@ghost/shared";
+import type { SuiteDefinition } from "@penumbra/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseLmEvalResults, runBenchmark } from "./benchmark";
 
@@ -10,9 +10,9 @@ import { parseLmEvalResults, runBenchmark } from "./benchmark";
 // binary probe in benchmark.lmeval.test.ts.
 
 const personalSuite: SuiteDefinition = {
-  id: "ghost-tools-v1",
+  id: "penumbra-tools-v1",
   kind: "personal",
-  label: "Ghost tool calling",
+  label: "Penumbra tool calling",
   description: "",
   tasks: [],
 };

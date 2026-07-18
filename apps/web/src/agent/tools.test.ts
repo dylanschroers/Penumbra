@@ -1,4 +1,4 @@
-import type { TaskRow } from "@ghost/shared";
+import type { TaskRow } from "@penumbra/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getDb } from "../db/client";
 import { requestSync } from "../sync/SyncClient";
@@ -10,7 +10,7 @@ import { runTool } from "./tools";
 vi.mock("../db/client", () => ({ getDb: vi.fn() }));
 vi.mock("../sync/SyncClient", () => ({
   requestSync: vi.fn(),
-  SYNC_EVENT: "ghost:synced",
+  SYNC_EVENT: "penumbra:synced",
 }));
 
 const mockGetDb = vi.mocked(getDb);
@@ -74,9 +74,9 @@ describe("create_task", () => {
 
     let synced = false;
     const onSync = () => (synced = true);
-    window.addEventListener("ghost:synced", onSync);
+    window.addEventListener("penumbra:synced", onSync);
     const result = await runTool("create_task", { title: "buy milk" });
-    window.removeEventListener("ghost:synced", onSync);
+    window.removeEventListener("penumbra:synced", onSync);
 
     // priority defaulted by the Zod schema, not the runner.
     expect(db.createTask).toHaveBeenCalledWith({
@@ -156,8 +156,8 @@ describe("complete_task title matching", () => {
 
   it("reports no match without writing", async () => {
     const db = fakeDb({ listTasks: vi.fn().mockResolvedValue([]) });
-    expect(await runTool("complete_task", { title: "ghost" })).toBe(
-      'No task matching "ghost".',
+    expect(await runTool("complete_task", { title: "penumbra" })).toBe(
+      'No task matching "penumbra".',
     );
     expect(db.updateTask).not.toHaveBeenCalled();
   });

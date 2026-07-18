@@ -13,7 +13,7 @@ function isLoopback(ip: string): boolean {
 }
 
 /**
- * With GHOST_AGENT_TOKEN set, callers present it as a bearer token — that is
+ * With PENUMBRA_AGENT_TOKEN set, callers present it as a bearer token — that is
  * what makes these routes reachable from another device on the LAN. Without it,
  * only loopback is served, so an unconfigured server can never expose an
  * actuator to the network by accident. There is deliberately no open mode.
@@ -25,7 +25,7 @@ export function requireAuth(token: string | undefined) {
       await reply.code(403).send({
         error: "local_only",
         message:
-          "This route serves loopback only until GHOST_AGENT_TOKEN is set.",
+          "This route serves loopback only until PENUMBRA_AGENT_TOKEN is set.",
       });
       return;
     }

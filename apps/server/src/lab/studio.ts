@@ -1,4 +1,4 @@
-import { normalizeBaseUrl } from "@ghost/shared";
+import { normalizeBaseUrl } from "@penumbra/shared";
 
 // Typed client for Unsloth Studio's training, dataset, and export APIs.
 //

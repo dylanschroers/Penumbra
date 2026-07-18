@@ -1,9 +1,9 @@
-import { OpenAiEngine, type ToolBindings } from "@ghost/shared";
+import { OpenAiEngine, type ToolBindings } from "@penumbra/shared";
 
 // Tier 1: the server-side model, an Unsloth Studio instance on the GPU host.
 //
 // Studio is OpenAI-compatible — same /v1/chat/completions, same /v1/models,
-// same tools/tool_choice semantics — so this is @ghost/shared's OpenAiEngine
+// same tools/tool_choice semantics — so this is @penumbra/shared's OpenAiEngine
 // plus an address, a model, and a bearer token. That is the whole engine. The
 // branch this work salvages reached Studio through @anthropic-ai/sdk and an
 // `unsloth connect claude` handshake; none of that is needed on the OpenAI seam
@@ -11,7 +11,7 @@ import { OpenAiEngine, type ToolBindings } from "@ghost/shared";
 //
 // One constraint that is easy to violate by accident: **never send
 // `enable_tools` or `mcp_enabled`.** Those ask Studio to run *its own* tool
-// loop against its MCP registry. Ghost executes tools itself, server-side,
+// loop against its MCP registry. Penumbra executes tools itself, server-side,
 // against the sync store (plan §2), and Studio only passes client-supplied
 // tools through when neither flag is set — see
 // `_explicit_studio_tool_loop_requested` and the `_sf_client_tools` gate in

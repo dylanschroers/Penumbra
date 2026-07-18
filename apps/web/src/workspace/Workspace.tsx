@@ -41,7 +41,7 @@ export function Workspace() {
     <main className="workspace">
       <header className="workspace__bar">
         <div className="workspace__brand">
-          <h1 className="workspace__title">Ghost</h1>
+          <h1 className="workspace__title">Penumbra</h1>
           <SyncStatusLight />
         </div>
         <div className="workspace__actions">

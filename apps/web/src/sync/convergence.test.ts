@@ -9,7 +9,7 @@
 // serverId. SyncClient's own wrapper (fetch, timers, status light) is
 // browser-bound and stays covered by app runs, not this test.
 
-import { createTaskSyncStore, type TaskSyncStore } from "@ghost/server/sync";
+import { createTaskSyncStore, type TaskSyncStore } from "@penumbra/server/sync";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DbApi } from "../db/api";

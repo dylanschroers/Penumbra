@@ -3,7 +3,7 @@
 // The server is the merge authority, but the merge itself lives in the store.
 // See docs/SYNC.md for the protocol.
 
-import { pushTasksInput } from "@ghost/shared";
+import { pushTasksInput } from "@penumbra/shared";
 import type { FastifyInstance } from "fastify";
 import type { TaskSyncStore } from "./store";
 

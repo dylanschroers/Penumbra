@@ -6,8 +6,8 @@ describe("normalizeBaseUrl", () => {
     expect(normalizeBaseUrl("http://localhost:3000")).toBe(
       "http://localhost:3000",
     );
-    expect(normalizeBaseUrl("https://ghost.example")).toBe(
-      "https://ghost.example",
+    expect(normalizeBaseUrl("https://penumbra.example")).toBe(
+      "https://penumbra.example",
     );
   });
 

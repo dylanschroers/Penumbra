@@ -1,4 +1,4 @@
-import type { BenchmarkResult } from "@ghost/shared";
+import type { BenchmarkResult } from "@penumbra/shared";
 import Database from "better-sqlite3";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createLabStore, type LabStore } from "./jobs";
@@ -9,7 +9,7 @@ beforeEach(() => {
 });
 
 const result = (over: Partial<BenchmarkResult> = {}): BenchmarkResult => ({
-  suite: "ghost-tools-v1",
+  suite: "penumbra-tools-v1",
   suiteKind: "personal",
   model: "qwen",
   samplesPerTask: 20,
@@ -99,7 +99,7 @@ describe("scores", () => {
     const [stored] = store.listScores();
 
     expect(stored).toMatchObject({
-      suite: "ghost-tools-v1",
+      suite: "penumbra-tools-v1",
       suiteKind: "personal",
       model: "qwen",
       samplesPerTask: 20,

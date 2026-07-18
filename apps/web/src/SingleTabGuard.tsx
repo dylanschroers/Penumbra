@@ -6,8 +6,8 @@ import { closeDb } from "./db/client";
 // NoModificationAllowedError. We coordinate with the Web Locks API: the first tab
 // holds an exclusive lock and owns the store; other tabs render a takeover screen
 // instead of the app (so their worker never opens the DB — see the lazy getDb()).
-const LOCK_NAME = "ghost-db-owner";
-const CHANNEL_NAME = "ghost-db-control";
+const LOCK_NAME = "penumbra-db-owner";
+const CHANNEL_NAME = "penumbra-db-control";
 const TAKEOVER = "request-takeover";
 
 type Status = "pending" | "owner" | "blocked";
@@ -90,7 +90,7 @@ function TabBlocked({ onTakeOver }: { onTakeOver: () => void }) {
   return (
     <main className="tab-blocked">
       <div className="tab-blocked__card">
-        <h1 className="tab-blocked__title">Ghost is open in another tab</h1>
+        <h1 className="tab-blocked__title">Penumbra is open in another tab</h1>
         <p className="tab-blocked__text">
           The local store can only be used by one tab at a time. Keep using the
           other tab, or take over here.

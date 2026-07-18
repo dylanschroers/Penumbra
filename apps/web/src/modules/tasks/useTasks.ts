@@ -1,4 +1,8 @@
-import type { CreateTaskInput, TaskRow, UpdateTaskInput } from "@ghost/shared";
+import type {
+  CreateTaskInput,
+  TaskRow,
+  UpdateTaskInput,
+} from "@penumbra/shared";
 import { useCallback, useEffect, useState } from "react";
 import { getDb } from "../../db/client";
 import { requestSync, SYNC_EVENT } from "../../sync/SyncClient";

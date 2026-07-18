@@ -1,4 +1,4 @@
-import { STORAGE_NAMESPACE } from "@ghost/shared";
+import { STORAGE_NAMESPACE } from "@penumbra/shared";
 // Import from the meta package (a direct dependency) rather than the individual
 // @uiw/react-color-* packages, which are transitive and not resolvable under
 // pnpm's strict node_modules. It re-exports the components and color-convert.

@@ -1,4 +1,4 @@
-import type { ToolBindings } from "@ghost/shared";
+import type { ToolBindings } from "@penumbra/shared";
 import Database from "better-sqlite3";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createServerTaskStore, type ServerTaskStore } from "../store/tasks";
@@ -97,8 +97,8 @@ describe("complete_task and delete_task", () => {
 
   it("reports a miss without touching anything", async () => {
     await run("create_task", { title: "keep" });
-    expect(await run("complete_task", { title: "ghost" })).toBe(
-      'No task matching "ghost".',
+    expect(await run("complete_task", { title: "penumbra" })).toBe(
+      'No task matching "penumbra".',
     );
     expect(store.listTasks()[0]?.status).toBe("todo");
   });

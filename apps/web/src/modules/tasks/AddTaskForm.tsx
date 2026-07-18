@@ -1,4 +1,4 @@
-import type { CreateTaskInput, TaskPriority } from "@ghost/shared";
+import type { CreateTaskInput, TaskPriority } from "@penumbra/shared";
 import { type FormEvent, useState } from "react";
 
 // Owns only its own field state. On submit it builds a CreateTaskInput and

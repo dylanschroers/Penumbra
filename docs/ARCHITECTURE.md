@@ -1,4 +1,4 @@
-# Ghost — Architecture
+# Penumbra — Architecture
 
 What is built and why. Everything here in the present tense exists in the repo;
 future work lives in [Planned](#planned) and nowhere else. Deep dives:
@@ -157,7 +157,7 @@ databases, secrets vaults, Kubernetes.
 ## Monorepo layout
 
 ```
-ghost/
+penumbra/
 ├── packages/shared/src/
 │   ├── schema/          # Drizzle table defs (SQLite dialect)
 │   ├── types/           # shared structural types
@@ -208,4 +208,4 @@ Current posture, honestly stated:
 - The agent's tools carry declared permission levels, but enforcement, audit
   logging, OAuth, and encrypted credential storage are all **planned** — they
   arrive with the server modules that need them (identity, integrations,
-  audit). Until then Ghost holds no third-party credentials at all.
+  audit). Until then Penumbra holds no third-party credentials at all.

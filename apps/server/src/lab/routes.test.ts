@@ -79,7 +79,7 @@ describe("GET /lab/status", () => {
 
     expect(body.studio).toBe("ready");
     expect(body.suites.map((s: { id: string }) => s.id)).toContain(
-      "ghost-tools-v1",
+      "penumbra-tools-v1",
     );
   });
 
@@ -261,7 +261,7 @@ describe("POST /lab/benchmark", () => {
     const res = await app.inject({
       method: "POST",
       url: "/lab/benchmark",
-      payload: { model: "q", suite: "ghost-tools-v1", samplesPerTask: 1 },
+      payload: { model: "q", suite: "penumbra-tools-v1", samplesPerTask: 1 },
     });
     expect(res.statusCode).toBe(202);
   });

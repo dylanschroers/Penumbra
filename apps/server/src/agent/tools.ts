@@ -10,7 +10,7 @@ import {
   type ToolSpec,
   taskTools,
   toToolSpec,
-} from "@ghost/shared";
+} from "@penumbra/shared";
 import type { z } from "zod";
 import type { ServerTaskStore } from "../store/tasks";
 

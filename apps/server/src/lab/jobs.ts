@@ -5,7 +5,7 @@ import type {
   LabJobKind,
   LabJobState,
   LabRun,
-} from "@ghost/shared";
+} from "@penumbra/shared";
 import type Database from "better-sqlite3";
 
 // Job, run, and score records for the Model Lab.

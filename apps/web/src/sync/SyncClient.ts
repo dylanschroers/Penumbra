@@ -4,7 +4,7 @@
 // on startup, on an interval, when the network returns, and (debounced) right
 // after a local edit. See docs/SYNC.md.
 
-import { normalizeBaseUrl, type PullTasksResult } from "@ghost/shared";
+import { normalizeBaseUrl, type PullTasksResult } from "@penumbra/shared";
 import { getDb } from "../db/client";
 
 // Normalized because a scheme-less VITE_SERVER_URL (e.g. "192.168.1.50:3000")
@@ -20,12 +20,12 @@ const DEBOUNCE_MS = 800;
 /** Fired on window after a pull actually changed local data, so the UI can
  * re-read. Carried as an event (not a callback) to keep sync decoupled from
  * React. */
-export const SYNC_EVENT = "ghost:synced";
+export const SYNC_EVENT = "penumbra:synced";
 
 /** Fired on window when the connection status changes; detail is a SyncStatus.
  * "pending" until the first round settles, then whatever the last round
  * proved. Same event-not-callback reasoning as SYNC_EVENT. */
-export const SYNC_STATUS_EVENT = "ghost:sync-status";
+export const SYNC_STATUS_EVENT = "penumbra:sync-status";
 
 export type SyncStatus = "pending" | "connected" | "disconnected";
 

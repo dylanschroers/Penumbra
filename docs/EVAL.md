@@ -1,6 +1,6 @@
-# Ghost — Evaluation, Benchmarking, and Finetuning
+# Penumbra — Evaluation, Benchmarking, and Finetuning
 
-How Ghost measures whether a model is good enough to be its agent, and how a
+How Penumbra measures whether a model is good enough to be its agent, and how a
 benchmark run doubles as the seed for finetuning one. Companion to
 [AGENT_DESIGN.md](AGENT_DESIGN.md) §7 and [UNSLOTH_TIER1_PLAN.md](UNSLOTH_TIER1_PLAN.md).
 
@@ -95,14 +95,14 @@ mistakes is worse than not training at all.
 ## 4. Where this sits in the bigger picture
 
 This is the **personal** half of a two-family benchmark
-([model_lab_plan.md](model_lab_plan.md) M3): it grades the model on Ghost's own
+([model_lab_plan.md](model_lab_plan.md) M3): it grades the model on Penumbra's own
 job. The **general** half runs academic suites via `lm-evaluation-harness` and
 grades raw capability. Both are first-class, and they are never averaged
 together — a model can gain reasoning ability while getting worse at calling
 `create_task`, and a single blended number would hide exactly that.
 
 A useful property of this half: because scoring is pure TypeScript in
-`@ghost/shared`, the server can run it **in-process** as a Model Lab job. No
+`@penumbra/shared`, the server can run it **in-process** as a Model Lab job. No
 Python, no subprocess, and no way for the benchmark to drift from the tool specs
 the app actually ships.
 
@@ -114,7 +114,7 @@ reported by `GET /lab/status`. Install it into a venv rather than system Python:
 ```bash
 python3 -m venv .venv-lmeval
 .venv-lmeval/bin/pip install 'lm-eval[api]'
-LM_EVAL_BIN=$PWD/.venv-lmeval/bin/lm_eval pnpm --filter @ghost/server dev
+LM_EVAL_BIN=$PWD/.venv-lmeval/bin/lm_eval pnpm --filter @penumbra/server dev
 ```
 
 **The `[api]` extra is required, not optional.** A plain `pip install lm-eval`

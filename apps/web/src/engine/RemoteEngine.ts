@@ -3,11 +3,11 @@ import type {
   AgentStatus,
   ChatMessage,
   Engine,
-} from "@ghost/shared";
-import { normalizeBaseUrl } from "@ghost/shared";
+} from "@penumbra/shared";
+import { normalizeBaseUrl } from "@penumbra/shared";
 import { flushSync, requestSync } from "../sync/SyncClient";
 
-// Tier 1: the model runs on a Ghost server, and so do its tools. This engine is
+// Tier 1: the model runs on a Penumbra server, and so do its tools. This engine is
 // pure transport — it holds no tool bindings, because the server owns the
 // tools, the prompt, and execution (docs/UNSLOTH_TIER1_PLAN.md §2). That is the
 // asymmetry the Engine interface was reshaped for: runAgent takes only
@@ -17,7 +17,7 @@ const DEFAULT_URL = import.meta.env.VITE_SERVER_URL ?? "http://127.0.0.1:3000";
 
 export interface RemoteEngineConfig {
   baseURL?: string;
-  /** Matches the server's GHOST_AGENT_TOKEN; unset works for a loopback server. */
+  /** Matches the server's PENUMBRA_AGENT_TOKEN; unset works for a loopback server. */
   token?: string;
 }
 

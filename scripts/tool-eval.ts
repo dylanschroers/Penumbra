@@ -2,7 +2,7 @@
 // model turns a natural request into the RIGHT tool call with the RIGHT args.
 // It does not execute tools — it only checks what the model emits.
 //
-// The cases, scoring, and training-set logic all live in @ghost/shared, so this
+// The cases, scoring, and training-set logic all live in @penumbra/shared, so this
 // script is just IO: ask the model, score, print, record. That keeps the eval
 // from drifting from the product (it imports the same specs and prompt the app
 // ships) and keeps the metrics unit-tested.
@@ -27,7 +27,7 @@ import {
   toRecord,
   toToolSpec,
   toTrainingExamples,
-} from "@ghost/shared";
+} from "@penumbra/shared";
 
 // Named BASE_URL so it doesn't shadow the global URL constructor.
 const BASE_URL = process.env.LLM_URL ?? "http://127.0.0.1:8080";
@@ -172,7 +172,7 @@ const main = async (): Promise<void> => {
   );
 
   // The same run doubles as a finetuning seed set — only the turns the model
-  // got right (see @ghost/shared → eval/trainset).
+  // got right (see @penumbra/shared → eval/trainset).
   const { examples, skipped } = toTrainingExamples(scored, AGENT_SYSTEM);
   writeFileSync(join(BENCH_DIR, "trainset.jsonl"), `${toJsonl(examples)}\n`);
   console.log(

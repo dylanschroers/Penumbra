@@ -1059,17 +1059,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ghost-desktop"
-version = "0.1.0"
-dependencies = [
- "rusqlite",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-shell",
-]
-
-[[package]]
 name = "gio"
 version = "0.18.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2179,6 +2168,17 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "penumbra-desktop"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-shell",
 ]
 
 [[package]]

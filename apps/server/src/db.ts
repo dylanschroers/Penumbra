@@ -4,7 +4,7 @@
 // in-memory one in tests — as a parameter. A later move to Postgres is
 // contained to this module plus the store.
 
-import { SERVER_DB_FILE } from "@ghost/shared";
+import { SERVER_DB_FILE } from "@penumbra/shared";
 import Database from "better-sqlite3";
 
 export const sqlite: Database.Database = new Database(

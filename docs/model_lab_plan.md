@@ -1,4 +1,4 @@
-# Ghost Model Lab: fine-tuning + benchmarking pipeline (v1, manual)
+# Penumbra Model Lab: fine-tuning + benchmarking pipeline (v1, manual)
 
 > Status: **M1–M4 implemented 2026-07-18.** Drafted 2026-07-14.
 > **Reconciled 2026-07-18** against the Tier-1 agent work
@@ -8,13 +8,13 @@
 
 ## Context
 
-Ghost's next major addition: fine-tune local models and benchmark them, driven from the Ghost app. The Unsloth Studio backend Ghost connects to turns out to be a full training server with a REST API, so the training half is orchestration, not ML plumbing.
+Penumbra's next major addition: fine-tune local models and benchmark them, driven from the Penumbra app. The Unsloth Studio backend Penumbra connects to turns out to be a full training server with a REST API, so the training half is orchestration, not ML plumbing.
 
-**[reconciled]** This was written expecting `apps/server/src/agent/unsloth.ts` and its `unsloth connect` handshake from the `feat/ai-sidebar-unsloth` branch. That branch was never merged — the Tier-1 plan dropped the handshake as unnecessary on the OpenAI seam — so **that file does not exist**. Studio credentials now come from environment configuration in [apps/server/src/agent/UnslothEngine.ts](../apps/server/src/agent/UnslothEngine.ts): `UNSLOTH_BASE_URL`, `UNSLOTH_API_KEY`, `UNSLOTH_MODEL`. The Model Lab reads the same three variables rather than shelling out to the CLI. This is strictly simpler and removes the CLI from the runtime dependency set; the only thing lost is auto-discovery of the key, which the operator now pastes into `.env` once. Benchmarking has no Studio support, so Ghost drives EleutherAI's `lm-evaluation-harness` as a subprocess against Studio's OpenAI-compatible endpoint.
+**[reconciled]** This was written expecting `apps/server/src/agent/unsloth.ts` and its `unsloth connect` handshake from the `feat/ai-sidebar-unsloth` branch. That branch was never merged — the Tier-1 plan dropped the handshake as unnecessary on the OpenAI seam — so **that file does not exist**. Studio credentials now come from environment configuration in [apps/server/src/agent/UnslothEngine.ts](../apps/server/src/agent/UnslothEngine.ts): `UNSLOTH_BASE_URL`, `UNSLOTH_API_KEY`, `UNSLOTH_MODEL`. The Model Lab reads the same three variables rather than shelling out to the CLI. This is strictly simpler and removes the CLI from the runtime dependency set; the only thing lost is auto-discovery of the key, which the operator now pastes into `.env` once. Benchmarking has no Studio support, so Penumbra drives EleutherAI's `lm-evaluation-harness` as a subprocess against Studio's OpenAI-compatible endpoint.
 
 **Decisions:**
 
-- Harness: `lm-evaluation-harness` (Python CLI, spawned by Ghost server, JSON results parsed).
+- Harness: `lm-evaluation-harness` (Python CLI, spawned by Penumbra server, JSON results parsed).
 - Scope: manual pipeline first (buttons + job tracking + history). Automation later.
 - UI: a "Model Lab" workspace module registered like existing modules.
 - Benchmark depth: fixed-seed subsets (~100–200 samples/task) by default, full runs optional. Scores labeled as subset scores.
@@ -23,7 +23,7 @@ Ghost's next major addition: fine-tune local models and benchmark them, driven f
 
 (Confirmed by reading the Unsloth Studio backend source, `studio/backend` in the unsloth repo.)
 
-1. **Auth**: the `sk-unsloth-*` key is an **unscoped admin API key**; it works on `/api/train/*`, `/api/datasets/*`, `/api/export/*`, and `/v1/*` alike. This is the fact the whole design leans on and it still holds — one key covers training and inference. **[reconciled]** ~~Ghost's existing `getConnection()` already obtains it~~ — there is no `getConnection()`. Read `UNSLOTH_API_KEY` from the environment, the same value `UnslothEngine` already uses for `/v1`. Obtain it once from `unsloth run`'s console output or Studio → Settings → API.
+1. **Auth**: the `sk-unsloth-*` key is an **unscoped admin API key**; it works on `/api/train/*`, `/api/datasets/*`, `/api/export/*`, and `/v1/*` alike. This is the fact the whole design leans on and it still holds — one key covers training and inference. **[reconciled]** ~~Penumbra's existing `getConnection()` already obtains it~~ — there is no `getConnection()`. Read `UNSLOTH_API_KEY` from the environment, the same value `UnslothEngine` already uses for `/v1`. Obtain it once from `unsloth run`'s console output or Studio → Settings → API.
 2. **Training routes** (prefix `/api/train`): `POST /start` (payload `TrainingStartRequest`: `model_name`, `training_type: "LoRA/QLoRA"`, `format_type`, `learning_rate`, `batch_size`, `hf_dataset` or `local_datasets: [path]`, `max_steps`/`num_epochs`, LoRA fields with sane defaults), `GET /status`, `GET /progress` (**SSE**: `progress`/`heartbeat`/`complete`/`error` events with step/loss/eta), `GET /metrics`, `POST /stop`, `GET /runs`, `GET /runs/{id}`.
 3. **One training run at a time** (Studio enforces it; second `/start` returns `status:"error"`). Starting training may **evict the loaded inference model** if VRAM is tight (12 GB TITAN Xp: assume it will).
 4. **Datasets**: `POST /api/datasets/upload` (multipart; `.csv/.json/.jsonl/.parquet`) → `{stored_path}` → pass in `local_datasets`. Or pass an HF repo id via `hf_dataset`. `POST /api/datasets/check-format` validates before training.
@@ -33,7 +33,7 @@ Ghost's next major addition: fine-tune local models and benchmark them, driven f
    - Use **generative task variants** (CoT + answer extraction) which don't need logprobs: `mmlu_pro` (generative CoT in lm-eval), `gpqa_*_cot_zeroshot`, `bbh_cot_fewshot`, `ifeval`, `gsm8k`, `math_hard`. MuSR is loglikelihood-only → include only if the GGUF `/v1/completions` logprobs path proves out during implementation; otherwise drop it.
 7. Hardware: the **server host's** GPU — TITAN Xp 12 GB, **Pascal** (no bf16,
    fp16 only) — constrains v1 to ≤8B models, QLoRA only, `load_in_4bit: true`.
-   **[resolved 2026-07-18]** Studio runs on the **Ghost server host**, the
+   **[resolved 2026-07-18]** Studio runs on the **Penumbra server host**, the
    machine with the powerful GPU, and is reached *only* through the server. A
    development laptop's GPU (this one reports a GTX 970M 3 GB) is irrelevant to
    this constraint: it never runs Studio. Confirm the server host's actual card
@@ -41,7 +41,7 @@ Ghost's next major addition: fine-tune local models and benchmark them, driven f
 
 ## Deployment topology (decided)
 
-Studio is **co-located with the Ghost server** on the GPU host, and every client
+Studio is **co-located with the Penumbra server** on the GPU host, and every client
 reaches it *through* the server. This is the same shape the Tier-1 agent already
 takes, and the reasons compound:
 
@@ -59,13 +59,13 @@ takes, and the reasons compound:
   same host for the same reason.
 
 **Rule this implies:** no client-side code ever holds a Studio URL or key.
-`RemoteEngine` already obeys this — it knows only the Ghost server. Model Lab's
+`RemoteEngine` already obeys this — it knows only the Penumbra server. Model Lab's
 UI must too: it talks to `/lab/*`, never to Studio.
 
 ## Architecture
 
 ```
-Model Lab module (web)  ──REST + SSE──▶  Ghost server /lab/* routes
+Model Lab module (web)  ──REST + SSE──▶  Penumbra server /lab/* routes
                                              │
                               ┌──────────────┼──────────────────┐
                               ▼              ▼                  ▼
@@ -75,7 +75,7 @@ Model Lab module (web)  ──REST + SSE──▶  Ghost server /lab/* routes
                        /export, /v1)     Studio /v1)
 ```
 
-Ghost server owns: the Studio bearer, a **job record** per pipeline stage (SQLite), SSE relay of progress to the client, and lm-eval spawning + result parsing. The client stays a thin shell, same as `useAgent`/`useTasks`.
+Penumbra server owns: the Studio bearer, a **job record** per pipeline stage (SQLite), SSE relay of progress to the client, and lm-eval spawning + result parsing. The client stays a thin shell, same as `useAgent`/`useTasks`.
 
 ## Implementation
 
@@ -86,7 +86,7 @@ Ghost server owns: the Studio bearer, a **job record** per pipeline stage (SQLit
 - `apps/server/src/lab/jobs.ts`: job table + helpers in the existing better-sqlite3 db ([apps/server/src/db.ts](../apps/server/src/db.ts) pattern). Tables: `lab_jobs`, `lab_runs` (fine-tune runs: base model, dataset, hyperparams, output_dir, gguf_path), `lab_scores` (benchmark results keyed by model ref + suite + samples).
 - Routes in a new `apps/server/src/lab/routes.ts` registered from `main.ts` (mirror `registerTaskSyncRoutes`): `POST /lab/finetune`, `POST /lab/datasets/upload` (multipart proxy to Studio), `POST /lab/export`, `POST /lab/benchmark`, `GET /lab/jobs`, `GET /lab/jobs/:id/events` (SSE relay), `GET /lab/runs`, `GET /lab/scores`.
 - **[reconciled]** The SSE write pattern now lives in [agent/routes.ts](../apps/server/src/agent/routes.ts), not `main.ts` — copy `send()` and the `req.raw.on("close")` abort wiring from `POST /agent/chat`.
-- **[reconciled — new requirement]** These routes must sit behind the **same gate** as the agent routes (`requireAuth` in `agent/routes.ts`: bearer token when `GHOST_AGENT_TOKEN` is set, loopback only otherwise). `/lab/*` is a strictly more dangerous actuator than `/agent/chat` — it spawns training jobs, writes files, and can evict the loaded model. It must never be the one unauthenticated endpoint on the box. Factor `requireAuth` out of `agent/routes.ts` into something both can import.
+- **[reconciled — new requirement]** These routes must sit behind the **same gate** as the agent routes (`requireAuth` in `agent/routes.ts`: bearer token when `PENUMBRA_AGENT_TOKEN` is set, loopback only otherwise). `/lab/*` is a strictly more dangerous actuator than `/agent/chat` — it spawns training jobs, writes files, and can evict the loaded model. It must never be the one unauthenticated endpoint on the box. Factor `requireAuth` out of `agent/routes.ts` into something both can import.
 
 ### M2 — Fine-tune + export flow (server)
 
@@ -100,11 +100,11 @@ Ghost server owns: the Studio bearer, a **job record** per pipeline stage (SQLit
 on how it performs *everywhere* and how it performs *here*. These answer
 different questions and neither substitutes for the other:
 
-| | **General** (`lm-eval`) | **Personal** (Ghost tool-calling) |
+| | **General** (`lm-eval`) | **Personal** (Penumbra tool-calling) |
 |---|---|---|
 | Question | How capable is this model at all? | Does it work as *my* assistant? |
 | Source | EleutherAI academic suites | `packages/shared/src/eval`, the shipped tool contracts |
-| Comparable to | Public leaderboard numbers | Only to Ghost's own history |
+| Comparable to | Public leaderboard numbers | Only to Penumbra's own history |
 | Runs as | Spawned `lm_eval` Python subprocess | **In-process TypeScript** — the logic is already pure and imported |
 | Catches | Reasoning/knowledge regressions | Wrong tool, bad args, firing during chit-chat |
 

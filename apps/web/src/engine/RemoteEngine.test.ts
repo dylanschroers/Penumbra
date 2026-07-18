@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@ghost/shared";
+import type { AgentEvent } from "@penumbra/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RemoteEngine } from "./RemoteEngine";
 

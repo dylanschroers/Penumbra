@@ -3,7 +3,7 @@
 // talks to it via Comlink — see ./client.ts. All database logic lives in
 // ./api.ts; this file supplies only the storage: an OPFS-backed exec primitive.
 
-import { LOCAL_DB_FILE, LOCAL_DB_POOL } from "@ghost/shared";
+import { LOCAL_DB_FILE, LOCAL_DB_POOL } from "@penumbra/shared";
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import * as Comlink from "comlink";
 import { createDbApi } from "./api";
@@ -45,7 +45,7 @@ async function init(): Promise<(sql: string, bind?: unknown[]) => unknown[][]> {
     sqliteDb = new poolUtil.OpfsSAHPoolDb(`/${LOCAL_DB_FILE}`);
   } catch (err) {
     console.error(
-      "[ghost] OPFS is unavailable — the local store cannot persist here:",
+      "[penumbra] OPFS is unavailable — the local store cannot persist here:",
       err,
     );
     throw err;

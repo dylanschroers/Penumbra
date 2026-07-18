@@ -12,7 +12,7 @@
 // 0001_add_sync_columns. A later move to Postgres is contained to this module.
 
 import { randomUUID } from "node:crypto";
-import type { SyncTask } from "@ghost/shared";
+import type { SyncTask } from "@penumbra/shared";
 import type Database from "better-sqlite3";
 
 export interface TaskSyncStore {

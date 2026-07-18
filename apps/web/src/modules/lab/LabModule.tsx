@@ -1,4 +1,4 @@
-import type { BenchmarkResult, DatasetSource, LabJob } from "@ghost/shared";
+import type { BenchmarkResult, DatasetSource, LabJob } from "@penumbra/shared";
 import { type FormEvent, useState } from "react";
 import { useLab } from "./useLab";
 
@@ -78,7 +78,7 @@ export function LabModule() {
   const [dataset, setDataset] = useState("");
   const [maxSteps, setMaxSteps] = useState(60);
   const [benchModel, setBenchModel] = useState("");
-  const [suite, setSuite] = useState("ghost-tools-v1");
+  const [suite, setSuite] = useState("penumbra-tools-v1");
   const [samples, setSamples] = useState(20);
 
   const suites = lab.status?.suites ?? [];

@@ -1,12 +1,12 @@
-import { OpenAiEngine, type ToolBindings } from "@ghost/shared";
+import { OpenAiEngine, type ToolBindings } from "@penumbra/shared";
 
 // Tier 0: the embedded model. Talks *directly* to a local OpenAI-compatible
-// server (llama.cpp's `llama-server`), with no Ghost server in the path — this
+// server (llama.cpp's `llama-server`), with no Penumbra server in the path — this
 // is what makes guidance work fully offline. On desktop/mobile the app spawns
 // and bundles that server (see docs/AGENT_DESIGN.md → "Local model delivery");
 // here we only need its address.
 //
-// The protocol itself lives in @ghost/shared's OpenAiEngine, shared with the
+// The protocol itself lives in @penumbra/shared's OpenAiEngine, shared with the
 // server's Tier-1 engine. All this class adds is the Vite-side configuration,
 // which cannot live in the shared package because that package also runs on the
 // server (docs/UNSLOTH_TIER1_PLAN.md → Phase 2).

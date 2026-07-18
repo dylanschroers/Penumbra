@@ -1,4 +1,4 @@
-import type { AgentEvent, ChatMessage, Engine } from "@ghost/shared";
+import type { AgentEvent, ChatMessage, Engine } from "@penumbra/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireAuth } from "../http/auth";
@@ -27,7 +27,7 @@ export interface AgentRouteOptions {
 
 export function registerAgentRoutes(
   app: FastifyInstance,
-  { engine, token = process.env.GHOST_AGENT_TOKEN }: AgentRouteOptions,
+  { engine, token = process.env.PENUMBRA_AGENT_TOKEN }: AgentRouteOptions,
 ): void {
   const preHandler = requireAuth(token);
 

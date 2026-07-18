@@ -232,7 +232,7 @@ describe("configuration", () => {
 
   // Unsloth Studio hands client-supplied tools through to the model only while
   // neither flag is set; either one asks Studio to run its OWN tool loop
-  // against its MCP registry, silently taking the turn away from Ghost's
+  // against its MCP registry, silently taking the turn away from Penumbra's
   // server-side tools (studio/backend/routes/inference.py →
   // _explicit_studio_tool_loop_requested). Nothing should ever add these.
   it("never asks the backend to run its own tool loop", async () => {

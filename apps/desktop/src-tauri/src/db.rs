@@ -31,7 +31,7 @@ pub fn open(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let path = dir.join("local.db");
     let conn = Connection::open(&path)?;
     app.manage(Db(Mutex::new(conn)));
-    eprintln!("[ghost] database: {}", path.display());
+    eprintln!("[penumbra] database: {}", path.display());
     Ok(())
 }
 

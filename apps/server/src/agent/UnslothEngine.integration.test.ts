@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { taskTools, toToolSpec } from "@ghost/shared";
+import { taskTools, toToolSpec } from "@penumbra/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UnslothEngine } from "./UnslothEngine";
 

@@ -13,7 +13,7 @@ import {
   type TaskScore,
   taskTools,
   toToolSpec,
-} from "@ghost/shared";
+} from "@penumbra/shared";
 
 // Runs both benchmark families and reduces them to one BenchmarkResult, which
 // is what lets a single table hold both and a single view compare them
@@ -21,7 +21,7 @@ import {
 //
 // They run differently on purpose. The general suite shells out to lm-eval
 // because it is Python. The personal suite is a direct call, because its
-// scoring is already pure TypeScript in @ghost/shared — no subprocess, no
+// scoring is already pure TypeScript in @penumbra/shared — no subprocess, no
 // Python, and no way to drift from the tool specs the app ships.
 
 export interface BenchmarkOptions {
@@ -219,7 +219,7 @@ export async function lmEvalAvailable(): Promise<boolean> {
 }
 
 async function runGeneralSuite(opts: BenchmarkOptions): Promise<TaskScore[]> {
-  const outDir = await mkdtemp(join(tmpdir(), "ghost-lmeval-"));
+  const outDir = await mkdtemp(join(tmpdir(), "penumbra-lmeval-"));
   const args = [
     "--model",
     "local-chat-completions",
