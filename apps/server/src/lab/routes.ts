@@ -19,6 +19,9 @@ import { StudioClient, TrainingBusyError } from "./studio";
 // Behind the same gate as the agent routes, and for stronger reasons: these
 // spawn training, write files, and can evict the loaded model.
 
+/** Quantizing a large model is slow, but not unbounded. */
+const EXPORT_TIMEOUT_MS = 60 * 60 * 1000;
+
 export interface LabRouteOptions {
   store: LabStore;
   studio?: StudioClient;
@@ -201,23 +204,37 @@ export function registerLabRoutes(
 
     const job = store.createJob("export");
     runJob(job, async (report) => {
+      // Baseline the op counter *before* starting. Studio reports the outcome
+      // of the last operation, so without this a previous export's "success"
+      // reads as ours and the job finishes instantly against a stale artifact.
+      const baseline = (await studio.exportStatus()).last_op_seq ?? 0;
+
       report({ detail: "loading checkpoint" });
       await studio.loadCheckpoint(run.outputDir as string);
       const saveDir = `${run.outputDir}/gguf`;
       report({ detail: "exporting gguf" });
       await studio.exportGguf(saveDir, parsed.data.quantization);
 
-      // Export is asynchronous inside Studio; poll until it settles.
+      // Export runs asynchronously inside Studio, and there is no `status`
+      // field to poll: settled means "not active, and the op counter moved".
+      const deadline = Date.now() + EXPORT_TIMEOUT_MS;
       for (;;) {
-        const status = await studio.exportStatus();
-        if (status.status === "complete" || status.status === "completed")
-          break;
-        if (status.status === "error") {
-          throw new Error(status.message ?? "export failed");
+        const s = await studio.exportStatus();
+        if (!s.is_export_active && (s.last_op_seq ?? 0) > baseline) {
+          if (s.last_op_status === "success") {
+            store.setRunArtifacts(run.id, {
+              ggufPath: s.last_op_output_path ?? saveDir,
+            });
+            return;
+          }
+          throw new Error(
+            s.last_op_error ?? `export ${s.last_op_status ?? "failed"}`,
+          );
         }
+        // Bounded: a counter that never moves must not poll forever.
+        if (Date.now() > deadline) throw new Error("export timed out");
         await new Promise((r) => setTimeout(r, 1000));
       }
-      store.setRunArtifacts(run.id, { ggufPath: saveDir });
     });
 
     return reply.code(202).send({ jobId: job.id });

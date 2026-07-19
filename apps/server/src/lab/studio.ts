@@ -35,6 +35,23 @@ export interface TrainingStart {
   load_in_4bit: boolean;
 }
 
+/**
+ * Studio's export state. There is deliberately no `status` field: progress is
+ * reported as "is an export running" plus the outcome of the last operation.
+ * Verified against a live Studio — an earlier version of this client polled a
+ * non-existent `status` and would have waited forever.
+ */
+export interface ExportStatus {
+  is_export_active?: boolean;
+  /** Monotonic op counter. Compare against a pre-export baseline to tell our
+   *  operation apart from one that already finished. */
+  last_op_seq?: number;
+  /** "success" | "error" | "cancelled". */
+  last_op_status?: string | null;
+  last_op_output_path?: string | null;
+  last_op_error?: string | null;
+}
+
 /** One decoded SSE frame from Studio's progress stream. */
 export interface StudioProgress {
   event: string;
@@ -145,7 +162,7 @@ export class StudioClient {
     });
   }
 
-  async exportStatus(): Promise<{ status?: string; message?: string }> {
+  async exportStatus(): Promise<ExportStatus> {
     return this.json("/api/export/status");
   }
 }

@@ -5,8 +5,15 @@ import { createLabStore, type LabStore } from "./jobs";
 import { registerLabRoutes } from "./routes";
 import type { StudioClient } from "./studio";
 
-/** Studio stand-in; only the methods a given test exercises are supplied. */
+/** Studio stand-in; only the methods a given test exercises are supplied.
+ *
+ *  The export shape here mirrors a live Studio, verified with src/lab/probe.mts:
+ *  there is no `status` field — an export is settled when it is no longer
+ *  active AND the monotonic op counter has moved past where it was. An earlier
+ *  version of this fake returned `{status:"complete"}`, which does not exist,
+ *  and hid a polling loop that would have hung forever. */
 function fakeStudio(over: Partial<StudioClient> = {}): StudioClient {
+  let opSeq = 0;
   return {
     baseURL: "http://studio",
     reachable: async () => true,
@@ -14,8 +21,16 @@ function fakeStudio(over: Partial<StudioClient> = {}): StudioClient {
     listRuns: async () => [],
     async *trainingProgress() {},
     loadCheckpoint: async () => {},
-    exportGguf: async () => {},
-    exportStatus: async () => ({ status: "complete" }),
+    // A real export advances the op counter when it finishes.
+    exportGguf: async () => {
+      opSeq += 1;
+    },
+    exportStatus: async () => ({
+      is_export_active: false,
+      last_op_seq: opSeq,
+      last_op_status: "success",
+      last_op_output_path: "/runs/7/gguf",
+    }),
     ...over,
   } as unknown as StudioClient;
 }
@@ -43,6 +58,18 @@ async function settle(id: string, tries = 40) {
     await new Promise((r) => setTimeout(r, 25));
   }
   return store.getJob(id);
+}
+
+/** A finished fine-tune with a checkpoint on disk, ready to export. */
+function seedRun(store: LabStore, outputDir: string) {
+  const job = store.createJob("finetune");
+  return store.createRun({
+    jobId: job.id,
+    baseModel: "q",
+    dataset: "d",
+    outputDir,
+    ggufPath: null,
+  });
 }
 
 const finetuneBody = {
@@ -241,6 +268,65 @@ describe("POST /lab/export", () => {
 
     expect((await settle(jobId))?.state).toBe("done");
     expect(store.getRun(run.id)?.ggufPath).toBe("/runs/7/gguf");
+  });
+
+  it("fails the job when Studio reports the export errored", async () => {
+    // Counter advances (the export ran), but the outcome is a failure.
+    let seq = 0;
+    const app = await build(
+      fakeStudio({
+        exportGguf: async () => {
+          seq += 1;
+        },
+        exportStatus: async () => ({
+          is_export_active: false,
+          last_op_seq: seq,
+          last_op_status: seq > 0 ? "error" : "success",
+          last_op_error: "not enough disk space",
+        }),
+      }),
+    );
+    const run = seedRun(store, "/runs/8");
+    const { jobId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/export",
+        payload: { runId: run.id },
+      })
+    ).json();
+
+    const job = await settle(jobId);
+    expect(job?.state).toBe("failed");
+    expect(job?.error).toContain("not enough disk space");
+  });
+
+  // Studio reports the *last* operation, so a previous export's success would
+  // otherwise be read as ours and finish the job instantly against a stale
+  // artifact. The op counter is what tells them apart.
+  it("does not accept a stale success from an earlier export", async () => {
+    const app = await build(
+      fakeStudio({
+        // Already-successful op, and the counter never moves for ours.
+        exportStatus: async () => ({
+          is_export_active: false,
+          last_op_seq: 42,
+          last_op_status: "success",
+          last_op_output_path: "/runs/OLD/gguf",
+        }),
+      }),
+    );
+    const run = seedRun(store, "/runs/9");
+    const { jobId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/export",
+        payload: { runId: run.id },
+      })
+    ).json();
+
+    await new Promise((r) => setTimeout(r, 150));
+    expect(store.getJob(jobId)?.state).toBe("running");
+    expect(store.getRun(run.id)?.ggufPath).toBeNull();
   });
 });
 
