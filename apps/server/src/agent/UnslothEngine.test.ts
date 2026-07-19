@@ -74,6 +74,23 @@ describe("UnslothEngine", () => {
     expect(headers.Authorization).toBeUndefined();
   });
 
+  // A Studio reachable only over a LAN or tunnel answers far slower than a
+  // localhost llama-server; too tight a probe reports a healthy Studio as down.
+  it("waits longer for a status probe than the localhost default", async () => {
+    const engine = new UnslothEngine({ bindings, env: {} });
+    let signal: AbortSignal | undefined;
+    mockFetch.mockImplementationOnce((_url: string, init: RequestInit) => {
+      signal = init.signal as AbortSignal;
+      return Promise.resolve(res({ data: [] }));
+    });
+
+    await engine.getStatus();
+    // AbortSignal.timeout exposes no duration, so assert indirectly: the signal
+    // must still be live well past the 1.5s default.
+    await new Promise((r) => setTimeout(r, 1800));
+    expect(signal?.aborted).toBe(false);
+  });
+
   it("allows more tool steps than the Tier-0 default", async () => {
     // The model asks for a tool forever; the loop stops at Tier 1's budget.
     const runTool = vi.fn().mockResolvedValue("ok");

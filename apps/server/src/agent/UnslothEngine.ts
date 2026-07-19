@@ -26,6 +26,14 @@ const DEFAULT_MODEL = "unsloth";
 /** Tier 1 exists for multi-step work and runs a larger model than Tier 0, so it
  *  gets a longer leash than OpenAiEngine's small-model default of 4. */
 const DEFAULT_MAX_TOOL_STEPS = 8;
+/**
+ * Tier 1 is always a network hop — a LAN GPU host at best, a tunnel at worst —
+ * where OpenAiEngine's 1.5s default is tuned for probing localhost. Measured
+ * ~1s round trip to a Studio behind a Cloudflare tunnel, which leaves almost no
+ * margin: a single slow probe reports "stopped" for a perfectly healthy Studio,
+ * and the engine resolver then falls back to the embedded model mid-session.
+ */
+const DEFAULT_STATUS_TIMEOUT_MS = 5000;
 
 export interface UnslothEngineConfig {
   /** Tools, prompt, and executor for every turn. Server-side in Tier 1 — the
@@ -35,6 +43,7 @@ export interface UnslothEngineConfig {
   apiKey?: string;
   model?: string;
   maxToolSteps?: number;
+  statusTimeoutMs?: number;
   /** Environment to read defaults from. Injected so tests need not mutate the
    *  real process.env. */
   env?: Record<string, string | undefined>;
@@ -53,6 +62,7 @@ export class UnslothEngine extends OpenAiEngine {
       model: config.model ?? env.UNSLOTH_MODEL ?? DEFAULT_MODEL,
       headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
       maxToolSteps: config.maxToolSteps ?? DEFAULT_MAX_TOOL_STEPS,
+      statusTimeoutMs: config.statusTimeoutMs ?? DEFAULT_STATUS_TIMEOUT_MS,
       label: "unsloth studio",
     });
   }
