@@ -40,6 +40,11 @@ export const finetuneRequest = z.object({
   learningRate: z.number().positive().max(1).default(2e-4),
   maxSteps: z.number().int().positive().max(100_000).default(60),
   loraR: z.number().int().positive().max(256).default(16),
+  /** Dataset shape. "auto" lets Studio detect it, which is right for most
+   *  public datasets; name it explicitly when detection guesses wrong. */
+  format: z
+    .enum(["auto", "alpaca", "chatml", "mistral", "raw", "custom", "generic"])
+    .default("auto"),
 });
 
 export const exportRequest = z.object({

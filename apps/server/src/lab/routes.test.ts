@@ -270,6 +270,72 @@ describe("POST /lab/export", () => {
     expect(store.getRun(run.id)?.ggufPath).toBe("/runs/7/gguf");
   });
 
+  // Quantization outlives the request that starts it (a Cloudflare tunnel cuts
+  // at ~100s with a 524) while Studio keeps working. Losing the kickoff
+  // response must not fail a job whose export is running.
+  it("keeps polling when the kickoff response is lost but the export started", async () => {
+    let seq = 0;
+    let active = false;
+    const app = await build(
+      fakeStudio({
+        exportGguf: async () => {
+          active = true;
+          // Simulate the work finishing shortly after the connection drops.
+          setTimeout(() => {
+            active = false;
+            seq = 5;
+          }, 100);
+          throw new Error("studio responded 524");
+        },
+        exportStatus: async () => ({
+          is_export_active: active,
+          last_op_seq: seq,
+          last_op_status: "success",
+          last_op_output_path: "/runs/10/gguf",
+        }),
+      }),
+    );
+    const run = seedRun(store, "/runs/10");
+    const { jobId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/export",
+        payload: { runId: run.id },
+      })
+    ).json();
+
+    expect((await settle(jobId))?.state).toBe("done");
+    expect(store.getRun(run.id)?.ggufPath).toBe("/runs/10/gguf");
+  });
+
+  // But a kickoff that genuinely failed, with nothing running, is a failure.
+  it("fails when the kickoff errored and no export started", async () => {
+    const app = await build(
+      fakeStudio({
+        exportGguf: async () => {
+          throw new Error("studio responded 405");
+        },
+        exportStatus: async () => ({
+          is_export_active: false,
+          last_op_seq: 0,
+          last_op_status: "success",
+        }),
+      }),
+    );
+    const run = seedRun(store, "/runs/11");
+    const { jobId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/export",
+        payload: { runId: run.id },
+      })
+    ).json();
+
+    const job = await settle(jobId);
+    expect(job?.state).toBe("failed");
+    expect(job?.error).toContain("405");
+  });
+
   it("fails the job when Studio reports the export errored", async () => {
     // Counter advances (the export ran), but the outcome is a failure.
     let seq = 0;

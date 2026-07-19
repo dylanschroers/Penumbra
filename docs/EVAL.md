@@ -117,6 +117,11 @@ python3 -m venv .venv-lmeval
 LM_EVAL_BIN=$PWD/.venv-lmeval/bin/lm_eval pnpm --filter @penumbra/server dev
 ```
 
+**Task-level extras are also required.** `ifeval` needs `langdetect` and
+`immutabledict`, and the math tasks have their own; a run dies partway through
+with a bare `ModuleNotFoundError` otherwise. Install
+`'lm-eval[api,ifeval,math]'` to cover the default suite.
+
 **The `[api]` extra is required, not optional.** A plain `pip install lm-eval`
 installs fine and then fails at run time with
 `ModuleNotFoundError: ... ['tenacity']` the moment an API model is used — which

@@ -125,7 +125,17 @@ rather than inventing a second one, and keep `bench/results.jsonl` working as
 the no-server path for a quick local check.
 
 - `apps/server/src/lab/benchmark.ts`: spawn `lm_eval --model local-chat-completions --model_args model=<id>,base_url=<studio>/v1/chat/completions,num_concurrent=1,max_retries=3 --tasks <suite> --limit <samples> --seed 42 --apply_chat_template --output_path <scratch>` with `OPENAI_API_KEY=<studio bearer>`. **[reconciled]** There is no `runConnect()` to mirror — no subprocess spawning exists in the server today, so this is net-new rather than a copy. Use `node:child_process.spawn` with the job's abort signal wired to `kill()`, matching how `POST /agent/chat` cancels an in-flight turn on client disconnect.
-- Default general suite `general-v1`: `ifeval, gsm8k, mmlu_pro, bbh_cot_fewshot, gpqa_main_cot_zeroshot, math_hard` (drop/flag MuSR per fact 6). Suite defined as data in shared package so UI and server agree.
+- **[reconciled — measured]** The task names below do not resolve in lm-eval
+  0.4.12: the leaderboard variants carry a `leaderboard_` prefix, and
+  `math_hard` fails outright with "Tasks not found". Worse, fact 6's assumption
+  that `mmlu_pro` is generative is wrong — `leaderboard_mmlu_pro`,
+  `leaderboard_bbh` and `leaderboard_gpqa` are all `multiple_choice`, needing
+  loglikelihoods a chat endpoint cannot return, so they *fail* rather than score
+  badly. `general-v1` is therefore generative-only: `gsm8k`,
+  `leaderboard_ifeval`, `leaderboard_math_hard`. The multiple-choice half needs
+  the GGUF `/v1/completions` path and belongs in a separate suite once that
+  exists.
+- Original (superseded) default general suite `general-v1`: `ifeval, gsm8k, mmlu_pro, bbh_cot_fewshot, gpqa_main_cot_zeroshot, math_hard` (drop/flag MuSR per fact 6). Suite defined as data in shared package so UI and server agree.
 - Precondition check before spawning: the target model must be loaded in Studio (`/api/inference/status`); load the GGUF if needed. Refuse to start while a training job is running (VRAM eviction).
 - Parse lm-eval's `results.json`, persist per-task scores to `lab_scores`, stream stdout lines as SSE progress.
 - One-time setup documented + checked at runtime: **`pip install 'lm-eval[api]'`** — the extra is required, not optional: a plain install fails at run time with a missing `tenacity` the moment an API model is used, which is our only mode (found by a live run). `LM_EVAL_BIN` points at the binary, so a venv install works; `GET /lab/status` reports `lm_eval` presence. **[reconciled]** `AgentStatus` does *not* report CLI presence — it is `stopped | no_model | ready`, derived from probing `/v1/models`, and reports nothing about any CLI. Model Lab needs its own status shape. Keep it honest in the same way: report what was actually probed, and do not report "ready" off something merely installed but not runnable (the exact bug fixed in `OpenAiEngine.getStatus`, where Studio lists downloaded-but-unloaded models).

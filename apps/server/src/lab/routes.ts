@@ -146,6 +146,7 @@ export function registerLabRoutes(
         await studio.startTraining({
           model_name: input.baseModel,
           training_type: "LoRA/QLoRA",
+          format_type: input.format,
           learning_rate: input.learningRate,
           max_steps: input.maxSteps,
           lora_r: input.loraR,
@@ -204,16 +205,31 @@ export function registerLabRoutes(
 
     const job = store.createJob("export");
     runJob(job, async (report) => {
-      // Baseline the op counter *before* starting. Studio reports the outcome
-      // of the last operation, so without this a previous export's "success"
-      // reads as ours and the job finishes instantly against a stale artifact.
-      const baseline = (await studio.exportStatus()).last_op_seq ?? 0;
-
       report({ detail: "loading checkpoint" });
       await studio.loadCheckpoint(run.outputDir as string);
       const saveDir = `${run.outputDir}/gguf`;
+
+      // Baseline the op counter immediately before the export, so the check
+      // below tracks *this* operation rather than the load-checkpoint that
+      // precedes it. Studio reports the outcome of the last op, so without a
+      // baseline an earlier success reads as ours and the job finishes
+      // instantly against a stale artifact.
+      const baseline = (await studio.exportStatus()).last_op_seq ?? 0;
+
       report({ detail: "exporting gguf" });
-      await studio.exportGguf(saveDir, parsed.data.quantization);
+      try {
+        await studio.exportGguf(saveDir, parsed.data.quantization);
+      } catch (err) {
+        // Quantization routinely outlives the HTTP request that starts it — a
+        // Cloudflare tunnel cuts the connection at ~100s with a 524 — while the
+        // work carries on inside Studio. Losing the kickoff response is not the
+        // same as the export failing, so consult the status endpoint (the
+        // actual source of truth) and only give up if nothing started.
+        const s = await studio.exportStatus();
+        const started = s.is_export_active || (s.last_op_seq ?? 0) > baseline;
+        if (!started) throw err;
+        report({ detail: "exporting gguf (kickoff response lost, polling)" });
+      }
 
       // Export runs asynchronously inside Studio, and there is no `status`
       // field to poll: settled means "not active, and the op counter moved".

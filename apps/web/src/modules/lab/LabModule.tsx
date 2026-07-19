@@ -94,6 +94,9 @@ export function LabModule() {
       learningRate: 2e-4,
       maxSteps,
       loraR: 16,
+      // Studio detects the dataset shape; surfaced as a control only if
+      // detection turns out to guess wrong often enough to matter.
+      format: "auto",
     });
   }
 

@@ -27,6 +27,9 @@ export interface StudioRun {
 export interface TrainingStart {
   model_name: string;
   training_type: string;
+  /** Required by Studio. "auto" detects the dataset's shape; the alternatives
+   *  are alpaca, chatml, mistral, raw, custom, generic. */
+  format_type: string;
   local_datasets?: string[];
   hf_dataset?: string;
   learning_rate: number;
@@ -88,7 +91,13 @@ export class StudioClient {
       signal,
     });
     if (!res.ok) {
-      throw new Error(`studio ${path} responded ${res.status}`);
+      // Include the body. Studio answers a malformed request with a 422 whose
+      // detail names the offending field; without it the caller sees only
+      // "responded 422" and has to reproduce the call by hand to learn why.
+      const detail = await res.text().catch(() => "");
+      throw new Error(
+        `studio ${path} responded ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`,
+      );
     }
     return (await res.json()) as T;
   }
@@ -152,8 +161,12 @@ export class StudioClient {
     });
   }
 
+  /** Note the doubled segment: the export router mounts at `/api/export` and
+   *  declares this route as `/export/gguf`, so the real path is
+   *  `/api/export/export/gguf`. `/api/export/gguf` answers 405. Verified live —
+   *  the plan's shorthand for this endpoint was wrong. */
   async exportGguf(saveDirectory: string, quantization: string): Promise<void> {
-    await this.json("/api/export/gguf", {
+    await this.json("/api/export/export/gguf", {
       method: "POST",
       body: JSON.stringify({
         save_directory: saveDirectory,

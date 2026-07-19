@@ -26,17 +26,20 @@ export const SUITES: SuiteDefinition[] = [
     kind: "general",
     label: "General capability",
     description:
-      "Open LLM Leaderboard v2 style, via lm-evaluation-harness. Generative task variants only — Studio's chat endpoint rejects logprobs.",
-    // MuSR is loglikelihood-only and is deliberately absent; it would need the
-    // GGUF /v1/completions path.
-    tasks: [
-      "ifeval",
-      "gsm8k",
-      "mmlu_pro",
-      "bbh_cot_fewshot",
-      "gpqa_main_cot_zeroshot",
-      "math_hard",
-    ],
+      "Open LLM Leaderboard v2 style, via lm-evaluation-harness. Generative tasks only — a chat endpoint cannot serve loglikelihood.",
+    // Task names and output types verified against the installed lm-eval
+    // (0.4.12): the leaderboard_* prefix is required, and the plan's original
+    // list (ifeval, mmlu_pro, bbh_cot_fewshot, gpqa_main_cot_zeroshot,
+    // math_hard) does not resolve — `math_hard` fails outright with
+    // "Tasks not found".
+    //
+    // Only `generate_until` tasks are listed. leaderboard_mmlu_pro,
+    // leaderboard_bbh and leaderboard_gpqa are `multiple_choice`, which needs
+    // loglikelihoods that /v1/chat/completions cannot return; running them here
+    // fails rather than scoring badly. They need the GGUF /v1/completions path
+    // (docs/model_lab_plan.md fact 6) and belong in a separate suite once that
+    // exists. leaderboard_musr is loglikelihood-only for the same reason.
+    tasks: ["gsm8k", "leaderboard_ifeval", "leaderboard_math_hard"],
   },
   {
     id: "penumbra-tools-v1",

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SUITES } from "../lab";
 import { taskTools } from "../tools";
 import { type EvalCase, evalCases } from "./cases";
 import { type CaseOutcome, scoreCase, summarize } from "./scoring";
@@ -26,6 +27,32 @@ describe("cases", () => {
 
   it("keeps negative cases in the set, since false positives are the risk", () => {
     expect(evalCases.filter((c) => c.tool === null).length).toBeGreaterThan(0);
+  });
+});
+
+// The general suite runs over an OpenAI-compatible *chat* endpoint, which
+// cannot return loglikelihoods. Multiple-choice tasks therefore fail outright
+// rather than scoring badly, and every name must resolve in the installed
+// harness — the plan's original list did not (see suites.ts).
+describe("general suite", () => {
+  const general = SUITES.find((s) => s.kind === "general");
+
+  it("names only leaderboard-prefixed or known-generative tasks", () => {
+    for (const task of general?.tasks ?? []) {
+      expect(task === "gsm8k" || task.startsWith("leaderboard_")).toBe(true);
+    }
+  });
+
+  it("excludes the multiple-choice tasks a chat endpoint cannot serve", () => {
+    const loglikelihoodOnly = [
+      "leaderboard_mmlu_pro",
+      "leaderboard_bbh",
+      "leaderboard_gpqa",
+      "leaderboard_musr",
+    ];
+    for (const task of loglikelihoodOnly) {
+      expect(general?.tasks).not.toContain(task);
+    }
   });
 });
 

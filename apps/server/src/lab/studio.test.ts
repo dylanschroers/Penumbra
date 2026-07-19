@@ -76,6 +76,7 @@ async function client(
 const startBody = {
   model_name: "qwen",
   training_type: "LoRA/QLoRA",
+  format_type: "auto",
   learning_rate: 2e-4,
   max_steps: 60,
   lora_r: 16,
@@ -136,6 +137,18 @@ describe("startTraining", () => {
     const c = await client(() => ({ status: 500, body: {} }));
     await expect(c.startTraining(startBody)).rejects.toThrow("responded 500");
   });
+
+  // A live 422 names the offending field in its body. Reporting only the status
+  // code sends the reader off to reproduce the call by hand to learn why.
+  it("includes the response body so a 422 explains itself", async () => {
+    const c = await client(() => ({
+      status: 422,
+      body: {
+        detail: [{ loc: ["body", "format_type"], msg: "Field required" }],
+      },
+    }));
+    await expect(c.startTraining(startBody)).rejects.toThrow(/format_type/);
+  });
 });
 
 describe("trainingProgress", () => {
@@ -191,9 +204,11 @@ describe("export", () => {
     await c.loadCheckpoint("/runs/1");
     await c.exportGguf("/runs/1/gguf", "Q4_K_M");
 
+    // The doubled segment is real: the router mounts at /api/export and
+    // declares the route as /export/gguf. /api/export/gguf answers 405.
     expect(studio.recorded.map((r) => r.url)).toEqual([
       "/api/export/load-checkpoint",
-      "/api/export/gguf",
+      "/api/export/export/gguf",
     ]);
     expect(studio.recorded[0]?.body).toEqual({ checkpoint_path: "/runs/1" });
     expect(studio.recorded[1]?.body).toEqual({
