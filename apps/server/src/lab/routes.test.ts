@@ -173,13 +173,19 @@ describe("POST /lab/finetune", () => {
   });
 
   it("records the output dir the run produced", async () => {
+    // A real Studio's run list *grows*: the new run only exists afterwards.
+    let trained = false;
     const app = await build(
       fakeStudio({
+        startTraining: async () => {
+          trained = true;
+        },
         async *trainingProgress() {
           yield { event: "progress", data: { step: 1, total_steps: 2 } };
           yield { event: "complete", data: {} };
         },
-        listRuns: async () => [{ output_dir: "/runs/42" }],
+        listRuns: async () =>
+          trained ? [{ run_id: "new", output_dir: "/runs/42" }] : [],
       }),
     );
     const { jobId, runId } = (
@@ -192,6 +198,57 @@ describe("POST /lab/finetune", () => {
 
     expect((await settle(jobId))?.state).toBe("done");
     expect(store.getRun(runId)?.outputDir).toBe("/runs/42");
+  });
+
+  // Studio's list is not guaranteed to end with our run, and an earlier run's
+  // checkpoint attached to this job would later be exported as if it were ours.
+  it("ignores a pre-existing run rather than claiming its checkpoint", async () => {
+    const stale = { run_id: "old", output_dir: "/runs/OLD" };
+    const app = await build(
+      fakeStudio({
+        async *trainingProgress() {
+          yield { event: "complete", data: {} };
+        },
+        // The list never grows: no run of ours was produced.
+        listRuns: async () => [stale],
+      }),
+    );
+    const { jobId, runId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/finetune",
+        payload: finetuneBody,
+      })
+    ).json();
+
+    await settle(jobId);
+    // No checkpoint recorded, so export refuses it — the safe failure.
+    expect(store.getRun(runId)?.outputDir).toBeNull();
+  });
+
+  // Studio restarting or a tunnel dropping ends the stream without "complete".
+  // Treating that as success would report unfinished training as done.
+  it("fails when the progress stream ends without completing", async () => {
+    const app = await build(
+      fakeStudio({
+        async *trainingProgress() {
+          yield { event: "progress", data: { step: 3, total_steps: 20 } };
+          // stream simply ends
+        },
+      }),
+    );
+    const { jobId, runId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/finetune",
+        payload: finetuneBody,
+      })
+    ).json();
+
+    const job = await settle(jobId);
+    expect(job?.state).toBe("failed");
+    expect(job?.error).toContain("ended before reporting completion");
+    expect(store.getRun(runId)?.outputDir).toBeNull();
   });
 
   it("surfaces a training error on the job rather than losing it", async () => {

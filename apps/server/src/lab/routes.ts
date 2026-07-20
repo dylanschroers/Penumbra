@@ -10,7 +10,7 @@ import type { FastifyInstance } from "fastify";
 import { requireAuth } from "../http/auth";
 import { lmEvalAvailable, runBenchmark } from "./benchmark";
 import type { LabStore } from "./jobs";
-import { StudioClient, TrainingBusyError } from "./studio";
+import { StudioClient, type StudioRun, TrainingBusyError } from "./studio";
 
 // The Model Lab's HTTP surface. Jobs start, return immediately with an id, and
 // report progress over SSE — training runs for minutes to hours, so nothing
@@ -18,6 +18,12 @@ import { StudioClient, TrainingBusyError } from "./studio";
 //
 // Behind the same gate as the agent routes, and for stronger reasons: these
 // spawn training, write files, and can evict the loaded model.
+
+/** Identify a Studio run across the several id fields it may carry, so runs
+ *  seen before a training start can be told apart from the one it produces. */
+function runKey(run: StudioRun): string {
+  return run.run_id ?? run.id ?? run.output_dir ?? JSON.stringify(run);
+}
 
 /** Quantizing a large model is slow, but not unbounded. */
 const EXPORT_TIMEOUT_MS = 60 * 60 * 1000;
@@ -140,6 +146,10 @@ export function registerLabRoutes(
     });
 
     runJob(job, async (report) => {
+      // Snapshot the runs that already exist, so the output dir recorded below
+      // is provably the one this training produced.
+      const existingRuns = new Set((await studio.listRuns()).map(runKey));
+
       try {
         // QLoRA and 4-bit are forced here, not offered: the GPU host cannot run
         // anything heavier, so a client must not be able to ask for it.
@@ -163,6 +173,7 @@ export function registerLabRoutes(
         throw err;
       }
 
+      let sawComplete = false;
       for await (const frame of studio.trainingProgress()) {
         if (frame.event === "progress") {
           const step = Number(frame.data.step ?? 0);
@@ -176,15 +187,26 @@ export function registerLabRoutes(
         } else if (frame.event === "error") {
           throw new Error(String(frame.data.message ?? "training failed"));
         } else if (frame.event === "complete") {
+          sawComplete = true;
           break;
         }
       }
+      // A stream that simply ends — Studio restarted, the tunnel dropped — is
+      // not a finished run. Falling through would mark an interrupted training
+      // "done" and then attach some other run's checkpoint to it.
+      if (!sawComplete) {
+        throw new Error("training stream ended before reporting completion");
+      }
 
-      // Studio reports the output directory only via its runs list.
-      const runs = await studio.listRuns();
-      const latest = runs.at(-1);
-      if (latest?.output_dir) {
-        store.setRunArtifacts(run.id, { outputDir: latest.output_dir });
+      // Studio reports the output directory only via its runs list, which is
+      // not guaranteed to end with ours. Match against the runs that existed
+      // beforehand so a previous run's checkpoint can't be recorded as this
+      // one's. If nothing new appears, record nothing: the run then has no
+      // outputDir and export refuses it, which is the safe failure.
+      const after = await studio.listRuns();
+      const ours = after.find((r) => !existingRuns.has(runKey(r)));
+      if (ours?.output_dir) {
+        store.setRunArtifacts(run.id, { outputDir: ours.output_dir });
       }
     });
 
