@@ -1,33 +1,37 @@
-/* Minimal hand-written stylesheet (step 5). Light + dark via prefers-color-scheme.
-   Design tokens live as CSS variables so they're easy to swap later. */
+/* Minimal hand-written stylesheet. Design tokens live as CSS variables.
+   Dark is the default theme; a future settings toggle sets data-theme="light"
+   on <html> to switch. Because the palette is all custom properties, flipping
+   the attribute re-themes every module with zero JS re-render. */
 
 :root {
+  --bg: #16161a;
+  --surface: #1f1f25;
+  --text: #ececf1;
+  --muted: #9a9aa6;
+  --border: #2e2e37;
+  --primary: #6366f1;
+  --primary-text: #ffffff;
+  --danger: #f87171;
+  --prio-low: #9ca3af;
+  --prio-medium: #60a5fa;
+  --prio-high: #f87171;
+  --radius: 8px;
+  /* Hint native controls (scrollbars, date/number inputs) to render dark. */
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
   --bg: #f7f7f8;
   --surface: #ffffff;
   --text: #1a1a1e;
   --muted: #6b6b76;
   --border: #e3e3e8;
   --primary: #4f46e5;
-  --primary-text: #ffffff;
   --danger: #dc2626;
   --prio-low: #6b7280;
   --prio-medium: #2563eb;
   --prio-high: #dc2626;
-  --radius: 8px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #16161a;
-    --surface: #1f1f25;
-    --text: #ececf1;
-    --muted: #9a9aa6;
-    --border: #2e2e37;
-    --primary: #6366f1;
-    --prio-low: #9ca3af;
-    --prio-medium: #60a5fa;
-    --prio-high: #f87171;
-  }
+  color-scheme: light;
 }
 
 * {
@@ -86,17 +90,15 @@ body {
 }
 
 .sync-light--connected {
-  background: #16a34a;
+  background: #4ade80;
 }
 
 .sync-light--disconnected {
   background: var(--danger);
 }
 
-@media (prefers-color-scheme: dark) {
-  .sync-light--connected {
-    background: #4ade80;
-  }
+:root[data-theme="light"] .sync-light--connected {
+  background: #16a34a;
 }
 
 .workspace__actions {
