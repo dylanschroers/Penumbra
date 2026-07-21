@@ -1,4 +1,8 @@
-import { normalizeBaseUrl } from "@penumbra/shared";
+import {
+  normalizeBaseUrl,
+  readSseFrames,
+  type SseFrame,
+} from "@penumbra/shared";
 
 // Typed client for Unsloth Studio's training, dataset, and export APIs.
 //
@@ -56,10 +60,7 @@ export interface ExportStatus {
 }
 
 /** One decoded SSE frame from Studio's progress stream. */
-export interface StudioProgress {
-  event: string;
-  data: Record<string, unknown>;
-}
+export type StudioProgress = SseFrame<Record<string, unknown>>;
 
 export class StudioClient {
   readonly baseURL: string;
@@ -151,7 +152,10 @@ export class StudioClient {
     });
     if (!res.ok) throw new Error(`studio progress responded ${res.status}`);
     if (!res.body) return;
-    yield* readSse(res.body);
+    // "skip": one malformed frame must not kill a run that may have hours left.
+    yield* readSseFrames<Record<string, unknown>>(res.body, {
+      onParseError: "skip",
+    });
   }
 
   async loadCheckpoint(checkpointPath: string): Promise<void> {
@@ -186,39 +190,5 @@ export class TrainingBusyError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "TrainingBusyError";
-  }
-}
-
-/** Decode an SSE byte stream into frames, carrying partial tails forward. */
-export async function* readSse(
-  body: ReadableStream<Uint8Array>,
-): AsyncGenerator<StudioProgress> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      let split = buffer.indexOf("\n\n");
-      while (split !== -1) {
-        const chunk = buffer.slice(0, split);
-        buffer = buffer.slice(split + 2);
-        const event = /^event: (.*)$/m.exec(chunk)?.[1];
-        const raw = /^data: (.*)$/m.exec(chunk)?.[1];
-        if (event && raw) {
-          try {
-            yield { event, data: JSON.parse(raw) as Record<string, unknown> };
-          } catch {
-            // A malformed frame is not worth killing a long training run over.
-          }
-        }
-        split = buffer.indexOf("\n\n");
-      }
-    }
-  } finally {
-    reader.releaseLock();
   }
 }

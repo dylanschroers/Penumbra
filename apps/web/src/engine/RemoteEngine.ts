@@ -4,7 +4,7 @@ import type {
   ChatMessage,
   Engine,
 } from "@penumbra/shared";
-import { normalizeBaseUrl } from "@penumbra/shared";
+import { normalizeBaseUrl, readSseFrames } from "@penumbra/shared";
 import { flushSync, requestSync } from "../sync/SyncClient";
 
 // Tier 1: the model runs on a Penumbra server, and so do its tools. This engine is
@@ -19,42 +19,6 @@ export interface RemoteEngineConfig {
   baseURL?: string;
   /** Matches the server's PENUMBRA_AGENT_TOKEN; unset works for a loopback server. */
   token?: string;
-}
-
-/** One `event: <name>\ndata: <json>` frame from the server. */
-interface SseFrame {
-  event: string;
-  data: unknown;
-}
-
-/** Split an SSE byte stream into frames. Frames are separated by a blank line
- *  and may arrive split across chunks, so the tail is carried forward. */
-async function* readFrames(
-  body: ReadableStream<Uint8Array>,
-): AsyncGenerator<SseFrame> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      let split = buffer.indexOf("\n\n");
-      while (split !== -1) {
-        const chunk = buffer.slice(0, split);
-        buffer = buffer.slice(split + 2);
-        const event = /^event: (.*)$/m.exec(chunk)?.[1];
-        const data = /^data: (.*)$/m.exec(chunk)?.[1];
-        if (event && data) yield { event, data: JSON.parse(data) };
-        split = buffer.indexOf("\n\n");
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
 }
 
 export class RemoteEngine implements Engine {
@@ -99,7 +63,9 @@ export class RemoteEngine implements Engine {
     if (!res.ok) throw new Error(`agent server responded ${res.status}`);
     if (!res.body) throw new Error("agent server sent no stream");
 
-    for await (const frame of readFrames(res.body)) {
+    // Default "throw" on a bad frame: a malformed event means the turn is
+    // broken, so surfacing it beats silently dropping part of the answer.
+    for await (const frame of readSseFrames(res.body)) {
       if (frame.event === "error") {
         const { message } = frame.data as { message?: string };
         throw new Error(message ?? "agent turn failed");

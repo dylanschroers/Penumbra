@@ -1,3 +1,9 @@
+export {
+  type ReadSseOptions,
+  readSseFrames,
+  type SseFrame,
+} from "./sse";
+
 /**
  * Normalize a configured base URL: ensure a scheme, drop trailing slashes.
  *
