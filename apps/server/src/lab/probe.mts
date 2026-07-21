@@ -10,7 +10,7 @@
 // Usage: UNSLOTH_BASE_URL=… UNSLOTH_API_KEY=… pnpm exec tsx src/lab/probe.mts
 
 import { AGENT_SYSTEM, taskTools, toToolSpec } from "@penumbra/shared";
-import { UnslothEngine } from "./../agent/UnslothEngine";
+import { UnslothEngine } from "../agent/UnslothEngine";
 import { StudioClient } from "./studio";
 
 const studio = new StudioClient();
