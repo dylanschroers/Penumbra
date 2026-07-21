@@ -6,7 +6,7 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": [
         "--filter",
-        "@ghost/web",
+        "@penumbra/web",
         "exec",
         "vite",
         "--port",

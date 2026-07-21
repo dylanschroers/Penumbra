@@ -1,6 +1,6 @@
-# Ghost
+# Penumbra
 
-Ghost is a local-first personal assistant for your tasks, finances, and daily
+Penumbra is a local-first personal assistant for your tasks, finances, and daily
 responsibilities, with an AI agent that can act on them for you. Your data lives
 on your own devices and works fully offline, then syncs across them when you
 reconnect.
@@ -66,8 +66,8 @@ pnpm dev          # web on :5173, sync server on :3000
 Run either half on its own:
 
 ```
-pnpm --filter @ghost/web dev      # web only, the offline v0 with no server
-pnpm --filter @ghost/server dev   # sync server only
+pnpm --filter @penumbra/web dev      # web only, the offline v0 with no server
+pnpm --filter @penumbra/server dev   # sync server only
 ```
 
 Run it as a native desktop app, which wraps the same web UI in Tauri:

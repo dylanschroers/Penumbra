@@ -5,7 +5,7 @@
 // Every test starts from a freshly migrated store, so these also exercise the
 // migrations end to end. No DOM here — plain Node is faster and more honest.
 
-import type { SyncTask } from "@ghost/shared";
+import type { SyncTask } from "@penumbra/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDb } from "./testing";
 

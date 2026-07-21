@@ -4,23 +4,28 @@
 // on startup, on an interval, when the network returns, and (debounced) right
 // after a local edit. See docs/SYNC.md.
 
-import type { PullTasksResult } from "@ghost/shared";
+import { normalizeBaseUrl, type PullTasksResult } from "@penumbra/shared";
 import { getDb } from "../db/client";
 
-const SERVER_URL: string =
-  import.meta.env.VITE_SERVER_URL ?? "http://localhost:3000";
+// Normalized because a scheme-less VITE_SERVER_URL (e.g. "192.168.1.50:3000")
+// turns every request into a *relative* path: the dev server answers it with
+// its SPA fallback, so sync gets 200 OK full of HTML and reports itself
+// "disconnected" rather than misconfigured.
+const SERVER_URL: string = normalizeBaseUrl(
+  import.meta.env.VITE_SERVER_URL ?? "http://localhost:3000",
+);
 const INTERVAL_MS = 15_000;
 const DEBOUNCE_MS = 800;
 
 /** Fired on window after a pull actually changed local data, so the UI can
  * re-read. Carried as an event (not a callback) to keep sync decoupled from
  * React. */
-export const SYNC_EVENT = "ghost:synced";
+export const SYNC_EVENT = "penumbra:synced";
 
 /** Fired on window when the connection status changes; detail is a SyncStatus.
  * "pending" until the first round settles, then whatever the last round
  * proved. Same event-not-callback reasoning as SYNC_EVENT. */
-export const SYNC_STATUS_EVENT = "ghost:sync-status";
+export const SYNC_STATUS_EVENT = "penumbra:sync-status";
 
 export type SyncStatus = "pending" | "connected" | "disconnected";
 
@@ -42,6 +47,7 @@ function setStatus(next: SyncStatus): void {
 
 let active = false; // a sync loop is running in this tab
 let syncing = false; // a round is in flight (prevents overlap)
+let inFlight: Promise<void> | null = null; // that round, for awaiting it
 let debounce: ReturnType<typeof setTimeout> | undefined;
 
 async function pushOnce(): Promise<void> {
@@ -70,8 +76,16 @@ async function pullOnce(): Promise<{ changed: boolean; serverId: string }> {
   return { changed, serverId };
 }
 
-async function syncNow(): Promise<void> {
-  if (!active || syncing) return;
+/** Start a round, or hand back the one already running. Callers that only want
+ *  to nudge can ignore the promise; flushSync awaits it. */
+function syncNow(): Promise<void> {
+  if (!active) return Promise.resolve();
+  if (syncing) return inFlight ?? Promise.resolve();
+  inFlight = runRound();
+  return inFlight;
+}
+
+async function runRound(): Promise<void> {
   if (!navigator.onLine) {
     setStatus("disconnected");
     return;
@@ -106,6 +120,18 @@ async function syncNow(): Promise<void> {
   } finally {
     syncing = false;
   }
+}
+
+/**
+ * Run a full sync round and wait for it. A Tier-1 agent turn executes tools
+ * against the *server's* store, so the client flushes first — otherwise the
+ * model reasons about state up to INTERVAL_MS stale (see
+ * docs/UNSLOTH_TIER1_PLAN.md §2). A round already in flight may have started
+ * before the caller's edits, so wait it out and run a fresh one.
+ */
+export async function flushSync(): Promise<void> {
+  if (syncing) await inFlight;
+  await syncNow();
 }
 
 /** Nudge a sync soon, coalescing bursts of edits into one round. */

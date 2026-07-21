@@ -647,3 +647,164 @@ body {
   outline: 2px solid var(--primary);
   outline-offset: 1px;
 }
+
+/* ---- Model Lab (docs/model_lab_plan.md) -------------------------------- */
+
+.lab {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  height: 100%;
+  min-height: 0;
+  font-size: 0.85rem;
+}
+
+.lab__status {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.lab__pill {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--bg);
+}
+
+.lab__pill--ready {
+  color: var(--primary-text);
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.lab__tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.lab__tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.3rem 0.6rem;
+  color: var(--muted);
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.lab__tab--active {
+  color: var(--text);
+  border-bottom-color: var(--primary);
+}
+
+.lab__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.lab__field {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+}
+
+.lab__field input {
+  width: 6rem;
+}
+
+.lab__error {
+  color: var(--danger);
+  margin: 0;
+}
+
+.lab__empty {
+  color: var(--muted);
+}
+
+.lab__runs,
+.lab__jobs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.lab__run,
+.lab__job {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.lab__job-kind {
+  font-weight: 600;
+}
+
+.lab__job-state,
+.lab__job-pct,
+.lab__run-dataset {
+  color: var(--muted);
+}
+
+.lab__job--failed .lab__job-state {
+  color: var(--danger);
+}
+
+.lab__job-detail {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Wide tables scroll inside the card rather than stretching the canvas. */
+.lab__scores {
+  display: block;
+  overflow: auto;
+  border-collapse: collapse;
+  min-height: 0;
+}
+
+.lab__scores th,
+.lab__scores td {
+  text-align: left;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+/* The two families are visually distinct so a general score is never read as a
+   personal one; they are never averaged. */
+.lab__kind {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.lab__kind--personal {
+  color: var(--prio-medium);
+  border-color: var(--prio-medium);
+}
+
+.lab__kind--general {
+  color: var(--muted);
+}
+
+.lab__score {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}

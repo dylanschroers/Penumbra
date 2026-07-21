@@ -9,7 +9,7 @@ use tauri_plugin_shell::ShellExt;
 
 // Tier-0 embedded model. On launch we spawn a bundled `llama-server` (Tauri
 // sidecar) that serves an OpenAI-compatible API on 127.0.0.1; the web client's
-// LocalEngine talks to it directly, so guidance works with no Ghost server and
+// LocalEngine talks to it directly, so guidance works with no Penumbra server and
 // no network. See docs/AGENT_DESIGN.md and apps/desktop/SIDECAR.md.
 //
 // This is deliberately best-effort: a build without the binary or weights (the
@@ -49,7 +49,7 @@ fn spawn_llm_sidecar(app: tauri::AppHandle) {
     let model = match resolve("models/model.gguf") {
         Ok(path) if path.exists() => path,
         _ => {
-            eprintln!("[ghost] no bundled model found; local LLM sidecar not started");
+            eprintln!("[penumbra] no bundled model found; local LLM sidecar not started");
             return;
         }
     };
@@ -66,7 +66,7 @@ fn spawn_llm_sidecar(app: tauri::AppHandle) {
     let server = match resolve(server_rel) {
         Ok(path) if path.exists() => path,
         _ => {
-            eprintln!("[ghost] llama-server binary not bundled; sidecar not started");
+            eprintln!("[penumbra] llama-server binary not bundled; sidecar not started");
             return;
         }
     };
@@ -103,8 +103,8 @@ fn spawn_llm_sidecar(app: tauri::AppHandle) {
                     }
                 }
             });
-            eprintln!("[ghost] llama-server sidecar started on {LLM_HOST}:{LLM_PORT}");
+            eprintln!("[penumbra] llama-server sidecar started on {LLM_HOST}:{LLM_PORT}");
         }
-        Err(err) => eprintln!("[ghost] failed to start llama-server: {err}"),
+        Err(err) => eprintln!("[penumbra] failed to start llama-server: {err}"),
     }
 }

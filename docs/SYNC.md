@@ -1,4 +1,4 @@
-# Ghost — Sync engine (Plane A)
+# Penumbra — Sync engine (Plane A)
 
 How owned, local-first data (today: tasks) reconciles across a user's devices.
 This is the design the code references throughout; read it before touching
@@ -117,7 +117,7 @@ what SQLite returns, not just `.optional()`.
   (deliberately not in the shared schema — the server has no outbox);
   `0003_sync_meta.sql` adds the client-only `_sync_meta` (last adopted
   `serverId`, see Epochs above).
-- **Server:** `better-sqlite3`, one file (`DB_PATH`, default `ghost-server.db`,
+- **Server:** `better-sqlite3`, one file (`DB_PATH`, default `server.db`,
   gitignored). One table, driven by the raw driver; the shared Zod schema governs
   the wire format so the two stores cannot drift. Moving to Postgres later is
   contained to `apps/server/src/db.ts`.

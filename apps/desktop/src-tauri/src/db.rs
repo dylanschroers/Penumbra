@@ -24,10 +24,14 @@ pub struct Db(Mutex<Connection>);
 pub fn open(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join("ghost.db");
+    // Mirrors LOCAL_DB_FILE in packages/shared/src/identity — stable storage
+    // identity, deliberately not the product name. Renaming this orphans the
+    // user's database silently. Rust can't import the TS constant, so the two
+    // literals are kept in sync by hand; see that file before touching this.
+    let path = dir.join("local.db");
     let conn = Connection::open(&path)?;
     app.manage(Db(Mutex::new(conn)));
-    eprintln!("[ghost] database: {}", path.display());
+    eprintln!("[penumbra] database: {}", path.display());
     Ok(())
 }
 

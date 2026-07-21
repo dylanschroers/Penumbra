@@ -1,0 +1,41 @@
+# Blocks a release that would ship placeholder identity.
+#
+# The Tauri bundle identifier is permanent per-install app identity: the OS
+# keys install/upgrade, code signing, and app_data_dir() off it, so it can only
+# be changed freely until the first build someone else installs. It currently
+# holds a deliberate placeholder (see packages/shared/src/identity).
+#
+# This runs on release triggers ONLY, never on ordinary pushes. The placeholder
+# is expected to be present during normal development — failing every commit
+# would just train everyone to ignore a red X. It has to fail at exactly one
+# moment: the point where the value would escape onto someone else's machine.
+
+name: Release guard
+
+on:
+  push:
+    tags:
+      - "v*"
+  # So the check can be exercised without cutting a tag.
+  workflow_dispatch:
+
+jobs:
+  no-placeholder-identity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `jq -e` exits non-zero if the value is absent, so a restructured config
+      # fails loudly here rather than silently passing a check that no longer
+      # reads anything.
+      - name: Bundle identifier must not be a placeholder
+        run: |
+          id=$(jq -er '.identifier' apps/desktop/src-tauri/tauri.conf.json)
+          echo "bundle identifier: $id"
+          case "$id" in
+            *placeholder*|com.tauri.dev|local.*)
+              echo "::error file=apps/desktop/src-tauri/tauri.conf.json::Refusing to release with placeholder bundle identifier '$id'. Pick a project-owned reverse-DNS namespace first — see packages/shared/src/identity. Changing it after release strands every existing user's data."
+              exit 1
+              ;;
+          esac
+          echo "OK: identifier is not a placeholder."

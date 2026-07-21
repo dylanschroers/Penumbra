@@ -1,3 +1,4 @@
+import { STORAGE_NAMESPACE } from "@penumbra/shared";
 import { useCallback, useEffect, useState } from "react";
 import { COLS, firstFreeSlot } from "./grid";
 import { getModule } from "./registry";
@@ -11,7 +12,7 @@ import type { ModuleInstance } from "./types";
 // Bump the version suffix whenever the grid's unit system changes (e.g. column
 // count), so layouts saved in the old units are discarded instead of rendering
 // at the wrong size. v2: grid widened from 12 to 24 columns.
-const STORAGE_KEY = "ghost.workspace.layout.v2";
+const STORAGE_KEY = `${STORAGE_NAMESPACE}.workspace.layout.v2`;
 
 function load(): ModuleInstance[] {
   try {

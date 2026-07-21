@@ -1,5 +1,5 @@
 {
-  "name": "@ghost/web",
+  "name": "@penumbra/web",
   "version": "0.0.0",
   "private": true,
   "license": "Apache-2.0",
@@ -12,7 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@ghost/shared": "workspace:*",
+    "@penumbra/shared": "workspace:*",
     "@sqlite.org/sqlite-wasm": "3.53.0-build1",
     "@tauri-apps/api": "^2",
     "@uiw/react-color": "^2.10.3",
@@ -24,7 +24,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@ghost/server": "workspace:^",
+    "@penumbra/server": "workspace:^",
     "@types/better-sqlite3": "^7.6.13",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
