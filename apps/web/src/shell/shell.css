@@ -1,0 +1,1051 @@
+/* Prototype shell styling. Reuses the design tokens from app.css (--bg, --surface,
+   --border, --primary, --radius, --muted, --text) so it themes with the rest of
+   the app. Scoped under .shell / component classes to avoid touching the existing
+   workspace styles. */
+
+.shell {
+  /* Fixed to the viewport (not min-height) so the app never grows as a whole:
+     each region — file rail, chat, focus pane — scrolls inside its own bounds
+     instead of pushing the layout taller. The fixed dock/logo are relative to
+     the viewport, so overflow: hidden here doesn't clip them. */
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ---- Intro (tagline + hint) -------------------------------------------- */
+
+/* Centred a little below the logo; fades out once the app is entered. */
+.shell__intro {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 50%;
+  margin-top: 88px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  text-align: center;
+  pointer-events: none;
+  transition: opacity 0.45s ease;
+}
+
+.shell--app .shell__intro {
+  opacity: 0;
+}
+
+.shell__tagline {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.shell__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* ---- Logo (the travelling mark) ---------------------------------------- */
+
+/* One element in both states: fixed and horizontally centred, so only its
+   vertical position and scale change and the browser can tween the whole
+   move-up-and-shrink in a single transition. */
+.shell-logo {
+  position: fixed;
+  left: 50%;
+  z-index: 60;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  line-height: 0;
+  /* Scale from the top edge so `top` controls the visual top directly — with a
+     centre origin the mark would appear to hang below its `top` when shrunk. The
+     140px mark is vertically centred on screen via `top: 50% - 70px`. */
+  transform-origin: top center;
+  top: calc(50% - 70px);
+  transform: translateX(-50%) scale(1);
+  transition:
+    top 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Settled: resting near the top edge, centred. No top bar any more — the mark
+   floats over the canvas as the home button, so it's kept prominent. 140px *
+   0.42 ≈ 59px; the stage's top padding is sized to clear it. */
+.shell--app .shell-logo {
+  top: 16px;
+  transform: translateX(-50%) scale(0.42);
+}
+
+.logo {
+  display: block;
+  transition: transform 0.25s ease;
+}
+
+/* A soft glow in the app too (not just the intro) so the home button reads as a
+   deliberate, prominent target rather than a shrunk-down leftover. */
+.shell--app .shell-logo .logo {
+  filter: drop-shadow(
+    0 0 14px color-mix(in srgb, var(--primary) 30%, transparent)
+  );
+}
+
+/* Intro-only flourish: soft glow + slow breathing on the inner mark, kept off
+   the button's own transform so the two compose cleanly. */
+.shell--intro .shell-logo .logo {
+  filter: drop-shadow(
+    0 0 22px color-mix(in srgb, var(--primary) 45%, transparent)
+  );
+  animation: logo-breathe 3.2s ease-in-out infinite;
+}
+
+.shell--intro .shell-logo:hover .logo {
+  transform: scale(1.06);
+}
+
+.shell--app .shell-logo:hover .logo {
+  transform: rotate(-8deg);
+}
+
+@keyframes logo-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.04);
+  }
+}
+
+/* ---- Hold-to-launcher feedback ----------------------------------------- */
+
+/* The inner disc scales about its own centre (fill-box origin so it grows in
+   place rather than off the SVG's 0,0). A transition eases it back if the hold
+   is released early; while held, the animation below overrides it. */
+.logo__core {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 0.25s ease;
+}
+
+/* While the logo is held, the disc dips in then swells to fill the ring over the
+   hold window — a visible "charging" cue that the launcher return is arming. The
+   0.5s duration matches HOLD_MS in AppShell, so the disc lands full exactly as
+   the hold fires. */
+.shell-logo--holding .logo__core {
+  animation: logo-hold 0.5s ease-in forwards;
+}
+
+@keyframes logo-hold {
+  0% {
+    transform: scale(1);
+  }
+  22% {
+    transform: translateY(3px) scale(0.82);
+  }
+  100% {
+    /* r=17 disc → ~r=41 to meet the inside of the r=44 ring: 41/17 ≈ 2.4. */
+    transform: scale(2.4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell-logo--holding .logo__core {
+    animation: none;
+  }
+}
+
+/* ---- Entry animations (intro → app) ------------------------------------ */
+
+@keyframes shell-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* The chat card unfolds from a line at the vertical centre to its full height. */
+@keyframes chat-rise {
+  from {
+    opacity: 0;
+    transform: scaleY(0.02);
+  }
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+@keyframes dock-rise {
+  from {
+    opacity: 0;
+    transform: translateY(0.6rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell-logo,
+  .shell__intro,
+  .logo,
+  .assistant-card,
+  .agent,
+  .agent__status,
+  .agent__messages,
+  .file-sidebar {
+    transition: none;
+  }
+  .shell--intro .shell-logo .logo,
+  .shell__body,
+  .assistant-card,
+  .dock,
+  .server-status__dot--pending {
+    animation: none;
+  }
+}
+
+/* ---- Server status (top-right) ----------------------------------------- */
+
+.server-status {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 55;
+}
+
+.server-status__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.server-status__btn:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+
+.server-status__dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.server-status__dot--connected {
+  background: #3fb950;
+}
+
+.server-status__dot--disconnected {
+  background: #e5484d;
+}
+
+.server-status__dot--pending {
+  background: #d29922;
+  animation: server-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes server-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.server-status__menu {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  right: 0;
+  width: 250px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
+}
+
+.server-status__row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.server-status__current {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.server-status__form {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.server-status__input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.server-status__input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+/* ---- Body (sidebar + stage) -------------------------------------------- */
+
+/* Fills the column between the top bar and the fixed dock; lays the file rail
+   beside the stage. The stage keeps its own `flex: 1`, so it takes whatever
+   width the sidebar leaves. */
+.shell__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  animation: shell-fade-in 0.5s ease 0.1s both;
+}
+
+/* Right-side spacer mirroring the file rail's width (collapsed 2.75rem ↔ wide
+   240px, matching .file-sidebar), so the stage between them — and the chat
+   centred in it — stays centred on the viewport in either rail state. */
+.shell__rail-spacer {
+  flex: 0 0 2.75rem;
+  transition: flex-basis 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.shell--rail-wide .shell__rail-spacer {
+  flex-basis: 240px;
+}
+
+/* A module is expanded to the centre, so the chat isn't the only thing in the
+   workspace: stop mirroring the rail and collapse the spacer, giving the focused
+   module the full width instead of centring it. (After .shell--rail-wide so it
+   wins at equal specificity.) */
+.shell--focused .shell__rail-spacer {
+  flex-basis: 0;
+}
+
+/* ---- Minimized (logo min/max toggle) ----------------------------------- */
+
+/* Minimize collapses each piece of chrome to its most compact form but leaves
+   everything mounted: the file rail closes (React state, not CSS), any expanded
+   module drops back to the dock (focus cleared, also React), and the chat card
+   shrinks to just its input bar via the rules below. The dock stays put — that's
+   where a minimized module lives. */
+
+/* Baselines so the chat collapse animates in *both* directions. These selectors
+   are global and the values are inert until .shell--min flips them; they just
+   give `max-height`/`gap` a real starting value to transition from. */
+.agent {
+  transition: gap 0.42s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.agent__status,
+.agent__messages {
+  transition:
+    max-height 0.42s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.28s ease;
+}
+
+.agent__status {
+  max-height: 2.5rem;
+}
+
+.agent__messages {
+  max-height: 1200px;
+}
+
+/* Chat: the status pill and message log ease their height to 0 and fade, while
+   the card stops growing (flex-grow → 0). Its column pins it to the bottom
+   (justify-content: flex-end), so it collapses downward here and grows back
+   upward on restore, reading as a slim command bar just above the dock. The card
+   keeps its entry animation (no `animation: none`) so restore doesn't replay it;
+   the collapse is all transitions, which reverse cleanly. */
+.shell--min .assistant-card {
+  flex-grow: 0;
+  overflow: hidden;
+}
+
+.shell--min .agent {
+  gap: 0;
+}
+
+.shell--min .agent__status,
+.shell--min .agent__messages {
+  max-height: 0;
+  min-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Stop the log from flex-filling the shrinking card as it collapses. */
+.shell--min .agent__messages {
+  flex-grow: 0;
+}
+
+/* ---- File sidebar ------------------------------------------------------- */
+
+.file-sidebar {
+  flex: 0 0 240px;
+  width: 240px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--surface);
+  border-right: 1px solid var(--border);
+  /* Same <aside> is reused when collapsing (React keeps the node, swaps the
+     class + inner content), so the width eases; overflow hides the content swap
+     mid-animation. The bg/border fade too, so the collapsed state is just a
+     button with no rail chrome. */
+  overflow: hidden;
+  transition:
+    flex-basis 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 0.3s ease,
+    border-color 0.3s ease;
+}
+
+/* Collapsed: drop the rail entirely — no background or divider, just the
+   button below floating over the canvas. The 2.75rem slot stays reserved so the
+   balanced spacer keeps the chat centred and the width still animates. */
+.file-sidebar--collapsed {
+  flex-basis: 2.75rem;
+  width: 2.75rem;
+  align-items: center;
+  padding-top: 0.85rem;
+  background-color: transparent;
+  border-right-color: transparent;
+}
+
+.file-sidebar__head {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.5rem 0.4rem 0.5rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.file-sidebar__title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Shared square icon button (add / collapse / expand). */
+.file-sidebar__iconbtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.25rem;
+  border-radius: calc(var(--radius) - 3px);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.file-sidebar__iconbtn:hover {
+  color: var(--text);
+  background: var(--bg);
+}
+
+/* When collapsed, the lone button gets its own surface + border so it reads as a
+   standalone button floating over the canvas (the rail chrome is gone). */
+.file-sidebar--collapsed .file-sidebar__iconbtn {
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem;
+}
+
+.file-sidebar--collapsed .file-sidebar__iconbtn:hover {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+}
+
+/* The collapse chevron points left (the head one is a generic right chevron). */
+.file-sidebar__chevron-left {
+  transform: rotate(180deg);
+}
+
+.file-sidebar__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Clear the fixed dock handle pinned at the bottom-center. */
+  padding: 0.3rem 0.3rem 3.5rem;
+}
+
+.file-sidebar__note {
+  margin: 0.4rem 0.5rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.file-sidebar__note--error {
+  color: color-mix(in srgb, var(--primary) 30%, #e5484d);
+}
+
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* One tree row: chevron (folders) / spacer (files) + icon + name. Directories
+   are buttons; files are static <li>s. */
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0.24rem 0.4rem;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.82rem;
+  text-align: left;
+  border-radius: calc(var(--radius) - 3px);
+}
+
+.file-row--dir {
+  cursor: pointer;
+}
+
+.file-row--dir:hover {
+  background: var(--bg);
+}
+
+.file-row--file {
+  color: var(--muted);
+}
+
+/* Drop target while a drag hovers a folder or root. */
+.file-row--drop {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.file-row__chevron {
+  flex: none;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.file-row__chevron--open {
+  transform: rotate(90deg);
+}
+
+/* Files have no chevron; reserve the same width so names line up. */
+.file-row__chevron--spacer {
+  width: 14px;
+  height: 14px;
+}
+
+.file-row__icon {
+  flex: none;
+  color: var(--muted);
+}
+
+.file-row__name {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Root section (an imported folder) --------------------------------- */
+
+.file-root + .file-root {
+  margin-top: 0.1rem;
+}
+
+/* Header row wraps the toggle button and a remove button; the "drop" highlight
+   lives here so the whole header is a drop target. */
+.file-root__head {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.26rem 0.35rem;
+}
+
+.file-root__head:hover {
+  background: var(--bg);
+}
+
+.file-root__toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.file-root__remove {
+  flex: none;
+  display: inline-flex;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.15rem;
+  border-radius: calc(var(--radius) - 4px);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.file-root__head:hover .file-root__remove {
+  opacity: 1;
+}
+
+.file-root__remove:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+
+/* ---- Stage ------------------------------------------------------------- */
+
+/* Two grid columns in every state — focus pane left, assistant right — sized
+   with fr tracks so the swap can animate. Unfocused, the focus column collapses
+   to 0fr and the assistant column takes the whole row (its card is capped and
+   centered); focused, the focus pane grows and the assistant eases into a right
+   rail. Animating grid-template-columns between fr tracks is smooth in
+   Chromium/WebView2/WKWebView; older WebKitGTK degrades to an instant swap. */
+.shell__stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 0fr 1fr;
+  align-items: stretch;
+  gap: 0;
+  /* Top: clear the floating logo (~75px tall incl. its 16px offset).
+     Bottom: leave room for the collapsed dock handle pinned at the bottom. */
+  padding: 5.75rem 1.25rem 3.5rem;
+  transition:
+    grid-template-columns 0.42s cubic-bezier(0.4, 0, 0.2, 1),
+    gap 0.42s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Drop target shown only while dragging a module out of the dock's add-list.
+   Fills the stage centre (clear of the floating logo) so the whole workspace
+   reads as "drop here to open". */
+.shell__dropzone {
+  position: absolute;
+  inset: 5.75rem 1rem 1rem;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed color-mix(in srgb, var(--primary) 45%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  color: var(--muted);
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.shell__dropzone--over {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  color: var(--text);
+}
+
+/* Inert to pointer/drag events so dragover/dragleave only fire on the zone
+   itself (no child-boundary flicker). */
+.shell__dropzone-inner {
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.shell__stage--focused {
+  grid-template-columns: 1fr 0.42fr;
+  gap: 1rem;
+}
+
+/* Assistant column. The card is capped + centered, so when the column is full
+   width (unfocused) it reads as a centered chat column, and when the column
+   narrows (focused) the card simply fills the right rail. */
+.shell__assistant {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  /* Anchor the chat card to the bottom of the column so it collapses downward on
+     minimize and grows back upward on restore (symmetric). When the card fills
+     the column this has no effect; it only positions the card once flex-grow
+     eases below 1. Margins aren't animatable, so this replaces the old
+     `margin-top: auto`, which snapped the card to the top on the way back. */
+  justify-content: flex-end;
+}
+
+.assistant-card {
+  /* `auto` basis (not 0) so that when minimize eases flex-grow to 0 the card
+     falls back to its content height rather than collapsing to nothing. */
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  display: flex;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.4),
+    0 12px 32px rgba(0, 0, 0, 0.22);
+  padding: 0.9rem;
+  /* Unfold open from the vertical centre on entering the app. */
+  transform-origin: center;
+  animation: chat-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.2s both;
+  /* Minimize eases the card down to its input bar (see .shell--min). */
+  transition: flex-grow 0.42s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* AgentModule fills whatever card holds it. */
+.assistant-card > .agent {
+  flex: 1;
+}
+
+/* Focus pane. Clipped so the collapsed 0fr column shows nothing, and it fades
+   in/out alongside the width animation. */
+.shell__focus {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 0.3s ease 0.06s;
+}
+
+.shell__stage--focused .shell__focus {
+  opacity: 1;
+}
+
+.focus-card {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.4),
+    0 12px 32px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+
+.focus-card__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.5rem 0.5rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.focus-card__title {
+  font-weight: 600;
+}
+
+.focus-card__body {
+  flex: 1;
+  min-height: 0;
+  padding: 1rem;
+  overflow: auto;
+}
+
+/* ---- Dock -------------------------------------------------------------- */
+
+.dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  animation: dock-rise 0.5s ease 0.3s both;
+}
+
+.dock__handle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 1rem;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s ease;
+}
+
+.dock__handle:hover {
+  color: var(--text);
+}
+
+.dock__grip {
+  width: 2rem;
+  height: 0.25rem;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+/* The tray sits above the handle and is revealed on hover of the whole dock. */
+.dock__tray {
+  display: flex;
+  gap: 0.75rem;
+  max-width: 100vw;
+  padding: 0 1rem;
+  max-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  opacity: 0;
+  transform: translateY(0.5rem);
+  transition:
+    max-height 0.25s ease,
+    opacity 0.2s ease,
+    padding 0.25s ease,
+    transform 0.25s ease;
+}
+
+.dock:hover .dock__tray,
+.dock--pinned .dock__tray {
+  max-height: 15rem;
+  padding: 0.85rem 1rem;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Force the tray shut right after expanding a module, overriding :hover (same
+   specificity, so this must come after the open rule to win). Cleared when the
+   pointer leaves the dock, so a later hover reopens it normally. */
+.dock--stowed .dock__tray {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+  transform: translateY(0.5rem);
+}
+
+/* Standardized brief card: every dock card is the same footprint regardless of
+   the module inside it; the module body scrolls within. */
+.dock-card {
+  flex: 0 0 auto;
+  width: 260px;
+  height: 190px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.dock-card:hover {
+  transform: translateY(-4px);
+  border-color: color-mix(in srgb, var(--primary) 50%, var(--border));
+}
+
+.dock-card--active {
+  border-color: var(--primary);
+}
+
+.dock-card__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0.35rem 0.35rem 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.dock-card__title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dock-card__actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+
+.dock-card__btn {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0.2rem 0.3rem;
+  border-radius: calc(var(--radius) - 3px);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.dock-card__btn:hover {
+  color: var(--primary);
+  background: var(--bg);
+}
+
+.dock-card__body {
+  flex: 1;
+  min-height: 0;
+  padding: 0.6rem;
+  overflow: auto;
+  font-size: 0.85rem;
+}
+
+/* ---- Add-module card --------------------------------------------------- */
+
+/* Same footprint as a real dock card, but a blank "+" that reveals a chooser. */
+.dock-card--add {
+  position: relative;
+  align-items: stretch;
+  justify-content: stretch;
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.dock-card--add:hover {
+  transform: translateY(-4px);
+  border-color: color-mix(in srgb, var(--primary) 50%, var(--border));
+}
+
+.dock-add {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: color 0.15s ease;
+}
+
+.dock-add:hover:not(:disabled) {
+  color: var(--primary);
+}
+
+.dock-add:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.dock-add__plus {
+  font-size: 1.9rem;
+  line-height: 1;
+  font-weight: 300;
+}
+
+.dock-add__label {
+  font-size: 0.8rem;
+}
+
+/* Chooser list, filling the card body below the bar and scrolling if long. */
+.dock-add__menu {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0.3rem;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  overflow-y: auto;
+}
+
+.dock-add__item {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.85rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: calc(var(--radius) - 3px);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.dock-add__item:hover {
+  background: var(--bg);
+}

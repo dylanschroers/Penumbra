@@ -7,13 +7,33 @@
 import { normalizeBaseUrl, type PullTasksResult } from "@penumbra/shared";
 import { getDb } from "../db/client";
 
-// Normalized because a scheme-less VITE_SERVER_URL (e.g. "192.168.1.50:3000")
-// turns every request into a *relative* path: the dev server answers it with
-// its SPA fallback, so sync gets 200 OK full of HTML and reports itself
-// "disconnected" rather than misconfigured.
-const SERVER_URL: string = normalizeBaseUrl(
+// The server base URL is runtime-settable (see setServerUrl) so the user can
+// point the app at a server by IP from the UI; the choice is persisted and falls
+// back to VITE_SERVER_URL / localhost. Normalized because a scheme-less value
+// (e.g. "192.168.1.50:3000") would otherwise turn every request into a *relative*
+// path: the dev server answers it with its SPA fallback, so sync gets 200 OK full
+// of HTML and reports itself "disconnected" rather than misconfigured.
+const SERVER_URL_KEY = "penumbra.serverUrl";
+const DEFAULT_SERVER_URL: string = normalizeBaseUrl(
   import.meta.env.VITE_SERVER_URL ?? "http://localhost:3000",
 );
+
+function loadServerUrl(): string {
+  try {
+    const saved = localStorage.getItem(SERVER_URL_KEY);
+    return saved ? normalizeBaseUrl(saved) : DEFAULT_SERVER_URL;
+  } catch {
+    return DEFAULT_SERVER_URL;
+  }
+}
+
+let serverUrl: string = loadServerUrl();
+
+/** The server this client currently talks to. */
+export function getServerUrl(): string {
+  return serverUrl;
+}
+
 const INTERVAL_MS = 15_000;
 const DEBOUNCE_MS = 800;
 
@@ -54,7 +74,7 @@ async function pushOnce(): Promise<void> {
   const db = getDb();
   const { seqs, rows } = await db.collectOutbox();
   if (rows.length === 0) return;
-  const res = await fetch(`${SERVER_URL}/sync/tasks`, {
+  const res = await fetch(`${serverUrl}/sync/tasks`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ rows }),
@@ -69,7 +89,7 @@ async function pushOnce(): Promise<void> {
 async function pullOnce(): Promise<{ changed: boolean; serverId: string }> {
   const db = getDb();
   const cursor = await db.getCursor();
-  const res = await fetch(`${SERVER_URL}/sync/tasks?since=${cursor}`);
+  const res = await fetch(`${serverUrl}/sync/tasks?since=${cursor}`);
   if (!res.ok) throw new Error(`pull failed: ${res.status}`);
   const { rows, serverId } = (await res.json()) as PullTasksResult;
   const changed = rows.length > 0 && (await db.applyServerRows(rows)) > 0;
@@ -132,6 +152,20 @@ async function runRound(): Promise<void> {
 export async function flushSync(): Promise<void> {
   if (syncing) await inFlight;
   await syncNow();
+}
+
+/** Point the client at a new server and test it: persist the address, flip the
+ *  status to "pending", then run a fresh sync round whose success/failure updates
+ *  the status (and the UI listening on SYNC_STATUS_EVENT). */
+export async function setServerUrl(url: string): Promise<void> {
+  serverUrl = normalizeBaseUrl(url);
+  try {
+    localStorage.setItem(SERVER_URL_KEY, serverUrl);
+  } catch {
+    // Non-fatal: the choice just won't persist across reloads.
+  }
+  setStatus("pending");
+  await flushSync();
 }
 
 /** Nudge a sync soon, coalescing bursts of edits into one round. */

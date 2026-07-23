@@ -565,6 +565,48 @@ body {
 
 .agent__status {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* Provider selector: a small segmented control routing the chat to a backend
+   (local llama / server Unsloth / cloud). Disabled segments aren't wired up yet. */
+.agent__providers {
+  display: inline-flex;
+  gap: 0.1rem;
+  padding: 0.15rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.agent__provider {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.agent__provider:hover:not(:disabled):not(.agent__provider--active) {
+  color: var(--text);
+}
+
+.agent__provider--active {
+  color: var(--primary-text);
+  background: var(--primary);
+}
+
+.agent__provider:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .agent__pill {

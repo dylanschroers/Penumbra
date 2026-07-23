@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from "react";
-import type { AgentStatus } from "../../engine";
+import { type AgentStatus, PROVIDERS } from "../../engine";
 import { useAgent } from "./useAgent";
 
 // The assistant module: a status pill plus a chat against the embedded local
@@ -31,7 +31,7 @@ function StatusPill({ status }: { status: AgentStatus }) {
 }
 
 export function AgentModule() {
-  const { messages, status, busy, send } = useAgent();
+  const { messages, status, busy, send, provider, setProvider } = useAgent();
   const [draft, setDraft] = useState("");
 
   const ready = status.state === "ready";
@@ -45,6 +45,25 @@ export function AgentModule() {
   return (
     <div className="agent">
       <div className="agent__status">
+        <div className="agent__providers">
+          {/* Each button is individually labelled + aria-pressed; a wrapper role
+              would only trip useSemanticElements for little a11y gain. */}
+          {PROVIDERS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className={`agent__provider${
+                provider === p.id ? " agent__provider--active" : ""
+              }`}
+              onClick={() => setProvider(p.id)}
+              disabled={!p.available}
+              aria-pressed={provider === p.id}
+              title={p.hint}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
         <StatusPill status={status} />
       </div>
 
