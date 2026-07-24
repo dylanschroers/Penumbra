@@ -53,7 +53,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             db::db_exec,
             fs::fs_list,
-            fs::fs_move
+            fs::fs_move,
+            fs::fs_read_head
         ])
         .setup(|app| {
             // Native persistence must come up before the webview asks for data;

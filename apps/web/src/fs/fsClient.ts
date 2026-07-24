@@ -61,3 +61,19 @@ export async function moveEntry(from: string, toDir: string): Promise<string> {
   const { path } = await invoke<{ path: string }>("fs_move", { from, toDir });
   return path;
 }
+
+/** The head of a file plus whether more follows it. */
+export interface FileHead {
+  content: string;
+  /** True when the file is larger than the bytes returned. */
+  truncated: boolean;
+}
+
+/**
+ * Read up to `maxBytes` from the start of a file — enough to preview a dataset
+ * without loading a multi-gigabyte file. `truncated` is false only when the
+ * whole file fit, so a caller can tell an exact record count from a sampled one.
+ */
+export function readHead(path: string, maxBytes: number): Promise<FileHead> {
+  return invoke<FileHead>("fs_read_head", { path, maxBytes });
+}

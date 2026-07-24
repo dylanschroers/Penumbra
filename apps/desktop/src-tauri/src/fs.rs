@@ -94,3 +94,43 @@ pub fn fs_move(from: String, to_dir: String) -> Result<Value, String> {
     std::fs::rename(&from, &dest).map_err(|e| e.to_string())?;
     Ok(json!({ "path": dest.to_string_lossy() }))
 }
+
+/// Read at most `max_bytes` from the start of a file, for previewing a dataset
+/// without slurping a multi-gigabyte file into the webview. Returns
+/// `{ content, truncated }`: the decoded head (UTF-8, lossy so a byte cut mid
+/// multi-byte char can't error), and whether the file is larger than what was
+/// read — the caller uses `truncated: false` to know a record count is exact.
+///
+/// Read-only, like `fs_list`. A directory or unreadable path is a clear error
+/// rather than a panic.
+#[tauri::command]
+pub fn fs_read_head(path: String, max_bytes: usize) -> Result<Value, String> {
+    use std::io::Read;
+
+    let file_path = PathBuf::from(&path)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let meta = std::fs::metadata(&file_path).map_err(|e| e.to_string())?;
+    if meta.is_dir() {
+        return Err("path is a directory".into());
+    }
+
+    let mut file = std::fs::File::open(&file_path).map_err(|e| e.to_string())?;
+    // Read one byte past the cap so a file that exactly fills the buffer still
+    // reports truncated=false only when it truly ends there.
+    let mut buf = vec![0u8; max_bytes];
+    let mut read = 0usize;
+    while read < max_bytes {
+        let n = file.read(&mut buf[read..]).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break; // EOF
+        }
+        read += n;
+    }
+    buf.truncate(read);
+
+    Ok(json!({
+        "content": String::from_utf8_lossy(&buf),
+        "truncated": (read as u64) < meta.len(),
+    }))
+}

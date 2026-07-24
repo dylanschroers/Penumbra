@@ -900,6 +900,213 @@ body {
   color: var(--danger);
 }
 
+/* ---- Model library (finetune tab) -------------------------------------- */
+
+.lab__finetune {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 0;
+}
+
+.lab__library {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.lab__library-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.lab__library-title {
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.lab__library-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.lab__library-path {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.lab__library-note {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.lab__library-error {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--danger);
+}
+
+/* The scanned items: a scrollable list of one-click choices that fill a field. */
+.lab__lib-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-height: 11rem;
+  overflow-y: auto;
+}
+
+.lab__lib-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.lab__lib-item:hover {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+/* The selected item (base model / dataset). */
+.lab__lib-item[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
+.lab__lib-badge {
+  flex-shrink: 0;
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+/* HF model dirs are the fine-tune-ready kind — highlight them. */
+.lab__lib-badge--hf {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+.lab__lib-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lab__lib-size {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+/* ---- Dataset preview --------------------------------------------------- */
+
+.lab__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.lab__preview-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lab__preview-meta {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.lab__preview-issues {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.lab__preview-issue {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.lab__preview-issue--error {
+  color: var(--danger);
+}
+
+.lab__preview-records {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.lab__preview-record {
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.75rem;
+}
+
+.lab__preview-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.lab__preview-turn {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.lab__preview-role {
+  flex-shrink: 0;
+  min-width: 4.5rem;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.lab__preview-content {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.lab__preview-json {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
 .lab__error {
   color: var(--danger);
   margin: 0;
