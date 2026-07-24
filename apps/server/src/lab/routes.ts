@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
   benchmarkRequest,
   colabProviderConfig,
@@ -12,6 +13,17 @@ import { requireAuth } from "../http/auth";
 import { lmEvalAvailable, runBenchmark } from "./benchmark";
 import type { LabStore } from "./jobs";
 import { StudioClient, type StudioRun, TrainingBusyError } from "./studio";
+import {
+  computeNeed,
+  dirFileSizes,
+  resolveDest,
+  uploadRoot,
+  writeChunk,
+} from "./uploads";
+
+/** A chunk write body's headroom — chunks are a few MB; keep the ceiling well
+ *  above that but bounded. */
+const UPLOAD_CHUNK_LIMIT = 16 * 1024 * 1024;
 
 // The Model Lab's HTTP surface. Jobs start, return immediately with an id, and
 // report progress over SSE — training runs for minutes to hours, so nothing
@@ -149,6 +161,62 @@ export function registerLabRoutes(
     colab = null;
     return { ok: true };
   });
+
+  // --- Upload: bring a client-local model or dataset onto this host ---------
+  //
+  // The picker on a laptop yields a path only the laptop can read; training runs
+  // here. These routes land the file under the upload root so the finetune can
+  // then pass Studio a path Studio can open. Chunked so a multi-GB model streams
+  // rather than buffering whole.
+
+  // Which files of a model the host still needs — lets the client skip an
+  // upload when a full copy is already here. Body: { name, files:[{rel,size}] }.
+  app.post("/lab/models/plan", { preHandler }, async (req, reply) => {
+    const body = req.body as {
+      name?: unknown;
+      files?: { rel?: unknown; size?: unknown }[];
+    };
+    if (typeof body?.name !== "string" || !Array.isArray(body.files)) {
+      return reply.code(400).send({ error: "bad_request" });
+    }
+    const files: { rel: string; size: number }[] = [];
+    try {
+      for (const f of body.files) {
+        if (typeof f?.rel !== "string" || typeof f?.size !== "number") {
+          return reply.code(400).send({ error: "bad_request" });
+        }
+        // Prove every rel is safe before we agree to receive it.
+        resolveDest(uploadRoot(), "models", join(body.name, f.rel));
+        files.push({ rel: f.rel, size: f.size });
+      }
+      const modelDir = resolveDest(uploadRoot(), "models", body.name);
+      const sizes = await dirFileSizes(modelDir);
+      return { path: modelDir, need: computeNeed(files, (rel) => sizes[rel]) };
+    } catch {
+      return reply.code(400).send({ error: "bad_path" });
+    }
+  });
+
+  // One chunk of a file. Query: kind (datasets|models), rel, offset. Body: the
+  // raw bytes (application/octet-stream). Returns the host path being written.
+  app.post<{ Querystring: { kind?: string; rel?: string; offset?: string } }>(
+    "/lab/upload",
+    { preHandler, bodyLimit: UPLOAD_CHUNK_LIMIT },
+    async (req, reply) => {
+      const { kind = "", rel = "", offset = "0" } = req.query;
+      if (!Buffer.isBuffer(req.body)) {
+        return reply.code(400).send({ error: "expected_binary_body" });
+      }
+      let dest: string;
+      try {
+        dest = resolveDest(uploadRoot(), kind, rel);
+      } catch {
+        return reply.code(400).send({ error: "bad_path" });
+      }
+      await writeChunk(dest, Number(offset) || 0, req.body);
+      return { path: dest };
+    },
+  );
 
   app.get("/lab/jobs", { preHandler }, async () => store.listJobs());
   app.get("/lab/runs", { preHandler }, async () => store.listRuns());

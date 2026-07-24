@@ -134,3 +134,36 @@ pub fn fs_read_head(path: String, max_bytes: usize) -> Result<Value, String> {
         "truncated": (read as u64) < meta.len(),
     }))
 }
+
+/// Read `length` bytes from `offset` in a file, returned as raw bytes (an
+/// ArrayBuffer on the JS side — no base64 bloat). The uploader pulls a large
+/// file across in chunks this way, so a multi-gigabyte model never has to sit in
+/// the webview whole. A short (or empty) result means end of file.
+///
+/// Read-only, like the rest of this module.
+#[tauri::command]
+pub fn fs_read_chunk(
+    path: String,
+    offset: u64,
+    length: usize,
+) -> Result<tauri::ipc::Response, String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let file_path = PathBuf::from(&path)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let mut file = std::fs::File::open(&file_path).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+
+    let mut buf = vec![0u8; length];
+    let mut read = 0usize;
+    while read < length {
+        let n = file.read(&mut buf[read..]).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break; // EOF
+        }
+        read += n;
+    }
+    buf.truncate(read);
+    Ok(tauri::ipc::Response::new(buf))
+}

@@ -32,6 +32,11 @@ const FORMAT_OPTIONS: FormatType[] = [
 // records, small enough to stay instant on a multi-GB file.
 const PREVIEW_BYTES = 64 * 1024;
 
+/** A value that names a file on this device — an absolute path or `~` — versus a
+ *  HuggingFace id (`org/name`), which needs no transfer. Only local picks are
+ *  uploaded to the host before a run. */
+const looksLocalPath = (v: string): boolean => /^(~|\/|[A-Za-z]:[\\/])/.test(v);
+
 // The Model Lab: fine-tune a model, export it, and benchmark it. Card chrome
 // belongs to the workspace ModuleFrame, so this renders only inner content.
 //
@@ -386,6 +391,9 @@ export function LabModule() {
   const [colabURL, setColabURL] = useState("");
   const [colabKey, setColabKey] = useState("");
   const [providerOpen, setProviderOpen] = useState(false);
+  // Transfer state for the pre-run upload of a local model/dataset to the host.
+  const [uploading, setUploading] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState<string | null>(null);
 
   // Escape closes the compute popover, matching the backdrop click.
   useEffect(() => {
@@ -419,11 +427,52 @@ export function LabModule() {
     setColabKey("");
   }
 
-  function onFinetune(event: FormEvent) {
+  // Report upload progress as a percentage when the total is known, else as the
+  // bytes sent so far.
+  const uploadReporter = (label: string) => (done: number, total: number) => {
+    const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    setUploadMsg(
+      total > done ? `${label} ${pct}%` : `${label} ${formatSize(done)}`,
+    );
+  };
+
+  async function onFinetune(event: FormEvent) {
     event.preventDefault();
+    let modelRef = baseModel.trim();
+    let datasetRef = dataset.trim();
+
+    // A local pick names a file only this device can read; send it to the host
+    // first and train from the path it returns. HF ids pass through untouched.
+    if (
+      isFsAvailable &&
+      (looksLocalPath(modelRef) || looksLocalPath(datasetRef))
+    ) {
+      setUploading(true);
+      try {
+        if (looksLocalPath(modelRef)) {
+          modelRef = await lab.uploadModel(
+            modelRef,
+            uploadReporter("Uploading model…"),
+          );
+        }
+        if (looksLocalPath(datasetRef)) {
+          datasetRef = await lab.uploadDataset(
+            datasetRef,
+            uploadReporter("Uploading dataset…"),
+          );
+        }
+        setUploadMsg(null);
+      } catch (err) {
+        setUploadMsg(`⚠️ ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      } finally {
+        setUploading(false);
+      }
+    }
+
     void lab.finetune({
-      baseModel,
-      dataset: toDatasetSource(dataset),
+      baseModel: modelRef,
+      dataset: toDatasetSource(datasetRef),
       learningRate: 2e-4,
       maxSteps,
       loraR: 16,
@@ -619,24 +668,29 @@ export function LabModule() {
                 onChange={(e) => setMaxSteps(Number(e.target.value))}
               />
             </label>
+            {uploadMsg && <p className="lab__library-note">{uploadMsg}</p>}
             {/* Studio runs one training job at a time; asking for a second is a
                 guaranteed failure, so the button is disabled instead. It also
                 stays disabled when neither the local nor the Colab trainer is
-                reachable — the server would only reject it (no_trainer). */}
+                reachable — the server would only reject it (no_trainer) — and
+                while a local model/dataset is being transferred to the host. */}
             <button
               type="submit"
               disabled={
                 !baseModel.trim() ||
                 !dataset.trim() ||
                 lab.running ||
+                uploading ||
                 trainTarget === null
               }
             >
-              {lab.running
-                ? "A job is running…"
-                : trainTarget === "colab"
-                  ? "Start fine-tune on Colab"
-                  : "Start fine-tune"}
+              {uploading
+                ? "Uploading…"
+                : lab.running
+                  ? "A job is running…"
+                  : trainTarget === "colab"
+                    ? "Start fine-tune on Colab"
+                    : "Start fine-tune"}
             </button>
           </form>
         </div>

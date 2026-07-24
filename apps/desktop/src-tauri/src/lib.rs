@@ -54,7 +54,8 @@ pub fn run() {
             db::db_exec,
             fs::fs_list,
             fs::fs_move,
-            fs::fs_read_head
+            fs::fs_read_head,
+            fs::fs_read_chunk
         ])
         .setup(|app| {
             // Native persistence must come up before the webview asks for data;

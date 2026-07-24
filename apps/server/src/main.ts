@@ -13,7 +13,17 @@ import { createServerTaskStore } from "./store/tasks";
 import { createTaskSyncStore } from "./sync/store";
 import { registerTaskSyncRoutes } from "./sync/tasks";
 
-const app = Fastify({ logger: true });
+// bodyLimit covers the Model Lab's upload chunks (a few MB each); the default
+// 1 MB would reject them. See registerLabRoutes → POST /lab/upload.
+const app = Fastify({ logger: true, bodyLimit: 16 * 1024 * 1024 });
+
+// Raw binary bodies for the upload route; every other route stays JSON. Fastify
+// hands the handler a Buffer.
+app.addContentTypeParser(
+  "application/octet-stream",
+  { parseAs: "buffer" },
+  (_req, body, done) => done(null, body),
+);
 
 // v0 has no auth (single user, LAN/localhost — see docs/SYNC.md), so reflect any
 // origin. Lock this down before the server ever faces the open internet. The

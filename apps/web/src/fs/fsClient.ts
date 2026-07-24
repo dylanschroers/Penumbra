@@ -77,3 +77,17 @@ export interface FileHead {
 export function readHead(path: string, maxBytes: number): Promise<FileHead> {
   return invoke<FileHead>("fs_read_head", { path, maxBytes });
 }
+
+/**
+ * Read `length` bytes from `offset` in a file, as an ArrayBuffer (a `BodyInit`
+ * that fetch accepts directly). A short or empty result means end of file. Used
+ * by the uploader to stream a file to the server in chunks without ever holding
+ * the whole thing in the webview.
+ */
+export function readChunk(
+  path: string,
+  offset: number,
+  length: number,
+): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>("fs_read_chunk", { path, offset, length });
+}

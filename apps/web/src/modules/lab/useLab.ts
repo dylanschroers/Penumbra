@@ -7,6 +7,7 @@ import type {
 } from "@penumbra/shared";
 import { normalizeBaseUrl } from "@penumbra/shared";
 import { useCallback, useEffect, useState } from "react";
+import { type UploadProgress, uploadDataset, uploadModel } from "./upload";
 
 // Drives the Model Lab module. Everything goes through the Penumbra server's
 // /lab/* routes — never to Studio directly, because the Studio key is an
@@ -129,5 +130,19 @@ export function useLab() {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
+    // Transfer a client-local file to the Studio host and return the path there
+    // to train from. Desktop only (needs disk access).
+    uploadDataset: (localPath: string, onProgress?: UploadProgress) =>
+      uploadDataset(
+        { serverURL: SERVER_URL, token: TOKEN },
+        localPath,
+        onProgress,
+      ),
+    uploadModel: (localDir: string, onProgress?: UploadProgress) =>
+      uploadModel(
+        { serverURL: SERVER_URL, token: TOKEN },
+        localDir,
+        onProgress,
+      ),
   };
 }
