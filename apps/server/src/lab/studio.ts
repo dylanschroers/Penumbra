@@ -62,6 +62,15 @@ export interface ExportStatus {
 /** One decoded SSE frame from Studio's progress stream. */
 export type StudioProgress = SseFrame<Record<string, unknown>>;
 
+/**
+ * Studio's readiness as the lab reports it:
+ * - `ready` — answering and authorized.
+ * - `unauthorized` — up, but the key is missing or wrong (a 401/403). This is a
+ *   *different* fix from "not running", so it is not collapsed into `stopped`.
+ * - `stopped` — unreachable, or answering with some other error.
+ */
+export type StudioReachability = "ready" | "unauthorized" | "stopped";
+
 export class StudioClient {
   readonly baseURL: string;
   private readonly headers: Record<string, string>;
@@ -103,17 +112,29 @@ export class StudioClient {
     return (await res.json()) as T;
   }
 
-  /** True when Studio answers at all — the lab's readiness signal. */
-  async reachable(): Promise<boolean> {
+  /**
+   * The lab's readiness probe. Distinguishes "up but the key is wrong" from
+   * "not running", because a 401 sends you looking in the wrong place
+   * otherwise — the reason this returns three states rather than a boolean.
+   */
+  async probe(): Promise<StudioReachability> {
     try {
       const res = await fetch(`${this.baseURL}/v1/models`, {
         headers: this.headers,
         signal: AbortSignal.timeout(1500),
       });
-      return res.ok;
+      if (res.ok) return "ready";
+      if (res.status === 401 || res.status === 403) return "unauthorized";
+      return "stopped";
     } catch {
-      return false;
+      return "stopped";
     }
+  }
+
+  /** True when Studio is answering and authorized. Kept for callers that only
+   *  need a yes/no; `probe()` carries the reason. */
+  async reachable(): Promise<boolean> {
+    return (await this.probe()) === "ready";
   }
 
   /**

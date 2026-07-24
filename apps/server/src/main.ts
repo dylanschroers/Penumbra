@@ -1,3 +1,6 @@
+// Must be first: populates process.env from apps/server/.env before any module
+// below reads a credential at construction time.
+import "./env";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { registerAgentRoutes } from "./agent/routes";
