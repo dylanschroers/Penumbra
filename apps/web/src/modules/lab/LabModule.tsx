@@ -1,5 +1,5 @@
 import type { BenchmarkResult, DatasetSource, LabJob } from "@penumbra/shared";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { useLab } from "./useLab";
 
 // The Model Lab: fine-tune a model, export it, and benchmark it. Card chrome
@@ -80,11 +80,41 @@ export function LabModule() {
   const [benchModel, setBenchModel] = useState("");
   const [suite, setSuite] = useState("penumbra-tools-v1");
   const [samples, setSamples] = useState(20);
+  const [colabURL, setColabURL] = useState("");
+  const [colabKey, setColabKey] = useState("");
+  const [providerOpen, setProviderOpen] = useState(false);
+
+  // Escape closes the compute popover, matching the backdrop click.
+  useEffect(() => {
+    if (!providerOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setProviderOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [providerOpen]);
 
   const suites = lab.status?.suites ?? [];
   const selected = suites.find((s) => s.id === suite);
   const lmEvalMissing =
     selected?.kind === "general" && lab.status?.lmEval === "missing";
+
+  // Where a fine-tune would land right now: local Studio when it's up, else the
+  // Colab fallback if it's reachable. null means nothing can train.
+  const colab = lab.status?.colab;
+  const trainTarget: "local" | "colab" | null =
+    lab.status?.studio === "ready"
+      ? "local"
+      : colab?.studio === "ready"
+        ? "colab"
+        : null;
+
+  function onSaveColab(event: FormEvent) {
+    event.preventDefault();
+    void lab.setColab(colabURL.trim(), colabKey);
+    // Don't keep the bearer in component state once it's been handed off.
+    setColabKey("");
+  }
 
   function onFinetune(event: FormEvent) {
     event.preventDefault();
@@ -108,14 +138,92 @@ export function LabModule() {
   return (
     <div className="lab">
       <div className="lab__status">
-        <span
-          className={`lab__pill lab__pill--${lab.status?.studio ?? "stopped"}`}
+        {/* The Studio pill doubles as the compute-provider control: click it to
+            open the popover that configures the Colab fallback. */}
+        <button
+          type="button"
+          className={`lab__pill lab__pill--${lab.status?.studio ?? "stopped"} lab__pill--action`}
+          onClick={() => setProviderOpen((open) => !open)}
+          aria-haspopup="dialog"
+          aria-expanded={providerOpen}
+          title="Configure compute providers"
         >
           Studio: {lab.status?.studio ?? "unreachable"}
-        </span>
+          {colab?.configured && ` · Colab: ${colab.studio}`}
+          <span className="lab__pill-caret" aria-hidden="true">
+            ▾
+          </span>
+        </button>
         <span className="lab__pill">
           lm-eval: {lab.status?.lmEval ?? "unknown"}
         </span>
+
+        {providerOpen && (
+          <>
+            {/* A transparent backdrop so a click anywhere outside dismisses. */}
+            <button
+              type="button"
+              className="lab__popover-backdrop"
+              aria-label="Close compute providers"
+              onClick={() => setProviderOpen(false)}
+            />
+            <div
+              className="lab__popover"
+              role="dialog"
+              aria-label="Compute providers"
+            >
+              <div className="lab__popover-head">
+                <span
+                  className={`lab__pill lab__pill--${lab.status?.studio ?? "stopped"}`}
+                >
+                  Local Studio: {lab.status?.studio ?? "unreachable"}
+                </span>
+              </div>
+              {lab.status?.studio === "unauthorized" && (
+                <p className="lab__provider-note lab__provider-note--warn">
+                  Studio is running but rejected the server's key. Set
+                  UNSLOTH_API_KEY on the server (apps/server/.env) and restart
+                  it.
+                </p>
+              )}
+
+              {/* Colab fallback. The key is sent to the server and never read
+                  back, so this field is always blank on load — re-enter it to
+                  change the endpoint. */}
+              <form className="lab__form" onSubmit={onSaveColab}>
+                <span className="lab__popover-label">Colab fallback</span>
+                <input
+                  aria-label="Colab endpoint URL"
+                  placeholder="https://xxxx.trycloudflare.com"
+                  value={colabURL}
+                  onChange={(e) => setColabURL(e.target.value)}
+                />
+                <input
+                  aria-label="Colab API key"
+                  type="password"
+                  placeholder="Bearer token (optional on a trusted tunnel)"
+                  value={colabKey}
+                  onChange={(e) => setColabKey(e.target.value)}
+                />
+                <div className="lab__provider-actions">
+                  <button type="submit" disabled={!colabURL.trim()}>
+                    {colab?.configured ? "Update" : "Save"}
+                  </button>
+                  {colab?.configured && (
+                    <button type="button" onClick={() => void lab.clearColab()}>
+                      Remove
+                    </button>
+                  )}
+                </div>
+                {colab?.configured && (
+                  <p className="lab__provider-note">
+                    Fallback: {colab.baseURL} — {colab.studio}
+                  </p>
+                )}
+              </form>
+            </div>
+          </>
+        )}
       </div>
 
       <nav className="lab__tabs">
@@ -157,17 +265,23 @@ export function LabModule() {
             />
           </label>
           {/* Studio runs one training job at a time; asking for a second is a
-              guaranteed failure, so the button is disabled instead. */}
+                guaranteed failure, so the button is disabled instead. It also
+                stays disabled when neither the local nor the Colab trainer is
+                reachable — the server would only reject it (no_trainer). */}
           <button
             type="submit"
             disabled={
               !baseModel.trim() ||
               !dataset.trim() ||
               lab.running ||
-              lab.status?.studio !== "ready"
+              trainTarget === null
             }
           >
-            {lab.running ? "A job is running…" : "Start fine-tune"}
+            {lab.running
+              ? "A job is running…"
+              : trainTarget === "colab"
+                ? "Start fine-tune on Colab"
+                : "Start fine-tune"}
           </button>
         </form>
       )}

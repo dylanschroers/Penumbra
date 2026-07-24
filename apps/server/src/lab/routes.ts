@@ -1,5 +1,6 @@
 import {
   benchmarkRequest,
+  colabProviderConfig,
   exportRequest,
   findSuite,
   finetuneRequest,
@@ -35,6 +36,9 @@ export interface LabRouteOptions {
   inferenceURL?: string;
   apiKey?: string;
   token?: string;
+  /** Builds the Colab fallback trainer from the config a user submits.
+   *  Injectable so tests can supply a fake without standing up a live tunnel. */
+  makeColab?: (config: { baseURL: string; apiKey?: string }) => StudioClient;
 }
 
 export function registerLabRoutes(
@@ -45,10 +49,52 @@ export function registerLabRoutes(
     inferenceURL,
     apiKey = process.env.UNSLOTH_API_KEY,
     token = process.env.PENUMBRA_AGENT_TOKEN,
+    makeColab = (config) => new StudioClient(config),
   }: LabRouteOptions,
 ): void {
   const preHandler = requireAuth(token);
   const baseURL = inferenceURL ?? studio.baseURL;
+
+  // The optional Colab fallback: a second Studio, reached through a tunnel the
+  // user configures at runtime. Held in memory only — the bearer never touches
+  // disk and must be re-entered after a restart, the same posture the local
+  // Studio key keeps. `null` until configured.
+  let colab: StudioClient | null = null;
+
+  /** Choose the Studio to train on. "auto" prefers local and falls back to a
+   *  reachable Colab; an explicit provider is honored as asked. Returns the
+   *  chosen client and a label, or an error code the route turns into a 409. */
+  async function pickTrainer(
+    provider: "auto" | "local" | "colab" | undefined,
+  ): Promise<
+    | { ok: true; client: StudioClient; via: "local" | "colab" }
+    | { ok: false; error: string; message: string }
+  > {
+    if (provider === "local") return { ok: true, client: studio, via: "local" };
+    if (provider === "colab") {
+      if (!colab) {
+        return {
+          ok: false,
+          error: "colab_not_configured",
+          message: "no Colab endpoint is configured",
+        };
+      }
+      return { ok: true, client: colab, via: "colab" };
+    }
+    // auto: local first, then a reachable Colab.
+    if (await studio.reachable()) {
+      return { ok: true, client: studio, via: "local" };
+    }
+    if (colab && (await colab.reachable())) {
+      return { ok: true, client: colab, via: "colab" };
+    }
+    return {
+      ok: false,
+      error: "no_trainer",
+      message:
+        "local Studio is unreachable and no reachable Colab endpoint is configured",
+    };
+  }
 
   /** Run work in the background, keeping the job record current. The job row
    *  is the source of truth: the client may be gone, and must still be able to
@@ -68,11 +114,41 @@ export function registerLabRoutes(
       .catch((err) => store.failJob(job.id, err));
   };
 
-  app.get("/lab/status", { preHandler }, async () => ({
-    studio: (await studio.reachable()) ? "ready" : "stopped",
-    lmEval: (await lmEvalAvailable()) ? "installed" : "missing",
-    suites: SUITES,
-  }));
+  app.get("/lab/status", { preHandler }, async () => {
+    // Probe both providers in parallel; a missing Colab is simply "stopped".
+    const [studioState, lmEval, colabState] = await Promise.all([
+      studio.probe(),
+      lmEvalAvailable(),
+      colab ? colab.probe() : Promise.resolve("stopped" as const),
+    ]);
+    return {
+      // Tri-state: "unauthorized" (up, bad/missing key) is not "stopped".
+      studio: studioState,
+      lmEval: lmEval ? "installed" : "missing",
+      suites: SUITES,
+      // The URL is not secret and helps the user confirm what they pointed at;
+      // the bearer is never returned.
+      colab: {
+        configured: colab !== null,
+        baseURL: colab?.baseURL ?? null,
+        studio: colabState,
+      },
+    };
+  });
+
+  // Configure (or replace) the Colab fallback. The key arrives once here and is
+  // held only in memory — see the `colab` declaration above.
+  app.post("/lab/provider/colab", { preHandler }, async (req, reply) => {
+    const parsed = colabProviderConfig.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
+    colab = makeColab(parsed.data);
+    return { ok: true, baseURL: colab.baseURL };
+  });
+
+  app.delete("/lab/provider/colab", { preHandler }, async () => {
+    colab = null;
+    return { ok: true };
+  });
 
   app.get("/lab/jobs", { preHandler }, async () => store.listJobs());
   app.get("/lab/runs", { preHandler }, async () => store.listRuns());
@@ -135,6 +211,15 @@ export function registerLabRoutes(
       return reply.code(400).send({ error: "bad_request" });
     }
     const input = parsed.data;
+
+    // Decide where this trains before creating a job, so a request with no
+    // usable trainer fails fast with a clear code instead of a dead job row.
+    const pick = await pickTrainer(input.provider);
+    if (!pick.ok) {
+      return reply.code(409).send({ error: pick.error, message: pick.message });
+    }
+    const trainer = pick.client;
+
     const job = store.createJob("finetune");
     const run = store.createRun({
       jobId: job.id,
@@ -146,14 +231,15 @@ export function registerLabRoutes(
     });
 
     runJob(job, async (report) => {
+      report({ detail: `training via ${pick.via}` });
       // Snapshot the runs that already exist, so the output dir recorded below
       // is provably the one this training produced.
-      const existingRuns = new Set((await studio.listRuns()).map(runKey));
+      const existingRuns = new Set((await trainer.listRuns()).map(runKey));
 
       try {
         // QLoRA and 4-bit are forced here, not offered: the GPU host cannot run
         // anything heavier, so a client must not be able to ask for it.
-        await studio.startTraining({
+        await trainer.startTraining({
           model_name: input.baseModel,
           training_type: "LoRA/QLoRA",
           format_type: input.format,
@@ -174,7 +260,7 @@ export function registerLabRoutes(
       }
 
       let sawComplete = false;
-      for await (const frame of studio.trainingProgress()) {
+      for await (const frame of trainer.trainingProgress()) {
         if (frame.event === "progress") {
           const step = Number(frame.data.step ?? 0);
           const total = Number(frame.data.total_steps ?? input.maxSteps);
@@ -203,7 +289,7 @@ export function registerLabRoutes(
       // beforehand so a previous run's checkpoint can't be recorded as this
       // one's. If nothing new appears, record nothing: the run then has no
       // outputDir and export refuses it, which is the safe failure.
-      const after = await studio.listRuns();
+      const after = await trainer.listRuns();
       const ours = after.find((r) => !existingRuns.has(runKey(r)));
       if (ours?.output_dir) {
         store.setRunArtifacts(run.id, { outputDir: ours.output_dir });
@@ -225,6 +311,12 @@ export function registerLabRoutes(
         .send({ error: "no_checkpoint", message: "run has no output dir yet" });
     }
 
+    // Export targets the local Studio: it needs the checkpoint on the same host,
+    // and a Colab tunnel is ephemeral — by export time the notebook that trained
+    // the run is usually gone. A run trained on Colab therefore exports only
+    // while that session is alive and pointed at as the local Studio; otherwise
+    // loadCheckpoint fails on a path this host cannot see, which is the safe,
+    // visible failure rather than a silently wrong artifact.
     const job = store.createJob("export");
     runJob(job, async (report) => {
       report({ detail: "loading checkpoint" });

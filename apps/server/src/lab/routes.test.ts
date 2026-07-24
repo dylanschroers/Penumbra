@@ -14,7 +14,7 @@ import type { StudioClient } from "./studio";
  *  and hid a polling loop that would have hung forever. */
 function fakeStudio(over: Partial<StudioClient> = {}): StudioClient {
   let opSeq = 0;
-  return {
+  const base = {
     baseURL: "http://studio",
     reachable: async () => true,
     startTraining: async () => {},
@@ -32,7 +32,13 @@ function fakeStudio(over: Partial<StudioClient> = {}): StudioClient {
       last_op_output_path: "/runs/7/gguf",
     }),
     ...over,
-  } as unknown as StudioClient;
+  };
+  // Derive the tri-state probe from reachable unless a test sets it explicitly,
+  // so fakes that only care about up/down don't each have to spell it out.
+  const probe =
+    over.probe ??
+    (async () => ((await base.reachable()) ? "ready" : "stopped"));
+  return { ...base, probe } as unknown as StudioClient;
 }
 
 let app: FastifyInstance;
@@ -43,9 +49,13 @@ beforeEach(() => {
 });
 afterEach(() => app?.close());
 
-async function build(studio = fakeStudio(), token?: string) {
+async function build(
+  studio = fakeStudio(),
+  token?: string,
+  makeColab?: (config: { baseURL: string; apiKey?: string }) => StudioClient,
+) {
   app = Fastify();
-  registerLabRoutes(app, { store, studio, token });
+  registerLabRoutes(app, { store, studio, token, makeColab });
   await app.ready();
   return app;
 }
@@ -115,6 +125,122 @@ describe("GET /lab/status", () => {
     expect((await app.inject({ url: "/lab/status" })).json().studio).toBe(
       "stopped",
     );
+  });
+
+  it("distinguishes an unauthorized Studio from a stopped one", async () => {
+    const app = await build(
+      fakeStudio({ probe: async () => "unauthorized" as const }),
+    );
+    expect((await app.inject({ url: "/lab/status" })).json().studio).toBe(
+      "unauthorized",
+    );
+  });
+
+  it("reports no Colab fallback until one is configured", async () => {
+    const app = await build();
+    expect(
+      (await app.inject({ url: "/lab/status" })).json().colab,
+    ).toMatchObject({ configured: false, baseURL: null });
+  });
+});
+
+describe("Colab provider", () => {
+  const colabConfig = {
+    baseURL: "https://tunnel.example",
+    apiKey: "colab-secret",
+  };
+
+  it("configures a fallback and reflects it in status, never echoing the key", async () => {
+    const built = fakeStudio({ baseURL: "https://tunnel.example" });
+    const app = await build(fakeStudio(), undefined, () => built);
+
+    const set = await app.inject({
+      method: "POST",
+      url: "/lab/provider/colab",
+      payload: colabConfig,
+    });
+    expect(set.statusCode).toBe(200);
+    // The URL is echoed to confirm the target; the bearer is not.
+    expect(JSON.stringify(set.json())).not.toContain("colab-secret");
+
+    const status = (await app.inject({ url: "/lab/status" })).json();
+    expect(status.colab).toMatchObject({
+      configured: true,
+      baseURL: "https://tunnel.example",
+      studio: "ready",
+    });
+  });
+
+  it("rejects a malformed endpoint", async () => {
+    const app = await build();
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/provider/colab",
+      payload: { baseURL: "not-a-url" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("clears the fallback on DELETE", async () => {
+    const app = await build(fakeStudio(), undefined, () => fakeStudio());
+    await app.inject({
+      method: "POST",
+      url: "/lab/provider/colab",
+      payload: colabConfig,
+    });
+    await app.inject({ method: "DELETE", url: "/lab/provider/colab" });
+    expect(
+      (await app.inject({ url: "/lab/status" })).json().colab.configured,
+    ).toBe(false);
+  });
+
+  // The whole point: when the local GPU host is offline, training routes to the
+  // configured Colab tunnel instead of failing.
+  it("trains via Colab when the local Studio is unreachable", async () => {
+    let colabTrained = false;
+    const colab = fakeStudio({
+      baseURL: "https://tunnel.example",
+      startTraining: async () => {
+        colabTrained = true;
+      },
+      async *trainingProgress() {
+        yield { event: "complete", data: {} };
+      },
+    });
+    const app = await build(
+      fakeStudio({ reachable: async () => false }),
+      undefined,
+      () => colab,
+    );
+    await app.inject({
+      method: "POST",
+      url: "/lab/provider/colab",
+      payload: colabConfig,
+    });
+
+    const { jobId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/finetune",
+        payload: finetuneBody,
+      })
+    ).json();
+
+    expect((await settle(jobId))?.state).toBe("done");
+    expect(colabTrained).toBe(true);
+  });
+
+  it("refuses to fine-tune with no reachable trainer", async () => {
+    const app = await build(fakeStudio({ reachable: async () => false }));
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/finetune",
+      payload: finetuneBody,
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("no_trainer");
+    // Nothing was started, so no job row was left behind.
+    expect(store.listJobs()).toEqual([]);
   });
 });
 

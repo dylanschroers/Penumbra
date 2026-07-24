@@ -45,6 +45,24 @@ export const finetuneRequest = z.object({
   format: z
     .enum(["auto", "alpaca", "chatml", "mistral", "raw", "custom", "generic"])
     .default("auto"),
+  /** Which compute to train on. "auto" prefers the local Studio and falls back
+   *  to a configured Colab endpoint when it is unreachable; "local"/"colab"
+   *  force one. Omit for "auto". */
+  provider: z.enum(["auto", "local", "colab"]).optional(),
+});
+
+/**
+ * A user-supplied fallback trainer: a Colab notebook running Unsloth Studio,
+ * exposed through a tunnel (ngrok/Cloudflare) and guarded by a bearer token.
+ *
+ * It is configured *through the server* rather than baked into client code so
+ * the key obeys the same rule as the local Studio bearer — the browser sends it
+ * once to set it and never reads it back (docs/model_lab_plan.md → Deployment
+ * topology). The URL is not secret and may be echoed; the key never is.
+ */
+export const colabProviderConfig = z.object({
+  baseURL: z.string().url(),
+  apiKey: z.string().min(1).optional(),
 });
 
 export const exportRequest = z.object({
@@ -97,6 +115,7 @@ export type LabJobState = z.infer<typeof labJobState>;
 export type LabJob = z.infer<typeof labJob>;
 export type DatasetSource = z.infer<typeof datasetSource>;
 export type FinetuneRequest = z.infer<typeof finetuneRequest>;
+export type ColabProviderConfig = z.infer<typeof colabProviderConfig>;
 export type ExportRequest = z.infer<typeof exportRequest>;
 export type BenchmarkRequest = z.infer<typeof benchmarkRequest>;
 export type SuiteKind = z.infer<typeof suiteKind>;

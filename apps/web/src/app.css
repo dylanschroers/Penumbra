@@ -660,6 +660,65 @@ body {
   border-color: var(--primary);
 }
 
+/* Markdown output: collapse the outer margins so a single paragraph reads like
+   the old plain bubble, and let long code/tables scroll instead of stretching
+   the module. Streaming replaces content in place, so keep rules cheap. */
+.agent__markdown {
+  /* The bubble sets pre-wrap for plain user text; markdown emits block
+     elements, so normal wrapping avoids doubled blank lines between them. */
+  white-space: normal;
+}
+.agent__markdown > :first-child {
+  margin-top: 0;
+}
+.agent__markdown > :last-child {
+  margin-bottom: 0;
+}
+.agent__markdown p,
+.agent__markdown ul,
+.agent__markdown ol {
+  margin: 0.4rem 0;
+}
+.agent__markdown ul,
+.agent__markdown ol {
+  padding-left: 1.2rem;
+}
+.agent__markdown code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+}
+.agent__markdown pre {
+  margin: 0.4rem 0;
+  padding: 0.5rem 0.65rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+.agent__markdown pre code {
+  border: 0;
+  padding: 0;
+  background: none;
+  font-size: 0.82em;
+}
+.agent__markdown a {
+  color: var(--primary);
+}
+.agent__markdown table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+.agent__markdown th,
+.agent__markdown td {
+  border: 1px solid var(--border);
+  padding: 0.25rem 0.5rem;
+}
+
 .agent__bubble--pending {
   color: var(--muted);
 }
@@ -706,6 +765,8 @@ body {
 .lab__status {
   display: flex;
   gap: 0.4rem;
+  /* Anchor for the compute-provider popover. */
+  position: relative;
 }
 
 .lab__pill {
@@ -721,6 +782,13 @@ body {
   color: var(--primary-text);
   background: var(--primary);
   border-color: var(--primary);
+}
+
+/* Up, but the server's key is missing or wrong: a warning, not "off". */
+.lab__pill--unauthorized {
+  color: #7c4a03;
+  background: #fbbf24;
+  border-color: #f59e0b;
 }
 
 .lab__tabs {
@@ -759,6 +827,77 @@ body {
 
 .lab__field input {
   width: 6rem;
+}
+
+/* The Studio pill acts as a button that opens the provider popover. */
+.lab__pill--action {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.lab__pill--action:hover {
+  border-color: var(--primary);
+}
+
+.lab__pill-caret {
+  font-size: 0.6rem;
+  opacity: 0.7;
+}
+
+/* Sits above everything and swallows the click that dismisses the popover. */
+.lab__popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  border: none;
+  padding: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.lab__popover {
+  position: absolute;
+  z-index: 21;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  width: min(20rem, 90vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface, var(--bg));
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
+}
+
+.lab__popover-head {
+  display: flex;
+}
+
+.lab__popover-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.lab__provider-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.lab__provider-note {
+  margin: 0.2rem 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.lab__provider-note--warn {
+  color: var(--danger);
 }
 
 .lab__error {

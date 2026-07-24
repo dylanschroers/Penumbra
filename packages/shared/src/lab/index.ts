@@ -4,6 +4,8 @@ export {
   type BenchmarkResult,
   benchmarkRequest,
   benchmarkResult,
+  type ColabProviderConfig,
+  colabProviderConfig,
   type DatasetSource,
   datasetSource,
   type ExportRequest,

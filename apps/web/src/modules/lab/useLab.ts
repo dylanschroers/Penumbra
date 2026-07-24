@@ -18,10 +18,21 @@ const SERVER_URL = normalizeBaseUrl(
 );
 const TOKEN = import.meta.env.VITE_AGENT_TOKEN;
 
+/** Studio readiness. "unauthorized" means it is up but the server's key is
+ *  missing or wrong — a different fix from "stopped" (not running). */
+export type StudioState = "ready" | "unauthorized" | "stopped";
+
 export interface LabStatus {
-  studio: "ready" | "stopped";
+  studio: StudioState;
   lmEval: "installed" | "missing";
   suites: SuiteDefinition[];
+  /** The optional Colab fallback trainer. `baseURL` is echoed to confirm the
+   *  target; the bearer never comes back from the server. */
+  colab: {
+    configured: boolean;
+    baseURL: string | null;
+    studio: StudioState;
+  };
 }
 
 const headers = (): Record<string, string> => ({
@@ -103,5 +114,20 @@ export function useLab() {
     exportRun: (runId: string) => act("/lab/export", { runId }),
     benchmark: (model: string, suite: string, samplesPerTask: number) =>
       act("/lab/benchmark", { model, suite, samplesPerTask }),
+    // The key is sent once and is not held anywhere on the client afterwards;
+    // omit an empty one so a trusted-LAN tunnel can run without a bearer.
+    setColab: (baseURL: string, apiKey: string) =>
+      act("/lab/provider/colab", {
+        baseURL,
+        ...(apiKey ? { apiKey } : {}),
+      }),
+    clearColab: async () => {
+      try {
+        await api("/lab/provider/colab", { method: "DELETE" });
+        await refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
   };
 }
