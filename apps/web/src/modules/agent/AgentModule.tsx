@@ -1,5 +1,6 @@
 import { type FormEvent, useState } from "react";
 import { type AgentStatus, PROVIDERS } from "../../engine";
+import { Markdown } from "./Markdown";
 import { useAgent } from "./useAgent";
 
 // The assistant module: a status pill plus a chat against the embedded local
@@ -85,7 +86,13 @@ export function AgentModule() {
                 </div>
               ))}
               {m.content.trim() ? (
-                <div className="agent__bubble">{m.content.trim()}</div>
+                <div className="agent__bubble">
+                  {m.role === "assistant" ? (
+                    <Markdown>{m.content.trim()}</Markdown>
+                  ) : (
+                    m.content.trim()
+                  )}
+                </div>
               ) : busy && i === messages.length - 1 ? (
                 <div className="agent__bubble agent__bubble--pending">…</div>
               ) : null}
