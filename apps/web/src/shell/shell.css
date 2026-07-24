@@ -67,9 +67,9 @@
   line-height: 0;
   /* Scale from the top edge so `top` controls the visual top directly — with a
      centre origin the mark would appear to hang below its `top` when shrunk. The
-     140px mark is vertically centred on screen via `top: 50% - 70px`. */
+     160px mark is vertically centred on screen via `top: 50% - 80px`. */
   transform-origin: top center;
-  top: calc(50% - 70px);
+  top: calc(50% - 80px);
   transform: translateX(-50%) scale(1);
   transition:
     top 0.6s cubic-bezier(0.22, 1, 0.36, 1),
@@ -77,8 +77,8 @@
 }
 
 /* Settled: resting near the top edge, centred. No top bar any more — the mark
-   floats over the canvas as the home button, so it's kept prominent. 140px *
-   0.42 ≈ 59px; the stage's top padding is sized to clear it. */
+   floats over the canvas as the home button, so it's kept prominent. 160px *
+   0.42 ≈ 67px; the stage's top padding is sized to clear it. */
 .shell--app .shell-logo {
   top: 16px;
   transform: translateX(-50%) scale(0.42);

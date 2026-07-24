@@ -188,7 +188,7 @@ export function AppShell() {
         }
         title={launched ? "Hold to return to the launcher" : undefined}
       >
-        <Logo size={140} />
+        <Logo size={160} />
       </button>
 
       <div className="shell__intro" aria-hidden={launched}>
