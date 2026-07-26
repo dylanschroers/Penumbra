@@ -146,8 +146,8 @@ async function runRound(): Promise<void> {
  * Run a full sync round and wait for it. A Tier-1 agent turn executes tools
  * against the *server's* store, so the client flushes first — otherwise the
  * model reasons about state up to INTERVAL_MS stale (see
- * docs/UNSLOTH_TIER1_PLAN.md §2). A round already in flight may have started
- * before the caller's edits, so wait it out and run a fresh one.
+ * docs/SYNC.md → Server-side writes). A round already in flight may have
+ * started before the caller's edits, so wait it out and run a fresh one.
  */
 export async function flushSync(): Promise<void> {
   if (syncing) await inFlight;

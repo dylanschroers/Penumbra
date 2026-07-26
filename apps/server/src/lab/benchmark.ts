@@ -17,7 +17,7 @@ import {
 
 // Runs both benchmark families and reduces them to one BenchmarkResult, which
 // is what lets a single table hold both and a single view compare them
-// (docs/model_lab_plan.md M3).
+// (docs/EVAL.md §4).
 //
 // They run differently on purpose. The general suite shells out to lm-eval
 // because it is Python. The personal suite is a direct call, because its

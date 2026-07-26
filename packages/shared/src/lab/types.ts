@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// Wire contracts for the Model Lab (docs/model_lab_plan.md): fine-tuning,
+// Wire contracts for the Model Lab (docs/MODEL_LAB.md): fine-tuning,
 // export, and benchmarking. Shared so the server and the UI cannot disagree
 // about a job's shape, and so suite definitions have one home.
 
@@ -57,7 +57,7 @@ export const finetuneRequest = z.object({
  *
  * It is configured *through the server* rather than baked into client code so
  * the key obeys the same rule as the local Studio bearer — the browser sends it
- * once to set it and never reads it back (docs/model_lab_plan.md → Deployment
+ * once to set it and never reads it back (docs/MODEL_LAB.md → Deployment
  * topology). The URL is not secret and may be echoed; the key never is.
  */
 export const colabProviderConfig = z.object({

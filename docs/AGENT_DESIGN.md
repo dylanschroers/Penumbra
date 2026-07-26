@@ -120,6 +120,31 @@ an engine is *constructed*: Tier 0 binds the browser store, Tier 1 binds the
 server's. Readiness is `stopped | no_model | ready`
 (`packages/shared/src/engine/types.ts`).
 
+### Unsloth is on the seam
+
+Studio exposes OpenAI-compatible endpoints (`POST /v1/chat/completions`,
+`GET /v1/models`), with `tools` / `tool_choice` following OpenAI semantics
+including forced-function objects and `"none"`. So the server-side engine is
+`LocalEngine`'s request shape plus a bearer header — no vendor SDK, no protocol
+translation. Two details the seam does *not* imply, both of which cost
+correctness, are recorded in [MODEL_LAB.md](MODEL_LAB.md) → What Studio
+guarantees: `/v1/models` lists unloaded models too, and `enable_tools` /
+`mcp_enabled` must never be sent.
+
+**Where the tools run.** The model is server-side in all cases (GPU placement),
+and Tier 1 executes the tool call server-side too, binding the shared contracts
+to the server's own store; the sync engine converges the effects to clients, so
+no client sits in the turn loop. The alternative — bouncing each call out to a
+client — was rejected because it deadlocks the moment there is no client, which
+is exactly the autonomous mode of §8. The cost is that convergence now needs an
+explicit nudge in both directions; see SYNC.md → Server-side writes. Proxying to
+a client stays open as a narrow later addition for genuinely client-only tools.
+
+**Abort semantics.** Client disconnect cancels the server's in-flight model call
+and stops the tool loop, but **partial effects stand** — an aborted turn leaves
+already-executed writes in place rather than attempting rollback, and the tool
+events already streamed tell the user what happened.
+
 **Selecting between them** is a user choice, not a build-time one. `engine/index.ts`
 holds a `SwitchableEngine` that delegates to whichever provider is selected —
 **Local**, **Server**, or **Cloud** (listed but disabled; nothing is wired up).

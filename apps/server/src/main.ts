@@ -38,14 +38,14 @@ const sync = createTaskSyncStore(sqlite);
 registerTaskSyncRoutes(app, sync);
 
 // Tier 1: the model runs here and executes tools in-process against the store,
-// with no client in the turn loop (docs/UNSLOTH_TIER1_PLAN.md §2).
+// with no client in the turn loop (docs/SYNC.md → Server-side writes).
 const tasks = createServerTaskStore(sqlite, sync);
 registerAgentRoutes(app, {
   engine: new UnslothEngine({ bindings: createServerTools(tasks) }),
 });
 
 // Model Lab: fine-tuning and benchmarking against the Studio on this host
-// (docs/model_lab_plan.md). Same gate as the agent routes.
+// (docs/MODEL_LAB.md). Same gate as the agent routes.
 registerLabRoutes(app, { store: createLabStore(sqlite) });
 
 const port = Number(process.env.PORT ?? 3000);
