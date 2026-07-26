@@ -27,7 +27,7 @@ above the seam knows which backend answered.
 
 ```
 Embedded llama-server (default)  ─┐
-Self-hosted endpoint   (planned) ─┼─→ { baseURL, model } ─→ client ─→ agent / guidance
+Self-hosted Studio     (built)   ─┼─→ { baseURL, model } ─→ client ─→ agent / guidance
 Opt-in cloud           (planned) ─┘
 ```
 
@@ -43,7 +43,7 @@ each request to the cheapest component that can do it:
 | 1 | **Route / classify** intent | rules or a tiny classifier — often no LLM | planned |
 | 2 | **Retrieve / search / memory** | an embedding model + a local index | planned, next up |
 | 3 | **Generate / converse / guide** | the embedded chat model | ✅ built |
-| 4 | **Orchestrate tools** | single-step: embedded model; multi-step: a larger model | ✅ single-step built |
+| 4 | **Orchestrate tools** | single-step: embedded model; multi-step: a larger model | ✅ both built (Tier 0 / Tier 1) |
 | 5 | **Proactive / background** | the larger model in an autonomous execution mode | planned (§8) |
 
 The commonly-forgotten one is **#2**: the embedding model is a *different
@@ -64,9 +64,11 @@ All tiers sit behind the §1 seam.
   thinking off for latency (`--reasoning-budget 0`). Zero download, fully
   offline, private. Scope: guidance, Q&A, and single-step local tool calls
   against the task registry (§7).
-- **Tier 1 — Self-hosted (planned).** The Penumbra server runs a larger model
-  (7–14B) for the full tool registry and multi-step agent work. Model size is
-  a config knob, not a new tier.
+- **Tier 1 — Self-hosted (built).** The Penumbra server runs a larger model via
+  Unsloth Studio for the full tool registry and multi-step agent work (a step
+  budget of 8 against Tier 0's 4). Tools execute in-process on the server and
+  the sync engine converges the effects to clients, so no client need be in the
+  turn loop. Model size is a config knob, not a new tier.
 - **Opt-in cloud (planned).** Point the same seam at Anthropic / OpenAI /
   OpenRouter. Maximum capability, entirely optional, and treated as **Plane B**
   — external, untrusted while offline.
@@ -100,14 +102,17 @@ interface Engine {
 }
 ```
 
-Two implementations exist, both thin configuration over the shared
+Three implementations exist. Two are thin configuration over the shared
 **`OpenAiEngine`** — llama-server and Unsloth Studio speak the same
 OpenAI-compatible protocol, so the loop is written once:
 
 - **`LocalEngine`** (`apps/web/src/engine`) — Tier 0, the embedded model.
 - **`UnslothEngine`** (`apps/server/src/agent`) — Tier 1, Studio on the GPU
-  host, adding a bearer token and a longer tool-step budget. It has no route in
-  front of it yet (see below).
+  host, adding a bearer token and a longer tool-step budget.
+- **`RemoteEngine`** (`apps/web/src/engine`) — not a backend but a transport:
+  it forwards `runAgent`/`getStatus` to the server's `/agent/*` over SSE, and
+  calls `requestSync()` on every tool event so a server-side write shows up on
+  the client immediately instead of on the next 15s sync round.
 
 The tool loop is bounded and non-streaming. Tools touch app state rather than
 the engine, so `runTool` — with the tool specs and system prompt — is bound when
@@ -115,11 +120,17 @@ an engine is *constructed*: Tier 0 binds the browser store, Tier 1 binds the
 server's. Readiness is `stopped | no_model | ready`
 (`packages/shared/src/engine/types.ts`).
 
-Planned, behind the same surface: a `RemoteEngine` transport adapter letting the
-client reach `UnslothEngine` over `/agent/*` (arrives with the Tier-1 routes),
-streaming with `<think>`-splitting (arrives with a streaming chat UI), and
-richer readiness states for delivery modes that need download progress. Earlier speculative versions of these were built and then
-removed (principle 6 in ARCHITECTURE.md); they live in git history.
+**Selecting between them** is a user choice, not a build-time one. `engine/index.ts`
+holds a `SwitchableEngine` that delegates to whichever provider is selected —
+**Local**, **Server**, or **Cloud** (listed but disabled; nothing is wired up).
+Switching flips a pointer and persists to `localStorage`; no connection opens
+until the next `getStatus()` or `runAgent()`. The chat header renders the three
+as buttons.
+
+Planned, behind the same surface: streaming with `<think>`-splitting (arrives
+with a streaming chat UI), and richer readiness states for delivery modes that
+need download progress. Earlier speculative versions of these were built and
+then removed (principle 6 in ARCHITECTURE.md); they live in git history.
 
 ---
 
@@ -234,9 +245,11 @@ Open:
 2. **Embeddings + retrieval** — bundle the embedding model + local index;
    ground guidance and add semantic search. (Next, because it is what makes
    Tier 0 genuinely useful.)
-3. **Router** — promote the dispatch heuristic in front of the engines.
-4. **Self-hosted agent (Tier 1)** — server-side multi-step loop against a
-   larger model; `RemoteEngine` gets wired up here.
+3. ✅ **Self-hosted agent (Tier 1)** — server-side multi-step loop against a
+   larger model, `RemoteEngine` as its transport, and a provider selector in
+   the chat header. Landed ahead of the two items below.
+4. **Router** — promote the dispatch heuristic in front of the engines, so the
+   provider choice can be automatic rather than manual.
 5. **Autonomous Worker mode** — proactive jobs with pre-authorized scopes and
    audit.
 

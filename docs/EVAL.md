@@ -55,7 +55,12 @@ overwritten.
 
 ### A recorded baseline
 
-Qwen2.5-1.5B-Instruct Q4_K_M, CPU-only, the bundled Tier-0 model:
+Qwen2.5-1.5B-Instruct Q4_K_M, CPU-only. This is the model used to exercise the
+Tier-1 seam, **not** the bundled Tier-0 model — the bundle is Qwen3-1.7B Q4_K_M
+(`scripts/fetch-assets.sh`), whose own numbers are in
+[AGENT_DESIGN.md](AGENT_DESIGN.md) §7. The two runs used different models under
+different conditions and are not directly comparable; treat each as a point on
+its own trend line.
 
 ```
 Tool-selection accuracy : 25/26 (96%)
