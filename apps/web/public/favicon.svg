@@ -1,15 +1,23 @@
-<svg viewBox="-24 -24 148 148" xmlns="http://www.w3.org/2000/svg">
-  <path
-    d="M45.19 4.25 L50 -22 L54.81 4.25 Z
-       M95.75 45.19 L122 50 L95.75 54.81 Z
-       M54.81 95.75 L50 122 L45.19 95.75 Z
-       M4.25 54.81 L-22 50 L4.25 45.19 Z
-       M78.95 14.25 L93.84 6.16 L85.75 21.05 Z
-       M85.75 78.95 L93.84 93.84 L78.95 85.75 Z
-       M21.05 85.75 L6.16 93.84 L14.25 78.95 Z
-       M14.25 21.05 L6.16 6.16 L21.05 14.25 Z"
-    fill="#6366f1"
-  />
-  <circle cx="50" cy="50" r="44" fill="none" stroke="#6366f1" stroke-width="5" />
-  <circle cx="50" cy="50" r="17" fill="#6366f1" />
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- Matches the desktop app icon: a white compass mark on a black tile. The
+       mark is a little heavier than the in-app Logo (thicker ring, larger core)
+       so it still reads at 16px, and the tile is what makes the white visible on
+       a light browser tab. The inner geometry is in the Logo's own coordinate
+       space (spanning -22..122), mapped into the tile's 12..88. -->
+  <rect x="0" y="0" width="100" height="100" rx="16" fill="#000000" />
+  <g transform="translate(23.611,23.611) scale(0.5278)">
+    <path
+      d="M42 4.25 L50 -22 L58 4.25 Z
+         M95.75 42 L122 50 L95.75 58 Z
+         M58 95.75 L50 122 L42 95.75 Z
+         M4.25 58 L-22 50 L4.25 42 Z
+         M76.69 11.99 L93.84 6.16 L88.01 23.31 Z
+         M76.69 88.01 L93.84 93.84 L88.01 76.69 Z
+         M23.31 88.01 L6.16 93.84 L11.99 76.69 Z
+         M23.31 11.99 L6.16 6.16 L11.99 23.31 Z"
+      fill="#ffffff"
+    />
+    <circle cx="50" cy="50" r="43" fill="none" stroke="#ffffff" stroke-width="9" />
+    <circle cx="50" cy="50" r="22" fill="#ffffff" />
+  </g>
 </svg>
