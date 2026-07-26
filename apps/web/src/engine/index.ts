@@ -16,8 +16,8 @@ import { AGENT_SYSTEM, runTool, toolSpecs } from "../agent/tools";
 import { LocalEngine } from "./LocalEngine";
 import { RemoteEngine } from "./RemoteEngine";
 
-// The engine types are shared with the server (docs/UNSLOTH_TIER1_PLAN.md →
-// Phase 2); re-exported here so app code keeps importing them from one place.
+// The engine types are shared with the server (docs/AGENT_DESIGN.md §5);
+// re-exported here so app code keeps importing them from one place.
 export type {
   AgentEvent,
   AgentState,

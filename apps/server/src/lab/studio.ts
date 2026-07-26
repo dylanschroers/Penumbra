@@ -10,7 +10,7 @@ import {
 // inference and training can never end up pointed at different Studios. The key
 // is *unscoped admin* — it can start jobs and write files — which is why it
 // lives on the server and no client ever sees it
-// (docs/model_lab_plan.md → Deployment topology).
+// (docs/MODEL_LAB.md → Deployment topology).
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:8888";
 

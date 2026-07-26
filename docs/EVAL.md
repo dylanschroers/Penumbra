@@ -2,7 +2,7 @@
 
 How Penumbra measures whether a model is good enough to be its agent, and how a
 benchmark run doubles as the seed for finetuning one. Companion to
-[AGENT_DESIGN.md](AGENT_DESIGN.md) §7 and [UNSLOTH_TIER1_PLAN.md](UNSLOTH_TIER1_PLAN.md).
+[AGENT_DESIGN.md](AGENT_DESIGN.md) §7 and [MODEL_LAB.md](MODEL_LAB.md).
 
 Present tense means it exists in the repo today.
 
@@ -100,7 +100,7 @@ mistakes is worse than not training at all.
 ## 4. Where this sits in the bigger picture
 
 This is the **personal** half of a two-family benchmark
-([model_lab_plan.md](model_lab_plan.md) M3): it grades the model on Penumbra's own
+([MODEL_LAB.md](MODEL_LAB.md) → Suites): it grades the model on Penumbra's own
 job. The **general** half runs academic suites via `lm-evaluation-harness` and
 grades raw capability. Both are first-class, and they are never averaged
 together — a model can gain reasoning ability while getting worse at calling

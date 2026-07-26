@@ -8,8 +8,8 @@ import { StudioClient, TrainingBusyError } from "./studio";
 //
 // What this cannot prove: that Unsloth Studio behaves like this fake. The fake
 // encodes the same reading of Studio's API that the client does
-// (docs/model_lab_plan.md → verified facts), so only a live Studio can confirm
-// it. It catches our bugs, not our misunderstandings.
+// (docs/MODEL_LAB.md → What Studio guarantees), so only a live Studio can
+// confirm it. It catches our bugs, not our misunderstandings.
 
 interface Recorded {
   method: string;

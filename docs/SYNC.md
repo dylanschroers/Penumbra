@@ -48,6 +48,37 @@ Triggers: on startup, on a 15s interval, on the `online` event, and debounced
 (~800ms) right after a local edit. Only the tab that owns the local store runs
 the loop — the single-tab guard guarantees that's the one rendering the app.
 
+## Server-side writes: the agent's turn
+
+The server-side agent runs its tools against the *server's* database while the
+user is looking at the *client's*. Sync closes the gap in both directions, but
+only on its 15s interval, so each direction needs an explicit prod:
+
+- **Pre-turn flush (client to server).** Before a turn starts, the client pushes
+  pending edits and the server applies them, so the model reasons about what the
+  user actually sees rather than up-to-15s-stale state.
+- **Post-tool nudge (server to client).** After each tool event, the client
+  pulls, so a created task appears immediately. The local tier gets this free —
+  its `runTool` wrote to the local store and calls `notifyDataChanged()`. The
+  server tier has no local write, so `RemoteEngine` calls `requestSync()` on
+  every tool event. **Without this the round trip looks broken**: the answer
+  arrives and the task shows up fifteen seconds later.
+
+### The rev trap
+
+`pull` selects `WHERE rev > ?`, and revs are assigned **only** inside
+`applyPush`. A server-side write that inserts a row directly leaves `rev` NULL,
+and that row is then invisible to every client forever, with no error raised
+anywhere. Every server write therefore goes through the rev-stamping path —
+`apps/server/src/store/tasks.ts` states the rule at the top and routes its CRUD
+through `TaskSyncStore.push()` to honour it. Assume this one gets hit if it is
+not designed for.
+
+Two related traps in the same area: `pull` returns rev-ordered rows *including
+tombstones*, so a `list_tasks` tool needs live rows only; and `userId` has no
+server-side source, so the server store adopts the same `"local"` constant the
+client stamps until auth exists.
+
 ## Conflict resolution: last-write-wins
 
 Per row, by `updatedAt` (ISO-8601 strings, which sort chronologically). On both

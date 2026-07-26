@@ -4,7 +4,7 @@ import { dirname, join, resolve, sep } from "node:path";
 
 // Where the client's local models and datasets land on the Studio host, so a
 // run started from a laptop can point Studio at a path Studio can actually read
-// (the transfer half of "models live on the client"; docs/model_lab_plan.md →
+// (the transfer half of "models live on the client"; docs/MODEL_LAB.md →
 // Deployment topology). Files arrive chunked via POST /lab/upload and are used
 // verbatim as model_name / local_datasets.
 //

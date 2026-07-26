@@ -12,7 +12,7 @@ import { type UploadProgress, uploadDataset, uploadModel } from "./upload";
 // Drives the Model Lab module. Everything goes through the Penumbra server's
 // /lab/* routes — never to Studio directly, because the Studio key is an
 // unscoped admin credential that must not reach a browser
-// (docs/model_lab_plan.md → Deployment topology).
+// (docs/MODEL_LAB.md → Deployment topology).
 
 const SERVER_URL = normalizeBaseUrl(
   import.meta.env.VITE_SERVER_URL ?? "http://localhost:3000",

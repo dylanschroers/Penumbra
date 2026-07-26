@@ -47,7 +47,7 @@ export type AgentEvent =
  * Bound when an engine is *constructed*, not passed per turn. Tier 0 binds the
  * client store; Tier 1's server binds its own. A per-turn parameter would be
  * supplied by a caller that, in the remote case, has no say in any of it
- * (docs/UNSLOTH_TIER1_PLAN.md → Phase 1).
+ * (docs/AGENT_DESIGN.md §5).
  */
 export interface ToolBindings {
   tools: ToolSpec[];

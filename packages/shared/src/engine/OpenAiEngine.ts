@@ -11,7 +11,7 @@ import type {
 // (Tier 0) and Unsloth Studio (Tier 1) expose the same `/v1/chat/completions`
 // and `/v1/models`, with identical `tools` / `tool_choice` semantics — the
 // finding that collapsed Tier 1's engine work to configuration
-// (docs/UNSLOTH_TIER1_PLAN.md → "Unsloth is on the seam"). So the loop lives
+// (docs/AGENT_DESIGN.md → "Unsloth is on the seam"). So the loop lives
 // here once and each tier supplies an address, a model, and headers.
 //
 // This module is deliberately environment-free: no import.meta.env, no
