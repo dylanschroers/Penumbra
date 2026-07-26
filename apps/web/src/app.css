@@ -907,6 +907,10 @@ body {
   flex-direction: column;
   gap: 0.6rem;
   min-height: 0;
+  /* The tab content is the tall part (two libraries, preview, form), so it is
+     what scrolls. Without this it keeps its full height and squeezes the job
+     list below it to nothing, hiding the very error a failed run reports. */
+  overflow-y: auto;
 }
 
 .lab__library {
@@ -1128,6 +1132,14 @@ body {
   min-height: 0;
 }
 
+/* The job list carries run failures, so it must survive the flex squeeze: it is
+   the last child of a full-height column and would otherwise shrink away behind
+   the tab content above it. */
+.lab__jobs {
+  flex-shrink: 0;
+  max-height: 40%;
+}
+
 .lab__run,
 .lab__job {
   display: flex;
@@ -1156,6 +1168,22 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* A flex item defaults to min-width:auto, which refuses to shrink below its
+     content — the ellipsis never engages and the row pushes wide instead. */
+  min-width: 0;
+}
+
+/* Progress detail is noise worth truncating; a failure message is the one thing
+   here worth reading in full, so let it wrap rather than ellipsing to nothing. */
+.lab__job--failed {
+  align-items: flex-start;
+}
+
+.lab__job--failed .lab__job-detail {
+  color: var(--danger);
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Wide tables scroll inside the card rather than stretching the canvas. */

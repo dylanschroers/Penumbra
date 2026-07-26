@@ -4,9 +4,34 @@
 // is needed. Read-only by design: this lists a directory, it never mutates disk.
 
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tauri::Manager;
+
+/// Render a path for the webview, stripping Windows' extended-length prefix.
+///
+/// `canonicalize` on Windows returns a verbatim path — `\\?\F:\dir\file`, or
+/// `\\?\UNC\server\share` for a network path. That prefix is an OS escape hatch
+/// for the 260-char limit, not a form other tools accept: it leaks into the UI,
+/// and anything that hands the path to another process gets it rejected (the
+/// Studio host refuses `\\?\...` as a dataset path). Every path we return
+/// crosses to JS, so normalize here rather than at each call site. No-op off
+/// Windows, where canonicalize adds no prefix.
+fn display_path(p: &Path) -> String {
+    let s = p.to_string_lossy().into_owned();
+    #[cfg(windows)]
+    {
+        // UNC first: `\\?\UNC\server\share` -> `\\server\share`. Checking the
+        // bare `\\?\` first would leave a bogus `UNC\server\share`.
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{rest}");
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            return rest.to_string();
+        }
+    }
+    s
+}
 
 /// List one directory. An empty `path` means "start at the user's home dir".
 /// Returns `{ path, parent, entries[] }`: the canonical absolute path, its
@@ -37,7 +62,7 @@ pub fn fs_list(app: tauri::AppHandle, path: String) -> Result<Value, String> {
             .map(|d| d.as_millis() as u64);
         entries.push(json!({
             "name": entry.file_name().to_string_lossy(),
-            "path": entry.path().to_string_lossy(),
+            "path": display_path(&entry.path()),
             "isDir": is_dir,
             // Size is meaningless for a directory; leave it null there.
             "size": if is_dir { Value::Null } else { json!(meta.len()) },
@@ -46,8 +71,8 @@ pub fn fs_list(app: tauri::AppHandle, path: String) -> Result<Value, String> {
     }
 
     Ok(json!({
-        "path": dir.to_string_lossy(),
-        "parent": dir.parent().map(|p| p.to_string_lossy().into_owned()),
+        "path": display_path(&dir),
+        "parent": dir.parent().map(display_path),
         "entries": entries,
     }))
 }
@@ -81,7 +106,7 @@ pub fn fs_move(from: String, to_dir: String) -> Result<Value, String> {
 
     if dest == from {
         // Already there — nothing to do.
-        return Ok(json!({ "path": from.to_string_lossy() }));
+        return Ok(json!({ "path": display_path(&from) }));
     }
     if dest.exists() {
         return Err(format!("already exists: {}", dest.display()));
@@ -92,7 +117,7 @@ pub fn fs_move(from: String, to_dir: String) -> Result<Value, String> {
     }
 
     std::fs::rename(&from, &dest).map_err(|e| e.to_string())?;
-    Ok(json!({ "path": dest.to_string_lossy() }))
+    Ok(json!({ "path": display_path(&dest) }))
 }
 
 /// Read at most `max_bytes` from the start of a file, for previewing a dataset
@@ -166,4 +191,35 @@ pub fn fs_read_chunk(
     }
     buf.truncate(read);
     Ok(tauri::ipc::Response::new(buf))
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::display_path;
+    use std::path::Path;
+
+    #[test]
+    fn strips_the_verbatim_prefix() {
+        assert_eq!(
+            display_path(Path::new(r"\\?\F:\Projects\attack_blueteam.jsonl")),
+            r"F:\Projects\attack_blueteam.jsonl"
+        );
+    }
+
+    #[test]
+    fn rewrites_a_verbatim_unc_path_to_its_ordinary_form() {
+        assert_eq!(
+            display_path(Path::new(r"\\?\UNC\server\share\train.jsonl")),
+            r"\\server\share\train.jsonl"
+        );
+    }
+
+    #[test]
+    fn leaves_an_already_ordinary_path_alone() {
+        assert_eq!(display_path(Path::new(r"F:\a\b.txt")), r"F:\a\b.txt");
+        assert_eq!(
+            display_path(Path::new(r"\\server\share")),
+            r"\\server\share"
+        );
+    }
 }

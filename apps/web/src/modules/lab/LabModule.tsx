@@ -34,8 +34,14 @@ const PREVIEW_BYTES = 64 * 1024;
 
 /** A value that names a file on this device — an absolute path or `~` — versus a
  *  HuggingFace id (`org/name`), which needs no transfer. Only local picks are
- *  uploaded to the host before a run. */
-const looksLocalPath = (v: string): boolean => /^(~|\/|[A-Za-z]:[\\/])/.test(v);
+ *  uploaded to the host before a run.
+ *
+ *  The leading `\\` case covers Windows UNC (`\\server\share`) and verbatim
+ *  (`\\?\F:\...`) paths. Missing those is not cosmetic: the path then skips the
+ *  upload and is sent to Studio as-is, which rejects it — the file lives on this
+ *  device, not the training host. */
+export const looksLocalPath = (v: string): boolean =>
+  /^(~|\/|\\\\|[A-Za-z]:[\\/])/.test(v);
 
 // The Model Lab: fine-tune a model, export it, and benchmark it. Card chrome
 // belongs to the workspace ModuleFrame, so this renders only inner content.
