@@ -1,4 +1,5 @@
 <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <title>Penumbra</title>
   <!-- Matches the desktop app icon: a white compass mark on a black tile. The
        mark is a little heavier than the in-app Logo (thicker ring, larger core)
        so it still reads at 16px, and the tile is what makes the white visible on
