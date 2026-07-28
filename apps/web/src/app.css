@@ -1279,3 +1279,12 @@ body {
   justify-content: space-between;
   gap: 1rem;
 }
+
+/* The run asked for one model and the target had another loaded. Studio serves
+   what it has regardless of the request, so this is the only sign the scores
+   describe something other than what was typed. */
+.lab__score-warn {
+  display: block;
+  font-size: 0.68rem;
+  color: #b45309;
+}

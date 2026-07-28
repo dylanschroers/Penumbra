@@ -1,4 +1,5 @@
 import { normalizeBaseUrl } from "../net";
+import { type ModelCatalogEntry, pickLoadedModel } from "./catalog";
 import type {
   AgentEvent,
   AgentStatus,
@@ -91,21 +92,10 @@ export class OpenAiEngine implements Engine {
         return { state: "unauthorized" };
       }
       if (!res.ok) return { state: "stopped" };
-      const body = (await res.json()) as {
-        data?: Array<{ id?: string; loaded?: boolean }>;
-      };
-      const entries = body.data ?? [];
-
-      // The two backends list different things. llama-server advertises only
-      // what it has resident and omits `loaded` entirely, so the first entry is
-      // servable. Unsloth Studio also lists models that are merely downloaded,
-      // marking each `loaded: true|false` — taking entries[0] there would
-      // report "ready" off a model sitting on disk, and the next completion
-      // would fail against a backend with nothing loaded. (Verified against
-      // studio/backend/routes/inference.py → _openai_catalog_objects.)
-      const loaded = entries.find((m) => m.loaded === true);
-      const marksLoaded = entries.some((m) => typeof m.loaded === "boolean");
-      const model = loaded?.id ?? (marksLoaded ? undefined : entries[0]?.id);
+      const body = (await res.json()) as { data?: ModelCatalogEntry[] };
+      // Which entry is actually servable is a rule with a trap in it; it lives
+      // in ./catalog so the benchmark route reads the listing the same way.
+      const model = pickLoadedModel(body.data ?? []);
 
       return model ? { state: "ready", model } : { state: "no_model" };
     } catch {

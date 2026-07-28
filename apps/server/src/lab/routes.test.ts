@@ -1,4 +1,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -21,6 +23,9 @@ function fakeStudio(over: Partial<StudioClient> = {}): StudioClient {
   const base = {
     baseURL: "http://studio",
     reachable: async () => true,
+    // Studio serves what it has loaded regardless of the request, so a
+    // benchmark asks before it runs; the default here is "something is loaded".
+    loadedModel: async () => "loaded-model",
     startTraining: async () => {},
     uploadDataset: async (path: string) => path,
     listRuns: async () => [],
@@ -69,18 +74,48 @@ async function build(
   studio = fakeStudio(),
   token?: string,
   colabStudio?: StudioClient,
+  inferenceURL?: string,
 ) {
   app = Fastify();
   registerLabRoutes(app, {
     store,
     targets,
     token,
+    inferenceURL,
     makeClient: (id) =>
       id === "colab" ? (colabStudio ?? fakeStudio()) : studio,
   });
   await app.ready();
   return app;
 }
+
+/** A model server that answers anything with a plain reply. The personal suite
+ *  talks real HTTP, so a benchmark that must *finish* needs something to
+ *  answer; the fake StudioClient above only covers the control plane. */
+function startFakeModel() {
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: "ok" } }] }));
+    });
+  });
+  return {
+    listen: () =>
+      new Promise<string>((resolve) =>
+        server.listen(0, "127.0.0.1", () =>
+          resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`),
+        ),
+      ),
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  };
+}
+
+let fakeModel: ReturnType<typeof startFakeModel> | undefined;
+afterEach(async () => {
+  await fakeModel?.close();
+  fakeModel = undefined;
+});
 
 /** Jobs run in the background; wait for one to settle. */
 async function settle(id: string, tries = 40) {
@@ -866,6 +901,80 @@ describe("POST /lab/benchmark", () => {
       payload: { model: "q", suite: "penumbra-tools-v1", samplesPerTask: 1 },
     });
     expect(res.statusCode).toBe(202);
+  });
+
+  // Studio ignores the `model` field and serves whatever is resident, so a run
+  // against an empty backend does not error — it scores nothing, or scores
+  // whatever answers. Refusing up front is the only place this can be caught.
+  it("refuses when the target has no model loaded", async () => {
+    const app = await build(fakeStudio({ loadedModel: async () => null }));
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/benchmark",
+      payload: { model: "q", suite: "penumbra-tools-v1", samplesPerTask: 1 },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("no_model_loaded");
+    // Nothing was started, so no job row was left behind.
+    expect(store.listJobs()).toEqual([]);
+  });
+
+  it("records what actually served, and where, not what was typed", async () => {
+    fakeModel = startFakeModel();
+    const app = await build(
+      fakeStudio({ loadedModel: async () => "qwen3-8b" }),
+      undefined,
+      undefined,
+      await fakeModel.listen(),
+    );
+    const { jobId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/benchmark",
+        payload: {
+          model: "whatever-i-typed",
+          suite: "penumbra-tools-v1",
+          samplesPerTask: 1,
+        },
+      })
+    ).json();
+    expect((await settle(jobId))?.state).toBe("done");
+
+    // The typed name is kept as the request, but the scores are attributed to
+    // the model that answered — the two differ here precisely because Studio
+    // ignores the field.
+    expect(store.listScores()[0]).toMatchObject({
+      model: "whatever-i-typed",
+      servedModel: "qwen3-8b",
+      target: "local",
+    });
+  });
+
+  it("attributes a run to the target the benchmark role points at", async () => {
+    fakeModel = startFakeModel();
+    const app = await build(
+      fakeStudio(),
+      undefined,
+      fakeStudio({ loadedModel: async () => "big-model" }),
+      await fakeModel.listen(),
+    );
+    configureColab();
+    targets.assign("benchmark", "colab");
+
+    const { jobId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/benchmark",
+        payload: { model: "q", suite: "penumbra-tools-v1", samplesPerTask: 1 },
+      })
+    ).json();
+    expect((await settle(jobId))?.state).toBe("done");
+
+    expect(store.listScores()[0]).toMatchObject({
+      servedModel: "big-model",
+      target: "colab",
+    });
   });
 });
 

@@ -581,14 +581,40 @@ export function registerLabRoutes(
       });
     }
 
+    // Resolved before the job exists, so a run with nowhere to go fails fast
+    // with a clear code instead of leaving a dead job row.
+    const targetId = targets.effective("benchmark");
+    const via = targets.credentials(targetId);
+
+    // What is *actually* loaded there. Studio ignores the `model` field of a
+    // request and serves whatever it has resident, so a benchmark naming one
+    // model while another is loaded produces a complete, plausible, wrong score
+    // with no error anywhere. Asking first is the only way to know.
+    const served = await clientFor(targetId)
+      ?.loadedModel()
+      .catch(() => null);
+    if (!served) {
+      return reply.code(409).send({
+        error: "no_model_loaded",
+        message: `${targetId} has no model loaded — a benchmark would score whatever answered, or nothing`,
+      });
+    }
+
     const job = store.createJob("benchmark");
     runJob(job, async (report) => {
-      // Resolved per run, not at registration: the model being benchmarked is
-      // served by whichever target the benchmark role currently resolves to,
-      // which the user can change between one run and the next.
-      const via = targets.resolve("benchmark");
+      report({
+        detail:
+          served === parsed.data.model
+            ? `benchmarking ${served} on ${targetId}`
+            : `benchmarking ${served} on ${targetId} (requested ${parsed.data.model})`,
+      });
+      // The scores describe `served`, wherever it ran. Carried into the record
+      // rather than only into a job line, because the comparison these feed is
+      // the whole point of keeping them.
       const result = await runBenchmark({
         model: parsed.data.model,
+        servedModel: served,
+        target: targetId,
         suite,
         samplesPerTask: parsed.data.samplesPerTask,
         baseURL: inferenceURL ?? via.baseURL,

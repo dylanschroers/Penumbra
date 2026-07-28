@@ -116,10 +116,26 @@ function JobLine({ job }: { job: LabJob }) {
 
 /** One benchmark run. Values are rates unless the metric says otherwise. */
 function ScoreRow({ result }: { result: BenchmarkResult }) {
+  // What answered is the model the scores describe; what was typed is only a
+  // request, and Studio ignores it. Older rows have no served model recorded,
+  // so they fall back to the request rather than claiming to know.
+  const served = result.servedModel;
+  const mismatch = served !== null && served !== result.model;
   return (
     <tr>
       <td>{new Date(result.at).toLocaleString()}</td>
-      <td>{result.model}</td>
+      <td>
+        {served ?? result.model}
+        {mismatch && (
+          <span
+            className="lab__score-warn"
+            title={`Requested "${result.model}" — the target had "${served}" loaded, and these scores describe that.`}
+          >
+            ⚠ requested {result.model}
+          </span>
+        )}
+      </td>
+      <td>{result.target}</td>
       <td>
         <span className={`lab__kind lab__kind--${result.suiteKind}`}>
           {result.suiteKind}
@@ -1006,6 +1022,7 @@ export function LabModule() {
                 <tr>
                   <th>When</th>
                   <th>Model</th>
+                  <th>Ran on</th>
                   <th>Suite</th>
                   <th>Samples</th>
                   <th>Scores</th>
@@ -1013,7 +1030,12 @@ export function LabModule() {
               </thead>
               <tbody>
                 {lab.scores.map((r) => (
-                  <ScoreRow key={`${r.at}-${r.suite}-${r.model}`} result={r} />
+                  // The target is part of the identity: the same name on two
+                  // machines is two different measurements.
+                  <ScoreRow
+                    key={`${r.at}-${r.suite}-${r.model}-${r.target}`}
+                    result={r}
+                  />
                 ))}
               </tbody>
             </table>

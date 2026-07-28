@@ -10,6 +10,7 @@ import {
   type SuiteDefinition,
   scoreCase,
   summarize,
+  type TargetId,
   type TaskScore,
   taskTools,
   toToolSpec,
@@ -25,7 +26,15 @@ import {
 // Python, and no way to drift from the tool specs the app ships.
 
 export interface BenchmarkOptions {
+  /** The id sent on the wire. Studio ignores it and serves what it has loaded,
+   *  so it is what was *asked for*, not what answered. */
   model: string;
+  /** What the endpoint reports as loaded — the model the scores actually
+   *  describe. Recorded beside `model` so a mismatch is visible. */
+  servedModel: string | null;
+  /** Which compute target served it. Two targets can hold different weights
+   *  under one name, so a score is not comparable without it. */
+  target: TargetId;
   suite: SuiteDefinition;
   samplesPerTask: number;
   /** OpenAI-compatible endpoint the model is served from. */
@@ -49,6 +58,8 @@ export async function runBenchmark(
     suite: opts.suite.id,
     suiteKind: opts.suite.kind,
     model: opts.model,
+    servedModel: opts.servedModel,
+    target: opts.target,
     samplesPerTask: opts.samplesPerTask,
     at: new Date().toISOString(),
     durationMs: Date.now() - started,

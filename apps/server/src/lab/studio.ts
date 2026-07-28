@@ -1,7 +1,9 @@
 import { openAsBlob } from "node:fs";
 import { basename } from "node:path";
 import {
+  type ModelCatalogEntry,
   normalizeBaseUrl,
+  pickLoadedModel,
   readSseFrames,
   type SseFrame,
 } from "@penumbra/shared";
@@ -155,6 +157,25 @@ export class StudioClient {
    *  need a yes/no; `probe()` carries the reason. */
   async reachable(): Promise<boolean> {
     return (await this.probe()) === "ready";
+  }
+
+  /**
+   * The model a completion would actually run against here, or null when
+   * nothing is resident.
+   *
+   * Studio serves whatever it has loaded and ignores the `model` field of a
+   * request — which is why UnslothEngine can send a placeholder and still get
+   * an answer. The consequence for benchmarking is that the model *named* in a
+   * run is not evidence of the model that produced the scores, so this is asked
+   * and recorded instead.
+   *
+   * Reads the listing through the shared rule: an unloaded model on disk is
+   * listed too, and reporting one would attribute a run to weights that never
+   * served it.
+   */
+  async loadedModel(): Promise<string | null> {
+    const body = await this.json<{ data?: ModelCatalogEntry[] }>("/v1/models");
+    return pickLoadedModel(body.data ?? []) ?? null;
   }
 
   /**
