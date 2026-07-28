@@ -1,5 +1,6 @@
+import { looksLocalPath } from "@penumbra/shared";
 import { describe, expect, it } from "vitest";
-import { looksLocalPath, toDatasetSource } from "./LabModule";
+import { formatWhen, toDatasetSource } from "./LabModule";
 
 // Getting this wrong sends a filesystem path to Studio as a HuggingFace repo id
 // (or vice versa), and the training job fails minutes later with an opaque
@@ -62,5 +63,38 @@ describe("looksLocalPath", () => {
   it("leaves a HuggingFace id alone", () => {
     expect(looksLocalPath("tatsu-lab/alpaca")).toBe(false);
     expect(looksLocalPath("trainset.jsonl")).toBe(false);
+  });
+});
+
+// Telling which run is the latest is the whole reason the runs list carries a
+// time, so the near ages are the ones that have to read right.
+describe("formatWhen", () => {
+  const now = Date.parse("2026-07-27T12:00:00Z");
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+  const MIN = 60_000;
+
+  it("reads as an age for anything within a week", () => {
+    expect(formatWhen(ago(5_000), now)).toBe("just now");
+    expect(formatWhen(ago(MIN), now)).toBe("1 min ago");
+    expect(formatWhen(ago(12 * MIN), now)).toBe("12 mins ago");
+    expect(formatWhen(ago(60 * MIN), now)).toBe("1 hr ago");
+    expect(formatWhen(ago(5 * 60 * MIN), now)).toBe("5 hrs ago");
+    expect(formatWhen(ago(48 * 60 * MIN), now)).toBe("2 days ago");
+  });
+
+  it("falls back to a date once an age stops being useful", () => {
+    const old = ago(30 * 24 * 60 * MIN);
+    expect(formatWhen(old, now)).toBe(new Date(old).toLocaleDateString());
+  });
+
+  // A clock skew between the server and this device must not print "-1 mins".
+  it("does not report a future timestamp as a negative age", () => {
+    expect(formatWhen(new Date(now + 30_000).toISOString(), now)).toBe(
+      "just now",
+    );
+  });
+
+  it("returns nothing for an unparseable timestamp", () => {
+    expect(formatWhen("not a date", now)).toBe("");
   });
 });

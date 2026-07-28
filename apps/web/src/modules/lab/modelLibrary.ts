@@ -8,6 +8,12 @@
 //   - a HuggingFace model *directory* — a folder holding a `config.json`, the
 //     format Unsloth fine-tunes *from*. Its children are shards/snapshots, not
 //     more models, so a matched directory is taken whole and not descended into.
+//
+// A GGUF release folder looks like both: it ships a `config.json` alongside a
+// dozen quants of the same weights. Taking it whole would offer the user one
+// entry that is really 20 GB of alternatives — so weights decide. A directory is
+// an HF model when it holds weights Unsloth can train from; a directory of
+// `.gguf` files is that many separate models.
 
 import { basename, type DirLister, walk } from "./scan";
 
@@ -27,6 +33,11 @@ export interface ModelEntry {
 
 const isGguf = (name: string): boolean => name.toLowerCase().endsWith(".gguf");
 
+/** The weight files an HF model directory carries — safetensors today, torch
+ *  pickles on older repos. Shards (`model-00001-of-00002.safetensors`) match. */
+const isHfWeight = (name: string): boolean =>
+  /\.(safetensors|bin|pt|pth)$/i.test(name);
+
 /**
  * Walk `root` and collect the models beneath it, de-duplicated by absolute path
  * and sorted by kind then name.
@@ -41,9 +52,17 @@ export async function scanModels(
   await walk(
     root,
     (listing) => {
+      const files = listing.entries.filter((e) => !e.isDir);
+      const hasConfig = files.some((e) => e.name === "config.json");
+      const ggufs = files.filter((e) => isGguf(e.name));
+
       // A `config.json` marks this directory as one HF model: record it and
-      // prune — its shards/snapshots are not separate models.
-      if (listing.entries.some((e) => !e.isDir && e.name === "config.json")) {
+      // prune — its shards/snapshots are not separate models. Unless the only
+      // weights here are `.gguf`, in which case it's a quant release and each
+      // file stands alone (see the header).
+      const hfWeights =
+        ggufs.length === 0 || files.some((e) => isHfWeight(e.name));
+      if (hasConfig && hfWeights) {
         found.set(listing.path, {
           kind: "hf",
           name: basename(listing.path),
@@ -53,15 +72,13 @@ export async function scanModels(
         return false;
       }
 
-      for (const entry of listing.entries) {
-        if (!entry.isDir && isGguf(entry.name)) {
-          found.set(entry.path, {
-            kind: "gguf",
-            name: entry.name,
-            path: entry.path,
-            size: entry.size,
-          });
-        }
+      for (const entry of ggufs) {
+        found.set(entry.path, {
+          kind: "gguf",
+          name: entry.name,
+          path: entry.path,
+          size: entry.size,
+        });
       }
       return true;
     },

@@ -62,6 +62,37 @@ describe("scanModels", () => {
     ]);
   });
 
+  it("lists a gguf release folder as its individual quants, not one model", async () => {
+    // Unsloth's GGUF repos ship a config.json next to every quant of the same
+    // weights — taking the directory whole would upload all of them.
+    const fs = fakeFs({
+      "/models": [["Qwen3-1.7B-GGUF", true]],
+      "/models/Qwen3-1.7B-GGUF": [
+        ["config.json", false, 500],
+        ["Qwen3-1.7B-Q8_0.gguf", false, 1_800_000_000],
+        ["Qwen3-1.7B-Q4_K_M.gguf", false, 1_100_000_000],
+      ],
+    });
+    const models = await scanModels("/models", fs);
+    expect(models.map((m) => `${m.kind}:${m.name}`)).toEqual([
+      "gguf:Qwen3-1.7B-Q4_K_M.gguf",
+      "gguf:Qwen3-1.7B-Q8_0.gguf",
+    ]);
+  });
+
+  it("prefers the HF model when a dir holds both real weights and a gguf", async () => {
+    const fs = fakeFs({
+      "/models": [["Llama", true]],
+      "/models/Llama": [
+        ["config.json", false, 1],
+        ["model.safetensors", false, 100],
+        ["export.gguf", false, 50],
+      ],
+    });
+    const models = await scanModels("/models", fs);
+    expect(models.map((m) => `${m.kind}:${m.name}`)).toEqual(["hf:Llama"]);
+  });
+
   it("skips hidden directories", async () => {
     const fs = fakeFs({
       "/models": [

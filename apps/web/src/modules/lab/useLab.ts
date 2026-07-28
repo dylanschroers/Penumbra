@@ -23,10 +23,28 @@ const TOKEN = import.meta.env.VITE_AGENT_TOKEN;
  *  missing or wrong — a different fix from "stopped" (not running). */
 export type StudioState = "ready" | "unauthorized" | "stopped";
 
+/** What the export form collects. Everything past `runId` is the optional
+ *  "publish it somewhere permanent" half. */
+export interface ExportRequestInput {
+  runId: string;
+  quantization?: string;
+  repoId?: string;
+  private?: boolean;
+  hfToken?: string;
+}
+
 export interface LabStatus {
   studio: StudioState;
   lmEval: "installed" | "missing";
   suites: SuiteDefinition[];
+  /** What the local Studio is pointed at, and whether a bearer is in play.
+   *  `source` says whether the running values came from the server's
+   *  environment or were set here; the key itself never comes back. */
+  local: {
+    baseURL: string;
+    source: "env" | "settings";
+    hasKey: boolean;
+  };
   /** The optional Colab fallback trainer. `baseURL` is echoed to confirm the
    *  target; the bearer never comes back from the server. */
   colab: {
@@ -112,9 +130,25 @@ export function useLab() {
     error,
     running: jobs.some((j) => j.state === "running"),
     finetune: (req: FinetuneRequest) => act("/lab/finetune", req),
-    exportRun: (runId: string) => act("/lab/export", { runId }),
+    // The Hub fields are optional and, when given, are the only way the artifact
+    // survives the trainer that made it. The token is sent for this one call and
+    // kept nowhere — not in this hook, not in the job record.
+    exportRun: (req: ExportRequestInput) => act("/lab/export", req),
     benchmark: (model: string, suite: string, samplesPerTask: number) =>
       act("/lab/benchmark", { model, suite, samplesPerTask }),
+    // Point the local Studio somewhere else, or give it a rotated key. Send only
+    // what changed: an omitted field keeps its current value, while an empty
+    // apiKey is an explicit "no bearer".
+    setLocalStudio: (patch: { baseURL?: string; apiKey?: string }) =>
+      act("/lab/provider/local", patch),
+    clearLocalStudio: async () => {
+      try {
+        await api("/lab/provider/local", { method: "DELETE" });
+        await refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
     // The key is sent once and is not held anywhere on the client afterwards;
     // omit an empty one so a trusted-LAN tunnel can run without a bearer.
     setColab: (baseURL: string, apiKey: string) =>
