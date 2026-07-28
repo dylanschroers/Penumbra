@@ -52,7 +52,7 @@ export function registerAgentRoutes(
     // A client that disconnects must not leave a model generating and tools
     // firing. Partial effects stand — already-executed tool writes are not
     // rolled back — and the events already sent are the record of what ran
-    // (docs/UNSLOTH_TIER1_PLAN.md → Phase 4).
+    // (docs/AGENT_DESIGN.md §5).
     const controller = new AbortController();
     req.raw.on("close", () => controller.abort());
 

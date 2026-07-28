@@ -7,21 +7,51 @@ import type {
 } from "@penumbra/shared";
 import { normalizeBaseUrl } from "@penumbra/shared";
 import { useCallback, useEffect, useState } from "react";
+import { type UploadProgress, uploadDataset, uploadModel } from "./upload";
 
 // Drives the Model Lab module. Everything goes through the Penumbra server's
 // /lab/* routes — never to Studio directly, because the Studio key is an
 // unscoped admin credential that must not reach a browser
-// (docs/model_lab_plan.md → Deployment topology).
+// (docs/MODEL_LAB.md → Deployment topology).
 
 const SERVER_URL = normalizeBaseUrl(
   import.meta.env.VITE_SERVER_URL ?? "http://localhost:3000",
 );
 const TOKEN = import.meta.env.VITE_AGENT_TOKEN;
 
+/** Studio readiness. "unauthorized" means it is up but the server's key is
+ *  missing or wrong — a different fix from "stopped" (not running). */
+export type StudioState = "ready" | "unauthorized" | "stopped";
+
+/** What the export form collects. Everything past `runId` is the optional
+ *  "publish it somewhere permanent" half. */
+export interface ExportRequestInput {
+  runId: string;
+  quantization?: string;
+  repoId?: string;
+  private?: boolean;
+  hfToken?: string;
+}
+
 export interface LabStatus {
-  studio: "ready" | "stopped";
+  studio: StudioState;
   lmEval: "installed" | "missing";
   suites: SuiteDefinition[];
+  /** What the local Studio is pointed at, and whether a bearer is in play.
+   *  `source` says whether the running values came from the server's
+   *  environment or were set here; the key itself never comes back. */
+  local: {
+    baseURL: string;
+    source: "env" | "settings";
+    hasKey: boolean;
+  };
+  /** The optional Colab fallback trainer. `baseURL` is echoed to confirm the
+   *  target; the bearer never comes back from the server. */
+  colab: {
+    configured: boolean;
+    baseURL: string | null;
+    studio: StudioState;
+  };
 }
 
 const headers = (): Record<string, string> => ({
@@ -100,8 +130,53 @@ export function useLab() {
     error,
     running: jobs.some((j) => j.state === "running"),
     finetune: (req: FinetuneRequest) => act("/lab/finetune", req),
-    exportRun: (runId: string) => act("/lab/export", { runId }),
+    // The Hub fields are optional and, when given, are the only way the artifact
+    // survives the trainer that made it. The token is sent for this one call and
+    // kept nowhere — not in this hook, not in the job record.
+    exportRun: (req: ExportRequestInput) => act("/lab/export", req),
     benchmark: (model: string, suite: string, samplesPerTask: number) =>
       act("/lab/benchmark", { model, suite, samplesPerTask }),
+    // Point the local Studio somewhere else, or give it a rotated key. Send only
+    // what changed: an omitted field keeps its current value, while an empty
+    // apiKey is an explicit "no bearer".
+    setLocalStudio: (patch: { baseURL?: string; apiKey?: string }) =>
+      act("/lab/provider/local", patch),
+    clearLocalStudio: async () => {
+      try {
+        await api("/lab/provider/local", { method: "DELETE" });
+        await refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    // The key is sent once and is not held anywhere on the client afterwards;
+    // omit an empty one so a trusted-LAN tunnel can run without a bearer.
+    setColab: (baseURL: string, apiKey: string) =>
+      act("/lab/provider/colab", {
+        baseURL,
+        ...(apiKey ? { apiKey } : {}),
+      }),
+    clearColab: async () => {
+      try {
+        await api("/lab/provider/colab", { method: "DELETE" });
+        await refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    // Transfer a client-local file to the Studio host and return the path there
+    // to train from. Desktop only (needs disk access).
+    uploadDataset: (localPath: string, onProgress?: UploadProgress) =>
+      uploadDataset(
+        { serverURL: SERVER_URL, token: TOKEN },
+        localPath,
+        onProgress,
+      ),
+    uploadModel: (localDir: string, onProgress?: UploadProgress) =>
+      uploadModel(
+        { serverURL: SERVER_URL, token: TOKEN },
+        localDir,
+        onProgress,
+      ),
   };
 }

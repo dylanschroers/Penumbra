@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// Wire contracts for the Model Lab (docs/model_lab_plan.md): fine-tuning,
+// Wire contracts for the Model Lab (docs/MODEL_LAB.md): fine-tuning,
 // export, and benchmarking. Shared so the server and the UI cannot disagree
 // about a job's shape, and so suite definitions have one home.
 
@@ -19,6 +19,10 @@ export const labJob = z.object({
   /** Human-readable current step ("step 40/60, loss 0.82"). */
   detail: z.string().nullable(),
   error: z.string().nullable(),
+  /** The run this job acts on, for jobs that act on one (export). Lets the UI
+   *  show progress against the row you pressed the button on instead of only
+   *  in a global list. Null for a finetune, which *creates* its run. */
+  runId: z.string().nullable().default(null),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });
@@ -45,11 +49,53 @@ export const finetuneRequest = z.object({
   format: z
     .enum(["auto", "alpaca", "chatml", "mistral", "raw", "custom", "generic"])
     .default("auto"),
+  /** Which compute to train on. "auto" prefers the local Studio and falls back
+   *  to a configured Colab endpoint when it is unreachable; "local"/"colab"
+   *  force one. Omit for "auto". */
+  provider: z.enum(["auto", "local", "colab"]).optional(),
+});
+
+/**
+ * A user-supplied fallback trainer: a Colab notebook running Unsloth Studio,
+ * exposed through a tunnel (ngrok/Cloudflare) and guarded by a bearer token.
+ *
+ * It is configured *through the server* rather than baked into client code so
+ * the key obeys the same rule as the local Studio bearer — the browser sends it
+ * once to set it and never reads it back (docs/MODEL_LAB.md → Deployment
+ * topology). The URL is not secret and may be echoed; the key never is.
+ */
+export const colabProviderConfig = z.object({
+  baseURL: z.string().url(),
+  apiKey: z.string().min(1).optional(),
+});
+
+/**
+ * The local Studio's address and bearer, settable at runtime.
+ *
+ * Studio mints a new key on reinstall and whenever the user rotates one, and
+ * until now matching it meant editing apps/server/.env and restarting the
+ * server. Both fields are optional so a caller can change one without knowing
+ * the other; an empty `apiKey` means "no bearer", which a trusted-LAN Studio
+ * legitimately runs without.
+ */
+export const studioCredentialsInput = z.object({
+  baseURL: z.string().url().optional(),
+  apiKey: z.string().optional(),
 });
 
 export const exportRequest = z.object({
   runId: z.string().min(1),
   quantization: z.string().min(1).default("Q4_K_M"),
+  /**
+   * Also push the artifact to the HuggingFace Hub. The one supported way to get
+   * weights off an ephemeral trainer: a Colab VM's disk goes away with the
+   * session, and Studio serves no artifact for download.
+   */
+  repoId: z.string().min(1).optional(),
+  private: z.boolean().optional(),
+  /** Write token for `repoId`. Used for this one call and never stored: it is
+   *  the user's Hub credential, not the lab's. */
+  hfToken: z.string().min(1).optional(),
 });
 
 export const benchmarkRequest = z.object({
@@ -89,6 +135,15 @@ export const labRun = z.object({
   dataset: z.string(),
   outputDir: z.string().nullable(),
   ggufPath: z.string().nullable(),
+  /** HuggingFace repo an export was pushed to, when one was. The artifact
+   *  itself lands on the trainer's disk, so for an ephemeral trainer this is
+   *  the only durable record of where the weights actually ended up. */
+  hubRepo: z.string().nullable().default(null),
+  /** Which trainer produced it. `outputDir` is a path on *that* machine, so
+   *  exporting the run means going back to the same one — a Colab checkpoint is
+   *  meaningless to the local Studio. Rows written before this was recorded
+   *  read as "local", which is what they were. */
+  provider: z.enum(["local", "colab"]).default("local"),
   createdAt: z.string().datetime(),
 });
 
@@ -97,6 +152,8 @@ export type LabJobState = z.infer<typeof labJobState>;
 export type LabJob = z.infer<typeof labJob>;
 export type DatasetSource = z.infer<typeof datasetSource>;
 export type FinetuneRequest = z.infer<typeof finetuneRequest>;
+export type ColabProviderConfig = z.infer<typeof colabProviderConfig>;
+export type StudioCredentialsInput = z.infer<typeof studioCredentialsInput>;
 export type ExportRequest = z.infer<typeof exportRequest>;
 export type BenchmarkRequest = z.infer<typeof benchmarkRequest>;
 export type SuiteKind = z.infer<typeof suiteKind>;

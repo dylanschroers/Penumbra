@@ -1,9 +1,12 @@
+export { looksLocalPath } from "./paths";
 export { findSuite, SUITES, type SuiteDefinition } from "./suites";
 export {
   type BenchmarkRequest,
   type BenchmarkResult,
   benchmarkRequest,
   benchmarkResult,
+  type ColabProviderConfig,
+  colabProviderConfig,
   type DatasetSource,
   datasetSource,
   type ExportRequest,
@@ -18,7 +21,9 @@ export {
   labJobKind,
   labJobState,
   labRun,
+  type StudioCredentialsInput,
   type SuiteKind,
+  studioCredentialsInput,
   suiteKind,
   type TaskScore,
   taskScore,

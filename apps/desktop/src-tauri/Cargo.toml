@@ -13,12 +13,19 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-# Spawns the bundled llama-server sidecar (Tier-0 embedded model). See SIDECAR.md.
-tauri-plugin-shell = "2"
+# Native "choose a folder" dialog for the file-manager sidebar (src/fs.rs is the
+# read/write side; the picker itself is driven from JS via this plugin).
+tauri-plugin-dialog = "2"
 # Native SQLite for desktop persistence (src/db.rs). `bundled` compiles SQLite
 # in, so no system library is needed.
 rusqlite = { version = "0.34", features = ["bundled"] }
 serde_json = "1"
+
+# PR_SET_PDEATHSIG for the llama-server sidecar: the kernel kills the child when
+# the app dies, so a crash or SIGKILL can't leave it orphaned on :8080
+# (src/lib.rs). Linux-only; other platforms rely on the RunEvent::Exit handler.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 
 # Keep the debug `target/` dir smaller: emit line-tables only instead of full
 # debug info. Backtraces still resolve to file:line; the multi-hundred-MB DWARF

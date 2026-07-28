@@ -3,7 +3,7 @@ import type { SuiteKind } from "./types";
 // Benchmark suites, defined as data so the server and the UI agree on what can
 // be run without either hard-coding a list.
 //
-// Two families, both first-class (docs/model_lab_plan.md M3). They answer
+// Two families, both first-class (docs/EVAL.md §4). They answer
 // different questions: "general" says how capable a model is at all and is
 // comparable to public numbers; "personal" says whether it works as *this*
 // assistant and is comparable only to Penumbra's own history. Their scores are
@@ -37,8 +37,9 @@ export const SUITES: SuiteDefinition[] = [
     // leaderboard_bbh and leaderboard_gpqa are `multiple_choice`, which needs
     // loglikelihoods that /v1/chat/completions cannot return; running them here
     // fails rather than scoring badly. They need the GGUF /v1/completions path
-    // (docs/model_lab_plan.md fact 6) and belong in a separate suite once that
-    // exists. leaderboard_musr is loglikelihood-only for the same reason.
+    // (docs/MODEL_LAB.md → What Studio guarantees, fact 6) and belong in a
+    // separate suite once that exists. leaderboard_musr is loglikelihood-only
+    // for the same reason.
     tasks: ["gsm8k", "leaderboard_ifeval", "leaderboard_math_hard"],
   },
   {

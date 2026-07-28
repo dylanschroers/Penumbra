@@ -45,3 +45,6 @@ bench/
 # Local Python venv for lm-evaluation-harness (docs/EVAL.md). Not committed:
 # it is a machine-local tool install, not part of the app.
 .venv-lmeval/
+
+# Machine-specific local Cargo linker override (see comment in the file)
+apps/desktop/src-tauri/.cargo/config.toml

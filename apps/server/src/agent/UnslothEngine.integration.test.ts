@@ -11,7 +11,7 @@ import { UnslothEngine } from "./UnslothEngine";
 //
 // What this DOESN'T prove: that Unsloth Studio behaves the way this fake does.
 // The fake is written to the same assumption the engine is
-// (docs/UNSLOTH_TIER1_PLAN.md → "Unsloth is on the seam"), so it cannot
+// (docs/AGENT_DESIGN.md → "Unsloth is on the seam"), so it cannot
 // validate that assumption — only a live Studio on the GPU host can. It catches
 // our bugs, not our misunderstandings.
 

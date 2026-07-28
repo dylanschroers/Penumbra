@@ -20,7 +20,7 @@ import type { TaskSyncStore } from "../sync/store";
 // would be invisible to every client forever with no error raised anywhere.
 // Routing writes through push keeps a single rev-assigning path and gets LWW
 // merge behavior for free. Reads go straight to SQL, since push/pull cannot
-// express them (see docs/UNSLOTH_TIER1_PLAN.md §3).
+// express them (see docs/SYNC.md → The rev trap).
 
 export interface ServerTaskStore {
   /** Live tasks, newest first — the shape the agent's list tool reports. */

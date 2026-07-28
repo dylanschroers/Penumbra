@@ -9,8 +9,8 @@ import { flushSync, requestSync } from "../sync/SyncClient";
 
 // Tier 1: the model runs on a Penumbra server, and so do its tools. This engine is
 // pure transport — it holds no tool bindings, because the server owns the
-// tools, the prompt, and execution (docs/UNSLOTH_TIER1_PLAN.md §2). That is the
-// asymmetry the Engine interface was reshaped for: runAgent takes only
+// tools, the prompt, and execution (docs/SYNC.md → Server-side writes). That
+// is the asymmetry the Engine interface was reshaped for: runAgent takes only
 // messages, so there is nothing here to pass and ignore.
 
 const DEFAULT_URL = import.meta.env.VITE_SERVER_URL ?? "http://127.0.0.1:3000";

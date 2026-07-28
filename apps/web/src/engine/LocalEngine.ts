@@ -9,7 +9,7 @@ import { OpenAiEngine, type ToolBindings } from "@penumbra/shared";
 // The protocol itself lives in @penumbra/shared's OpenAiEngine, shared with the
 // server's Tier-1 engine. All this class adds is the Vite-side configuration,
 // which cannot live in the shared package because that package also runs on the
-// server (docs/UNSLOTH_TIER1_PLAN.md → Phase 2).
+// server (docs/AGENT_DESIGN.md §5).
 const DEFAULT_URL =
   import.meta.env.VITE_LOCAL_LLM_URL ?? "http://127.0.0.1:8080";
 const DEFAULT_MODEL = import.meta.env.VITE_LOCAL_LLM_MODEL ?? "local";

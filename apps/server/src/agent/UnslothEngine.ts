@@ -7,7 +7,7 @@ import { OpenAiEngine, type ToolBindings } from "@penumbra/shared";
 // plus an address, a model, and a bearer token. That is the whole engine. The
 // branch this work salvages reached Studio through @anthropic-ai/sdk and an
 // `unsloth connect claude` handshake; none of that is needed on the OpenAI seam
-// (docs/UNSLOTH_TIER1_PLAN.md → "Unsloth is on the seam").
+// (docs/AGENT_DESIGN.md → "Unsloth is on the seam").
 //
 // One constraint that is easy to violate by accident: **never send
 // `enable_tools` or `mcp_enabled`.** Those ask Studio to run *its own* tool
@@ -37,7 +37,7 @@ const DEFAULT_STATUS_TIMEOUT_MS = 5000;
 
 export interface UnslothEngineConfig {
   /** Tools, prompt, and executor for every turn. Server-side in Tier 1 — the
-   *  client is not in the turn loop (docs/UNSLOTH_TIER1_PLAN.md → §2). */
+   *  client is not in the turn loop (docs/SYNC.md → Server-side writes). */
   bindings: ToolBindings;
   baseURL?: string;
   apiKey?: string;

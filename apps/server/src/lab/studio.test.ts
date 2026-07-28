@@ -8,8 +8,8 @@ import { StudioClient, TrainingBusyError } from "./studio";
 //
 // What this cannot prove: that Unsloth Studio behaves like this fake. The fake
 // encodes the same reading of Studio's API that the client does
-// (docs/model_lab_plan.md → verified facts), so only a live Studio can confirm
-// it. It catches our bugs, not our misunderstandings.
+// (docs/MODEL_LAB.md → What Studio guarantees), so only a live Studio can
+// confirm it. It catches our bugs, not our misunderstandings.
 
 interface Recorded {
   method: string;
@@ -218,14 +218,26 @@ describe("export", () => {
   });
 });
 
-describe("reachable", () => {
-  it("is true when Studio answers", async () => {
+describe("reachable / probe", () => {
+  it("is ready when Studio answers", async () => {
     const c = await client(() => ({ body: { data: [] } }));
     expect(await c.reachable()).toBe(true);
+    expect(await c.probe()).toBe("ready");
   });
 
-  it("is false when nothing is listening", async () => {
+  it("reports unauthorized on a 401 rather than stopped", async () => {
+    // Up, but the key is missing or wrong — a different fix from "not running".
+    const c = await client(() => ({
+      status: 401,
+      body: { error: { message: "Not authenticated" } },
+    }));
+    expect(await c.probe()).toBe("unauthorized");
+    expect(await c.reachable()).toBe(false);
+  });
+
+  it("is stopped when nothing is listening", async () => {
     const c = new StudioClient({ baseURL: "http://127.0.0.1:1", env: {} });
+    expect(await c.probe()).toBe("stopped");
     expect(await c.reachable()).toBe(false);
   });
 });

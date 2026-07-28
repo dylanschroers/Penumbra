@@ -1,33 +1,37 @@
-/* Minimal hand-written stylesheet (step 5). Light + dark via prefers-color-scheme.
-   Design tokens live as CSS variables so they're easy to swap later. */
+/* Minimal hand-written stylesheet. Design tokens live as CSS variables.
+   Dark is the default theme; a future settings toggle sets data-theme="light"
+   on <html> to switch. Because the palette is all custom properties, flipping
+   the attribute re-themes every module with zero JS re-render. */
 
 :root {
+  --bg: #16161a;
+  --surface: #1f1f25;
+  --text: #ececf1;
+  --muted: #9a9aa6;
+  --border: #2e2e37;
+  --primary: #6366f1;
+  --primary-text: #ffffff;
+  --danger: #f87171;
+  --prio-low: #9ca3af;
+  --prio-medium: #60a5fa;
+  --prio-high: #f87171;
+  --radius: 8px;
+  /* Hint native controls (scrollbars, date/number inputs) to render dark. */
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
   --bg: #f7f7f8;
   --surface: #ffffff;
   --text: #1a1a1e;
   --muted: #6b6b76;
   --border: #e3e3e8;
   --primary: #4f46e5;
-  --primary-text: #ffffff;
   --danger: #dc2626;
   --prio-low: #6b7280;
   --prio-medium: #2563eb;
   --prio-high: #dc2626;
-  --radius: 8px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #16161a;
-    --surface: #1f1f25;
-    --text: #ececf1;
-    --muted: #9a9aa6;
-    --border: #2e2e37;
-    --primary: #6366f1;
-    --prio-low: #9ca3af;
-    --prio-medium: #60a5fa;
-    --prio-high: #f87171;
-  }
+  color-scheme: light;
 }
 
 * {
@@ -39,190 +43,6 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: system-ui, -apple-system, sans-serif;
-}
-
-/* Workspace canvas */
-.workspace {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.workspace__bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.9rem 1.25rem;
-  border-bottom: 1px solid var(--border);
-  /* Sit above the canvas so the add-module dropdown overlays the tiles. */
-  position: relative;
-  z-index: 20;
-  background: var(--surface);
-}
-
-.workspace__title {
-  margin: 0;
-  font-size: 1.25rem;
-  letter-spacing: -0.02em;
-}
-
-.workspace__brand {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-/* Sync status light (see src/sync/SyncStatusLight.tsx). */
-.sync-light {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.sync-light--pending {
-  background: var(--muted);
-}
-
-.sync-light--connected {
-  background: #16a34a;
-}
-
-.sync-light--disconnected {
-  background: var(--danger);
-}
-
-@media (prefers-color-scheme: dark) {
-  .sync-light--connected {
-    background: #4ade80;
-  }
-}
-
-.workspace__actions {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.workspace__canvas {
-  flex: 1;
-  padding: 0.75rem;
-  position: relative;
-}
-
-/* Add-module dropdown */
-.add-menu {
-  position: relative;
-}
-
-.add-menu__trigger {
-  font-size: 1.2rem;
-  line-height: 1;
-  padding: 0.3rem 0.65rem;
-}
-
-.add-menu__list {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 0.35rem);
-  z-index: 30;
-  min-width: 11rem;
-  margin: 0;
-  padding: 0.25rem;
-  list-style: none;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-}
-
-.add-menu__item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 0.5rem 0.6rem;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-size: 0.9rem;
-  border-radius: calc(var(--radius) - 2px);
-  cursor: pointer;
-}
-
-.add-menu__item:hover {
-  background: var(--bg);
-}
-
-.workspace__empty {
-  padding-top: 3rem;
-}
-
-.workspace__item {
-  height: 100%;
-}
-
-/* Module card chrome */
-.module-frame {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-
-.module-frame__bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.4rem 0.4rem 0.4rem 0.75rem;
-  border-bottom: 1px solid var(--border);
-  cursor: move;
-  user-select: none;
-}
-
-.module-frame__title {
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
-.module-frame__close {
-  cursor: pointer;
-}
-
-.module-frame__body {
-  flex: 1;
-  padding: 0.9rem;
-  overflow: auto;
-}
-
-/* Grid placeholder shown while dragging/resizing */
-/* Scoped under .workspace so it outranks react-grid-layout's own
-   `.react-grid-item.react-grid-placeholder { background: red }` (same specificity,
-   loaded later) instead of tying with it. */
-.workspace .react-grid-item.react-grid-placeholder {
-  background: #ab13ab;
-  border-radius: var(--radius);
-}
-
-/* Make the resize handle discoverable. The bundled CSS keeps it at opacity 0
-   until hover and draws a dark arrow that vanishes on a dark surface, so show a
-   faint handle always (full on hover) and tint the arrow with the theme. Scoped
-   under .workspace to outrank the bundled rule, which is imported afterwards. */
-.workspace .react-grid-item > .react-resizable-handle {
-  opacity: 0.35;
-}
-
-.workspace .react-grid-item:hover > .react-resizable-handle {
-  opacity: 1;
-}
-
-.workspace .react-grid-item > .react-resizable-handle::after {
-  border-right-color: var(--muted);
-  border-bottom-color: var(--muted);
 }
 
 /* Add-task form */
@@ -294,6 +114,73 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* Tasks, compact (the dock card). A glance at what's outstanding — no controls,
+   since every action lives in the expanded view. */
+.tasks-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.tasks-compact__counts {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.tasks-compact__done {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.tasks-compact__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.tasks-compact__item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.tasks-compact__dot {
+  flex: none;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.tasks-compact__dot--low {
+  color: var(--prio-low);
+}
+.tasks-compact__dot--medium {
+  color: var(--prio-medium);
+}
+.tasks-compact__dot--high {
+  color: var(--prio-high);
+}
+
+/* One line per task: the card is narrow, so clip rather than wrap. */
+.tasks-compact__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-compact__more {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
 }
 
 .task {
@@ -563,6 +450,48 @@ body {
 
 .agent__status {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* Provider selector: a small segmented control routing the chat to a backend
+   (local llama / server Unsloth / cloud). Disabled segments aren't wired up yet. */
+.agent__providers {
+  display: inline-flex;
+  gap: 0.1rem;
+  padding: 0.15rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.agent__provider {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.agent__provider:hover:not(:disabled):not(.agent__provider--active) {
+  color: var(--text);
+}
+
+.agent__provider--active {
+  color: var(--primary-text);
+  background: var(--primary);
+}
+
+.agent__provider:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .agent__pill {
@@ -616,6 +545,65 @@ body {
   border-color: var(--primary);
 }
 
+/* Markdown output: collapse the outer margins so a single paragraph reads like
+   the old plain bubble, and let long code/tables scroll instead of stretching
+   the module. Streaming replaces content in place, so keep rules cheap. */
+.agent__markdown {
+  /* The bubble sets pre-wrap for plain user text; markdown emits block
+     elements, so normal wrapping avoids doubled blank lines between them. */
+  white-space: normal;
+}
+.agent__markdown > :first-child {
+  margin-top: 0;
+}
+.agent__markdown > :last-child {
+  margin-bottom: 0;
+}
+.agent__markdown p,
+.agent__markdown ul,
+.agent__markdown ol {
+  margin: 0.4rem 0;
+}
+.agent__markdown ul,
+.agent__markdown ol {
+  padding-left: 1.2rem;
+}
+.agent__markdown code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+}
+.agent__markdown pre {
+  margin: 0.4rem 0;
+  padding: 0.5rem 0.65rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+.agent__markdown pre code {
+  border: 0;
+  padding: 0;
+  background: none;
+  font-size: 0.82em;
+}
+.agent__markdown a {
+  color: var(--primary);
+}
+.agent__markdown table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+.agent__markdown th,
+.agent__markdown td {
+  border: 1px solid var(--border);
+  padding: 0.25rem 0.5rem;
+}
+
 .agent__bubble--pending {
   color: var(--muted);
 }
@@ -648,7 +636,7 @@ body {
   outline-offset: 1px;
 }
 
-/* ---- Model Lab (docs/model_lab_plan.md) -------------------------------- */
+/* ---- Model Lab (docs/MODEL_LAB.md) ------------------------------------- */
 
 .lab {
   display: flex;
@@ -662,6 +650,8 @@ body {
 .lab__status {
   display: flex;
   gap: 0.4rem;
+  /* Anchor for the compute-provider popover. */
+  position: relative;
 }
 
 .lab__pill {
@@ -677,6 +667,13 @@ body {
   color: var(--primary-text);
   background: var(--primary);
   border-color: var(--primary);
+}
+
+/* Up, but the server's key is missing or wrong: a warning, not "off". */
+.lab__pill--unauthorized {
+  color: #7c4a03;
+  background: #fbbf24;
+  border-color: #f59e0b;
 }
 
 .lab__tabs {
@@ -717,6 +714,330 @@ body {
   width: 6rem;
 }
 
+/* The Studio pill acts as a button that opens the provider popover. */
+.lab__pill--action {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.lab__pill--action:hover {
+  border-color: var(--primary);
+}
+
+.lab__pill-caret {
+  font-size: 0.6rem;
+  opacity: 0.7;
+}
+
+/* Sits above everything and swallows the click that dismisses the popover. */
+.lab__popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  border: none;
+  padding: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.lab__popover {
+  position: absolute;
+  z-index: 21;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  width: min(20rem, 90vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface, var(--bg));
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
+}
+
+.lab__popover-head {
+  display: flex;
+}
+
+.lab__popover-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.lab__provider-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.lab__provider-note {
+  margin: 0.2rem 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.lab__provider-note--warn {
+  color: var(--danger);
+}
+
+/* ---- Collapsible sections ----------------------------------------------- */
+
+.lab__section {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  /* A closed section is one header tall and must stay that way — without this
+     the flex column steals its height and the row collapses to nothing. */
+  flex-shrink: 0;
+  min-height: 0;
+}
+
+.lab__section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.45rem 0.5rem;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lab__section-head:hover .lab__section-title {
+  color: var(--primary);
+}
+
+.lab__section-caret {
+  color: var(--muted);
+  font-size: 0.7rem;
+  transition: transform 120ms ease;
+}
+
+/* The caret points down when open, right when closed. */
+.lab__section--closed .lab__section-caret {
+  transform: rotate(-90deg);
+}
+
+.lab__section-meta {
+  margin-left: auto;
+  font-weight: 400;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.lab__section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0 0.5rem 0.5rem;
+  min-height: 0;
+}
+
+/* ---- Model library (finetune tab) -------------------------------------- */
+
+.lab__finetune,
+.lab__benchmarks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 0;
+  /* The tab content is the tall part (two libraries, preview, form), so it is
+     what scrolls. Without this it keeps its full height and squeezes the job
+     list below it to nothing, hiding the very error a failed run reports. */
+  overflow-y: auto;
+}
+
+/* Chrome (border, padding, title) belongs to the section wrapping this. */
+.lab__library {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.lab__library-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.lab__library-path {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.lab__library-note {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.lab__library-error {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--danger);
+}
+
+/* The scanned items: a scrollable list of one-click choices that fill a field. */
+.lab__lib-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-height: 11rem;
+  overflow-y: auto;
+}
+
+.lab__lib-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.lab__lib-item:hover {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+/* The selected item (base model / dataset). */
+.lab__lib-item[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
+.lab__lib-badge {
+  flex-shrink: 0;
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+/* HF model dirs are the fine-tune-ready kind — highlight them. */
+.lab__lib-badge--hf {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+.lab__lib-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lab__lib-size {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+/* ---- Dataset preview --------------------------------------------------- */
+
+.lab__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.lab__preview-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lab__preview-meta {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.lab__preview-issues {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.lab__preview-issue {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.lab__preview-issue--error {
+  color: var(--danger);
+}
+
+.lab__preview-records {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.lab__preview-record {
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.75rem;
+}
+
+.lab__preview-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.lab__preview-turn {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.lab__preview-role {
+  flex-shrink: 0;
+  min-width: 4.5rem;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.lab__preview-content {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.lab__preview-json {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
 .lab__error {
   color: var(--danger);
   margin: 0;
@@ -738,6 +1059,14 @@ body {
   min-height: 0;
 }
 
+/* The job list carries run failures, so it must survive the flex squeeze: it is
+   the last child of a full-height column and would otherwise shrink away behind
+   the tab content above it. */
+.lab__jobs {
+  flex-shrink: 0;
+  max-height: 40%;
+}
+
 .lab__run,
 .lab__job {
   display: flex;
@@ -757,6 +1086,69 @@ body {
   color: var(--muted);
 }
 
+/* Which machine holds this run's checkpoint. Colab is called out because its
+   disk is temporary — that decides whether an export needs a Hub push. */
+.lab__run-where {
+  flex-shrink: 0;
+  padding: 0.05rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.lab__run-where--colab {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+/* What an export is doing, under the run it belongs to. */
+.lab__run-status {
+  margin: 0.15rem 0 0.3rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.lab__run-status--failed {
+  color: var(--danger);
+}
+
+/* The per-run export settings, opened under the row it belongs to. */
+.lab__export {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.3rem 0 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.lab__check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+}
+
+.lab__export-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
+/* When a run happened. Fixed width so the ages line up in a column and the
+   newest is findable by position, not by reading each row. */
+.lab__run-when,
+.lab__job-when {
+  flex-shrink: 0;
+  min-width: 5.5rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .lab__job--failed .lab__job-state {
   color: var(--danger);
 }
@@ -766,6 +1158,22 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* A flex item defaults to min-width:auto, which refuses to shrink below its
+     content — the ellipsis never engages and the row pushes wide instead. */
+  min-width: 0;
+}
+
+/* Progress detail is noise worth truncating; a failure message is the one thing
+   here worth reading in full, so let it wrap rather than ellipsing to nothing. */
+.lab__job--failed {
+  align-items: flex-start;
+}
+
+.lab__job--failed .lab__job-detail {
+  color: var(--danger);
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Wide tables scroll inside the card rather than stretching the canvas. */

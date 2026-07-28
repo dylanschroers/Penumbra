@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type AgentStatus, type ChatMessage, engine } from "../../engine";
+import {
+  type AgentStatus,
+  type ChatMessage,
+  engine,
+  getProvider,
+  type ProviderKind,
+  setProvider as routeProvider,
+} from "../../engine";
 
 // Drives the agent module: tracks the model's status and runs a tool-using turn
 // against it. This hook owns only UI concerns: message state, the busy flag,
@@ -16,11 +23,23 @@ export function useAgent() {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [status, setStatus] = useState<AgentStatus>({ state: "stopped" });
   const [busy, setBusy] = useState(false);
+  const [provider, setProviderState] = useState<ProviderKind>(getProvider);
   const abortRef = useRef<AbortController | null>(null);
 
   const refreshStatus = useCallback(async () => {
     setStatus(await engine.getStatus());
   }, []);
+
+  // Route the chat to a different provider, then re-check status so the pill
+  // reflects the new backend immediately rather than on the next poll tick.
+  const setProvider = useCallback(
+    (kind: ProviderKind) => {
+      routeProvider(kind);
+      setProviderState(getProvider()); // what the engine actually accepted
+      void refreshStatus();
+    },
+    [refreshStatus],
+  );
 
   // Poll status so the pill reflects the model starting/stopping out of band.
   // Skip ticks while the tab is hidden; the next visible tick catches up.
@@ -91,5 +110,5 @@ export function useAgent() {
     [messages, busy],
   );
 
-  return { messages, status, busy, send };
+  return { messages, status, busy, send, provider, setProvider };
 }
