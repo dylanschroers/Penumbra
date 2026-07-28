@@ -1,3 +1,4 @@
+import { migrateStorageKey } from "@penumbra/shared";
 import { useCallback, useEffect, useState } from "react";
 import { isFsAvailable, pickFolder } from "../../fs/fsClient";
 
@@ -29,12 +30,18 @@ export interface FileLibrary<T> {
 export function useFileLibrary<T>(
   storageKey: string,
   scan: (dir: string) => Promise<T[]>,
+  /** A pre-convention key whose value should be adopted, if one exists. */
+  legacyStorageKey?: string,
 ): FileLibrary<T> {
-  const [dir, setDir] = useState<string | null>(() =>
-    typeof localStorage === "undefined"
+  const [dir, setDir] = useState<string | null>(() => {
+    // Before the first read, not in an effect: an effect would run after this
+    // initializer has already concluded there is no folder, and the library
+    // would show as unset for a render.
+    if (legacyStorageKey) migrateStorageKey(legacyStorageKey, storageKey);
+    return typeof localStorage === "undefined"
       ? null
-      : localStorage.getItem(storageKey),
-  );
+      : localStorage.getItem(storageKey);
+  });
   const [items, setItems] = useState<T[]>([]);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);

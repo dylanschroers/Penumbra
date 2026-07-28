@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { isFsAvailable } from "../fs/fsClient";
 import { AgentModule } from "../modules/agent/AgentModule";
@@ -10,6 +10,7 @@ import { Logo } from "./Logo";
 import { ModuleDock } from "./ModuleDock";
 import { ModuleSlot, type ModuleView } from "./ModuleSlot";
 import { ServerStatus } from "./ServerStatus";
+import { loadSession, saveSession } from "./session";
 import "./shell.css";
 
 // Prototype shell (see the UI-overhaul discussion). Flow:
@@ -38,17 +39,22 @@ import "./shell.css";
 const HOLD_MS = 500;
 
 // Modules the dock can offer. The assistant is the shell's spine, so it isn't a
-// dock card. The dock starts empty — the user adds modules from this set via the
-// dock's "+" card.
+// dock card. A first-run dock is empty and the user adds modules from this set
+// via the dock's "+" card; after that it reopens with whatever was last open
+// (see loadSession).
 const ADDABLE_MODULE_IDS = MODULES.map((m) => m.id).filter(
   (id) => id !== "agent",
 );
 
 export function AppShell() {
+  // Read once, lazily: both fields come out of the same record, and the loader
+  // parses and validates.
+  const [restored] = useState(() => loadSession(ADDABLE_MODULE_IDS));
+
   const [launched, setLaunched] = useState(false);
-  const [focusedId, setFocusedId] = useState<string | null>(null);
-  // Modules currently open in the dock; nothing is open on launch.
-  const [openModuleIds, setOpenModuleIds] = useState<string[]>([]);
+  const [focusedId, setFocusedId] = useState<string | null>(restored.focused);
+  // Modules currently open in the dock, restored from the last session.
+  const [openModuleIds, setOpenModuleIds] = useState<string[]>(restored.open);
   // A module being dragged from the dock's add-list onto the workspace centre,
   // and whether the pointer is currently over the drop zone.
   const [draggingModule, setDraggingModule] = useState<string | null>(null);
@@ -74,6 +80,13 @@ export function AppShell() {
   // views are rendered here, not in the dock, so this is where they can be left
   // unrendered while the tray is shut.
   const [dockOpen, setDockOpen] = useState(false);
+
+  // Write the workspace back on every change. Not gated on `launched`: the set
+  // survives a return to the launcher in React already, and persisting it there
+  // too keeps the stored record equal to the live one at all times.
+  useEffect(() => {
+    saveSession({ open: openModuleIds, focused: focusedId });
+  }, [openModuleIds, focusedId]);
 
   // Modules are rendered *here*, and portalled into the slots that show them.
   //

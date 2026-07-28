@@ -5,6 +5,7 @@ import {
   type LabJob,
   type LabRun,
   looksLocalPath,
+  STORAGE_NAMESPACE,
 } from "@penumbra/shared";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { isFsAvailable, readHead } from "../../fs/fsClient";
@@ -41,7 +42,7 @@ const PREVIEW_BYTES = 64 * 1024;
 //
 // Scores from the two suite families are shown side by side and never averaged
 // — a model can gain reasoning ability while getting worse at calling
-// create_task (docs/model_lab_plan.md M3).
+// create_task (docs/MODEL_LAB.md → Suites).
 
 type Tab = "finetune" | "runs" | "benchmarks";
 
@@ -549,10 +550,15 @@ function DatasetPreviewPanel({
 
 export function LabModule() {
   const lab = useLab();
-  const modelLibrary = useFileLibrary("penumbra.lab.modelDir", scanModels);
+  const modelLibrary = useFileLibrary(
+    `${STORAGE_NAMESPACE}.lab.model-dir.v1`,
+    scanModels,
+    "penumbra.lab.modelDir",
+  );
   const datasetLibrary = useFileLibrary(
-    "penumbra.lab.datasetDir",
+    `${STORAGE_NAMESPACE}.lab.dataset-dir.v1`,
     scanDatasets,
+    "penumbra.lab.datasetDir",
   );
   const sections = useSections();
   const [tab, setTab] = useState<Tab>("finetune");

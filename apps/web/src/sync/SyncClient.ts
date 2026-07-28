@@ -4,7 +4,12 @@
 // on startup, on an interval, when the network returns, and (debounced) right
 // after a local edit. See docs/SYNC.md.
 
-import { normalizeBaseUrl, type PullTasksResult } from "@penumbra/shared";
+import {
+  migrateStorageKey,
+  normalizeBaseUrl,
+  type PullTasksResult,
+  STORAGE_NAMESPACE,
+} from "@penumbra/shared";
 import { getDb } from "../db/client";
 
 // The server base URL is runtime-settable (see setServerUrl) so the user can
@@ -13,12 +18,14 @@ import { getDb } from "../db/client";
 // (e.g. "192.168.1.50:3000") would otherwise turn every request into a *relative*
 // path: the dev server answers it with its SPA fallback, so sync gets 200 OK full
 // of HTML and reports itself "disconnected" rather than misconfigured.
-const SERVER_URL_KEY = "penumbra.serverUrl";
+const SERVER_URL_KEY = `${STORAGE_NAMESPACE}.sync.server-url.v1`;
+const LEGACY_SERVER_URL_KEY = "penumbra.serverUrl";
 const DEFAULT_SERVER_URL: string = normalizeBaseUrl(
   import.meta.env.VITE_SERVER_URL ?? "http://localhost:3000",
 );
 
 function loadServerUrl(): string {
+  migrateStorageKey(LEGACY_SERVER_URL_KEY, SERVER_URL_KEY);
   try {
     const saved = localStorage.getItem(SERVER_URL_KEY);
     return saved ? normalizeBaseUrl(saved) : DEFAULT_SERVER_URL;
