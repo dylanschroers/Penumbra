@@ -22,6 +22,48 @@ const result = (over: Partial<BenchmarkResult> = {}): BenchmarkResult => ({
   ...over,
 });
 
+// A live server has a database that predates the provider column. Opening it
+// must migrate rather than throw, and the runs already in it are local ones —
+// Colab didn't exist as an option when they were written.
+describe("schema migration", () => {
+  it("adds the provider column to a database that lacks it", () => {
+    const db = new Database(":memory:");
+    db.exec(`CREATE TABLE lab_runs (
+      id text PRIMARY KEY NOT NULL,
+      job_id text NOT NULL,
+      base_model text NOT NULL,
+      dataset text NOT NULL,
+      output_dir text,
+      gguf_path text,
+      created_at text NOT NULL
+    );
+    INSERT INTO lab_runs VALUES
+      ('r1','j1','qwen','d','/runs/1',NULL,'2026-07-01T00:00:00.000Z');`);
+
+    const migrated = createLabStore(db);
+
+    expect(migrated.getRun("r1")?.provider).toBe("local");
+    // And the store still works for new rows.
+    const job = migrated.createJob("finetune");
+    const fresh = migrated.createRun({
+      jobId: job.id,
+      baseModel: "qwen",
+      dataset: "d",
+      outputDir: null,
+      ggufPath: null,
+      hubRepo: null,
+      provider: "colab",
+    });
+    expect(migrated.getRun(fresh.id)?.provider).toBe("colab");
+  });
+
+  it("is safe to open the same database twice", () => {
+    const db = new Database(":memory:");
+    createLabStore(db);
+    expect(() => createLabStore(db)).not.toThrow();
+  });
+});
+
 describe("jobs", () => {
   it("starts queued and reports back", () => {
     const job = store.createJob("finetune");
@@ -79,6 +121,8 @@ describe("runs", () => {
       dataset: "hf/dataset",
       outputDir: null,
       ggufPath: null,
+      hubRepo: null,
+      provider: "local",
     });
 
     store.setRunArtifacts(run.id, { outputDir: "/runs/1" });

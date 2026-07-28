@@ -1,3 +1,5 @@
+import { openAsBlob } from "node:fs";
+import { basename } from "node:path";
 import {
   normalizeBaseUrl,
   readSseFrames,
@@ -12,7 +14,9 @@ import {
 // lives on the server and no client ever sees it
 // (docs/model_lab_plan.md → Deployment topology).
 
-const DEFAULT_BASE_URL = "http://127.0.0.1:8888";
+/** Studio's default address. Exported so the credential store resolves the same
+ *  fallback this client would. */
+export const DEFAULT_STUDIO_URL = "http://127.0.0.1:8888";
 
 export interface StudioConfig {
   baseURL?: string;
@@ -25,7 +29,20 @@ export interface StudioRun {
   id?: string;
   run_id?: string;
   output_dir?: string;
+  /** "running" | "completed" | "stopped" | "error". The run record is the only
+   *  place a crash is reported — the progress stream ends the same way either
+   *  way (see `startTraining`'s caller). */
   status?: string;
+  error_message?: string | null;
+}
+
+/** Where to publish an export, so it outlives the machine that produced it.
+ *  The token belongs to the user and is passed straight through — never stored,
+ *  never logged. */
+export interface HubTarget {
+  repoId: string;
+  hfToken?: string;
+  private?: boolean;
 }
 
 export interface TrainingStart {
@@ -79,7 +96,7 @@ export class StudioClient {
     const env = config.env ?? process.env;
     const key = config.apiKey ?? env.UNSLOTH_API_KEY;
     this.baseURL = normalizeBaseUrl(
-      config.baseURL ?? env.UNSLOTH_BASE_URL ?? DEFAULT_BASE_URL,
+      config.baseURL ?? env.UNSLOTH_BASE_URL ?? DEFAULT_STUDIO_URL,
     );
     // Studio rejects an empty bearer as malformed, so omit the header entirely
     // when there is no key (a trusted-LAN instance may run without one).
@@ -91,10 +108,13 @@ export class StudioClient {
     init: RequestInit = {},
     signal?: AbortSignal,
   ): Promise<T> {
+    // A multipart body carries its own content type with the boundary in it;
+    // declaring JSON over the top makes Studio reject the upload as malformed.
+    const multipart = init.body instanceof FormData;
     const res = await fetch(`${this.baseURL}${path}`, {
       ...init,
       headers: {
-        "Content-Type": "application/json",
+        ...(multipart ? {} : { "Content-Type": "application/json" }),
         ...this.headers,
         ...init.headers,
       },
@@ -152,6 +172,32 @@ export class StudioClient {
     }
   }
 
+  /**
+   * Hand a dataset file to Studio and return the path Studio stored it at.
+   *
+   * Studio will not train from an arbitrary absolute path: `resolve_dataset_path`
+   * accepts one only if it sits under a Studio dataset root, and answers
+   * anything else with "dataset path must be relative or under a dataset root".
+   * Our upload root is deliberately elsewhere (a different drive, often a
+   * different machine), so a local dataset has to go *through* Studio to become
+   * a path Studio will open.
+   *
+   * Streamed from disk as a Blob rather than read whole — the file is already on
+   * this host and there is no reason to hold it in memory too.
+   */
+  async uploadDataset(localPath: string): Promise<string> {
+    const form = new FormData();
+    form.append("file", await openAsBlob(localPath), basename(localPath));
+    const res = await this.json<{ stored_path?: string; filename?: string }>(
+      "/api/datasets/upload",
+      { method: "POST", body: form },
+    );
+    if (!res.stored_path) {
+      throw new Error("studio accepted the dataset but returned no path");
+    }
+    return res.stored_path;
+  }
+
   async stopTraining(): Promise<void> {
     await this.json("/api/train/stop", { method: "POST" });
   }
@@ -186,16 +232,36 @@ export class StudioClient {
     });
   }
 
-  /** Note the doubled segment: the export router mounts at `/api/export` and
-   *  declares this route as `/export/gguf`, so the real path is
-   *  `/api/export/export/gguf`. `/api/export/gguf` answers 405. Verified live —
-   *  the plan's shorthand for this endpoint was wrong. */
-  async exportGguf(saveDirectory: string, quantization: string): Promise<void> {
+  /**
+   * Note the doubled segment: the export router mounts at `/api/export` and
+   * declares this route as `/export/gguf`, so the real path is
+   * `/api/export/export/gguf`. `/api/export/gguf` answers 405. Verified live —
+   * the plan's shorthand for this endpoint was wrong.
+   *
+   * With `hub` set, Studio also pushes the result to the HuggingFace Hub. That
+   * is the only exit for an artifact from a trainer whose disk is temporary:
+   * nothing in Studio's API serves an export back for download.
+   */
+  async exportGguf(
+    saveDirectory: string,
+    quantization: string,
+    hub?: HubTarget,
+  ): Promise<void> {
     await this.json("/api/export/export/gguf", {
       method: "POST",
       body: JSON.stringify({
         save_directory: saveDirectory,
         quantization_method: quantization,
+        // Studio ignores repo_id/hf_token unless push_to_hub is set, so the
+        // flag and the target always travel together.
+        ...(hub
+          ? {
+              push_to_hub: true,
+              repo_id: hub.repoId,
+              ...(hub.hfToken ? { hf_token: hub.hfToken } : {}),
+              ...(hub.private === undefined ? {} : { private: hub.private }),
+            }
+          : {}),
       }),
     });
   }

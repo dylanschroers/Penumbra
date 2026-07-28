@@ -1,8 +1,10 @@
-import type {
-  BenchmarkResult,
-  DatasetSource,
-  FinetuneRequest,
-  LabJob,
+import {
+  type BenchmarkResult,
+  type DatasetSource,
+  type FinetuneRequest,
+  type LabJob,
+  type LabRun,
+  looksLocalPath,
 } from "@penumbra/shared";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { isFsAvailable, readHead } from "../../fs/fsClient";
@@ -13,8 +15,9 @@ import {
   type DatasetSchema,
 } from "./datasetPreview";
 import { scanModels } from "./modelLibrary";
+import { Section, type SectionState, useSections } from "./Section";
 import { type FileLibrary, useFileLibrary } from "./useFileLibrary";
-import { useLab } from "./useLab";
+import { type ExportRequestInput, useLab } from "./useLab";
 
 /** Studio's `format_type` options, offered in the finetune form. */
 type FormatType = FinetuneRequest["format"];
@@ -31,17 +34,6 @@ const FORMAT_OPTIONS: FormatType[] = [
 // The head we read to preview a dataset — enough for the schema and a few
 // records, small enough to stay instant on a multi-GB file.
 const PREVIEW_BYTES = 64 * 1024;
-
-/** A value that names a file on this device — an absolute path or `~` — versus a
- *  HuggingFace id (`org/name`), which needs no transfer. Only local picks are
- *  uploaded to the host before a run.
- *
- *  The leading `\\` case covers Windows UNC (`\\server\share`) and verbatim
- *  (`\\?\F:\...`) paths. Missing those is not cosmetic: the path then skips the
- *  upload and is sent to Studio as-is, which rejects it — the file lives on this
- *  device, not the training host. */
-export const looksLocalPath = (v: string): boolean =>
-  /^(~|\/|\\\\|[A-Za-z]:[\\/])/.test(v);
 
 // The Model Lab: fine-tune a model, export it, and benchmark it. Card chrome
 // belongs to the workspace ModuleFrame, so this renders only inner content.
@@ -70,6 +62,41 @@ export function toDatasetSource(value: string): DatasetSource {
     : { kind: "hf", id: trimmed };
 }
 
+/**
+ * A timestamp as an age — "just now", "12 min ago", "3 days ago" — falling back
+ * to a date past a week. Which run is the latest is the question the list is
+ * scanned for, and an age answers it without reading two clocks.
+ */
+export function formatWhen(iso: string, now: number = Date.now()): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const plural = (n: number, unit: string) =>
+    `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+
+  const secs = Math.round((now - then) / 1000);
+  if (secs < 45) return "just now";
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return plural(mins, "min");
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return plural(hours, "hr");
+  const days = Math.round(hours / 24);
+  if (days <= 7) return plural(days, "day");
+  return new Date(then).toLocaleDateString();
+}
+
+/** The age of a timestamp, with the exact time a hover away. */
+function When({ at, className }: { at: string; className: string }) {
+  return (
+    <time
+      className={className}
+      dateTime={at}
+      title={new Date(at).toLocaleString()}
+    >
+      {formatWhen(at)}
+    </time>
+  );
+}
+
 function JobLine({ job }: { job: LabJob }) {
   const pct = job.progress === null ? null : Math.round(job.progress * 100);
   return (
@@ -77,6 +104,7 @@ function JobLine({ job }: { job: LabJob }) {
       <span className="lab__job-kind">{job.kind}</span>
       <span className="lab__job-state">{job.state}</span>
       {pct !== null && <span className="lab__job-pct">{pct}%</span>}
+      <When at={job.updatedAt} className="lab__job-when" />
       <span className="lab__job-detail">{job.error ?? job.detail ?? ""}</span>
     </li>
   );
@@ -130,7 +158,6 @@ function formatSize(bytes: number | null): string {
  * the field is what trains end to end.
  */
 function LibraryPanel<T>({
-  title,
   library,
   selected,
   onSelect,
@@ -139,7 +166,6 @@ function LibraryPanel<T>({
   unavailableHint,
   renderItem,
 }: {
-  title: string;
   library: FileLibrary<T>;
   selected: string;
   onSelect: (path: string) => void;
@@ -155,27 +181,25 @@ function LibraryPanel<T>({
 
   return (
     <div className="lab__library">
-      <div className="lab__library-head">
-        <span className="lab__library-title">{title}</span>
-        <div className="lab__library-actions">
-          <button type="button" onClick={() => void library.pick()}>
-            {library.dir ? "Change folder" : "Choose folder"}
-          </button>
-          {library.dir && (
-            <>
-              <button
-                type="button"
-                onClick={() => void library.rescan()}
-                disabled={library.scanning}
-              >
-                {library.scanning ? "Scanning…" : "Rescan"}
-              </button>
-              <button type="button" onClick={library.clear}>
-                Clear
-              </button>
-            </>
-          )}
-        </div>
+      {/* The section header holds the title; these act on the folder it names. */}
+      <div className="lab__library-actions">
+        <button type="button" onClick={() => void library.pick()}>
+          {library.dir ? "Change folder" : "Choose folder"}
+        </button>
+        {library.dir && (
+          <>
+            <button
+              type="button"
+              onClick={() => void library.rescan()}
+              disabled={library.scanning}
+            >
+              {library.scanning ? "Scanning…" : "Rescan"}
+            </button>
+            <button type="button" onClick={library.clear}>
+              Clear
+            </button>
+          </>
+        )}
       </div>
 
       {library.dir && <p className="lab__library-path">{library.dir}</p>}
@@ -206,6 +230,142 @@ function LibraryPanel<T>({
       )}
     </div>
   );
+}
+
+/** GGUF quantizations worth offering. Q4_K_M is the usual default: a ~4x
+ *  smaller file that most people can actually run. */
+const QUANTIZATIONS = ["Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0", "BF16"];
+
+/**
+ * Settings for one export. Beyond the quantization, this is where a run gets
+ * published to the HuggingFace Hub — which for a Colab run is not a nicety:
+ * Studio writes the artifact to the trainer's own disk and serves nothing for
+ * download, so a push is the only way it outlives the session.
+ *
+ * The token is held here only while the form is open and is sent with the one
+ * request. It is never stored, echoed back, or written to the job record.
+ */
+function ExportForm({
+  run,
+  busy,
+  onSubmit,
+  onCancel,
+}: {
+  run: LabRun;
+  busy: boolean;
+  onSubmit: (req: ExportRequestInput) => void;
+  onCancel: () => void;
+}) {
+  const [quantization, setQuantization] = useState(QUANTIZATIONS[0]);
+  // Pre-armed for a Colab run, where not pushing means losing the artifact.
+  const [toHub, setToHub] = useState(run.provider === "colab");
+  const [repoId, setRepoId] = useState("");
+  const [hfToken, setHfToken] = useState("");
+  const [isPrivate, setPrivate] = useState(true);
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    onSubmit({
+      runId: run.id,
+      quantization,
+      ...(toHub
+        ? {
+            repoId: repoId.trim(),
+            private: isPrivate,
+            ...(hfToken ? { hfToken } : {}),
+          }
+        : {}),
+    });
+  }
+
+  return (
+    <form className="lab__export" onSubmit={submit}>
+      <label className="lab__field">
+        Quantization
+        <select
+          value={quantization}
+          onChange={(e) => setQuantization(e.target.value)}
+        >
+          {QUANTIZATIONS.map((q) => (
+            <option key={q} value={q}>
+              {q}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="lab__check">
+        <input
+          type="checkbox"
+          checked={toHub}
+          onChange={(e) => setToHub(e.target.checked)}
+        />
+        Push to the HuggingFace Hub
+      </label>
+
+      {/* Where the bytes go. Studio writes to its own disk and serves nothing
+          for download, and that disk is only this machine when the run says
+          local — a detail worth stating before a five-minute quantization. */}
+      <p className="lab__library-note">
+        Writes to <code>{run.outputDir}/gguf</code> on the {run.provider}{" "}
+        trainer.{" "}
+        {toHub
+          ? "The Hub push is what brings it anywhere else."
+          : "Nothing is downloaded to this device."}
+      </p>
+
+      {run.provider === "colab" && !toHub && (
+        <p className="lab__library-error">
+          ⚠️ This run trained on Colab. Without a push, the export stays on that
+          machine and is lost when the session ends.
+        </p>
+      )}
+
+      {toHub && (
+        <>
+          <input
+            aria-label="Hub repository"
+            placeholder="Repository — username/model-name"
+            value={repoId}
+            onChange={(e) => setRepoId(e.target.value)}
+          />
+          <input
+            aria-label="HuggingFace token"
+            type="password"
+            placeholder="Write token (needed unless the trainer already has one)"
+            value={hfToken}
+            onChange={(e) => setHfToken(e.target.value)}
+          />
+          <label className="lab__check">
+            <input
+              type="checkbox"
+              checked={isPrivate}
+              onChange={(e) => setPrivate(e.target.checked)}
+            />
+            Private repository
+          </label>
+        </>
+      )}
+
+      <div className="lab__export-actions">
+        <button type="submit" disabled={busy || (toHub && !repoId.trim())}>
+          {busy ? "A job is running…" : "Start export"}
+        </button>
+        <button type="button" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** What a collapsed library section still says: how much the chosen folder
+ *  holds, or that there is nothing to open yet. */
+function libraryMeta<T>(library: FileLibrary<T>): string {
+  if (!library.available) return "desktop only";
+  if (!library.dir) return "no folder";
+  if (library.scanning) return "scanning…";
+  return `${library.items.length} found`;
 }
 
 /** Shorten a value for a preview cell. */
@@ -288,9 +448,11 @@ function RecordView({
 function DatasetPreviewPanel({
   dataset,
   onDetectFormat,
+  sections,
 }: {
   dataset: string;
   onDetectFormat: (format: FormatType) => void;
+  sections: SectionState;
 }) {
   const [preview, setPreview] = useState<DatasetPreview | null>(null);
   const [loading, setLoading] = useState(false);
@@ -333,47 +495,54 @@ function DatasetPreviewPanel({
   if (!isFsAvailable || !format) return null;
 
   return (
-    <div className="lab__preview">
-      {loading && <p className="lab__library-note">Reading dataset…</p>}
-      {error && <p className="lab__library-error">⚠️ {error}</p>}
-      {preview && (
-        <>
-          <div className="lab__preview-head">
-            <span className="lab__lib-badge lab__lib-badge--hf">
-              {preview.schema}
-            </span>
-            <span className="lab__preview-meta">
-              format: {preview.formatType} ·{" "}
-              {preview.exact
-                ? `${preview.count} records`
-                : `${preview.count}+ records (sampled)`}
-            </span>
-          </div>
-          {preview.issues.length > 0 && (
-            <ul className="lab__preview-issues">
-              {preview.issues.map((issue) => (
-                <li
-                  key={issue.message}
-                  className={`lab__preview-issue lab__preview-issue--${issue.level}`}
+    <Section
+      id="dataset-preview"
+      title="Dataset preview"
+      meta={loading ? "reading…" : preview ? preview.schema : null}
+      state={sections}
+    >
+      <div className="lab__preview">
+        {loading && <p className="lab__library-note">Reading dataset…</p>}
+        {error && <p className="lab__library-error">⚠️ {error}</p>}
+        {preview && (
+          <>
+            <div className="lab__preview-head">
+              <span className="lab__lib-badge lab__lib-badge--hf">
+                {preview.schema}
+              </span>
+              <span className="lab__preview-meta">
+                format: {preview.formatType} ·{" "}
+                {preview.exact
+                  ? `${preview.count} records`
+                  : `${preview.count}+ records (sampled)`}
+              </span>
+            </div>
+            {preview.issues.length > 0 && (
+              <ul className="lab__preview-issues">
+                {preview.issues.map((issue) => (
+                  <li
+                    key={issue.message}
+                    className={`lab__preview-issue lab__preview-issue--${issue.level}`}
+                  >
+                    {issue.level === "error" ? "⛔" : "⚠️"} {issue.message}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="lab__preview-records">
+              {preview.records.slice(0, 3).map((record) => (
+                <div
+                  className="lab__preview-record"
+                  key={previewText(record).slice(0, 48)}
                 >
-                  {issue.level === "error" ? "⛔" : "⚠️"} {issue.message}
-                </li>
+                  <RecordView record={record} schema={preview.schema} />
+                </div>
               ))}
-            </ul>
-          )}
-          <div className="lab__preview-records">
-            {preview.records.slice(0, 3).map((record) => (
-              <div
-                className="lab__preview-record"
-                key={previewText(record).slice(0, 48)}
-              >
-                <RecordView record={record} schema={preview.schema} />
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
+            </div>
+          </>
+        )}
+      </div>
+    </Section>
   );
 }
 
@@ -384,6 +553,7 @@ export function LabModule() {
     "penumbra.lab.datasetDir",
     scanDatasets,
   );
+  const sections = useSections();
   const [tab, setTab] = useState<Tab>("finetune");
   const [baseModel, setBaseModel] = useState("");
   const [dataset, setDataset] = useState("");
@@ -396,10 +566,16 @@ export function LabModule() {
   const [samples, setSamples] = useState(20);
   const [colabURL, setColabURL] = useState("");
   const [colabKey, setColabKey] = useState("");
+  // Local Studio address/bearer. Both start blank: the key is never echoed back,
+  // and a blank URL means "leave it where it is".
+  const [localURL, setLocalURL] = useState("");
+  const [localKey, setLocalKey] = useState("");
   const [providerOpen, setProviderOpen] = useState(false);
   // Transfer state for the pre-run upload of a local model/dataset to the host.
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
+  /** Run id whose export form is open, if any. */
+  const [exporting, setExporting] = useState<string | null>(null);
 
   // Escape closes the compute popover, matching the backdrop click.
   useEffect(() => {
@@ -426,11 +602,30 @@ export function LabModule() {
         ? "colab"
         : null;
 
+  // Colab trains on a machine that has never seen this filesystem. It fetches a
+  // model name from HuggingFace, so a path reaches it as a malformed repo id —
+  // and uploading gigabytes to *this* host first wouldn't help, since the model
+  // still has to exist over there. Caught before the run rather than after.
+  const remoteNeedsHfModel =
+    trainTarget === "colab" && looksLocalPath(baseModel.trim());
+
   function onSaveColab(event: FormEvent) {
     event.preventDefault();
     void lab.setColab(colabURL.trim(), colabKey);
     // Don't keep the bearer in component state once it's been handed off.
     setColabKey("");
+  }
+
+  function onSaveLocal(event: FormEvent) {
+    event.preventDefault();
+    const url = localURL.trim();
+    // Send only what was filled in: an untouched field keeps the running value
+    // rather than blanking it.
+    void lab.setLocalStudio({
+      ...(url ? { baseURL: url } : {}),
+      ...(localKey ? { apiKey: localKey } : {}),
+    });
+    setLocalKey("");
   }
 
   // Report upload progress as a percentage when the total is known, else as the
@@ -446,6 +641,8 @@ export function LabModule() {
     event.preventDefault();
     let modelRef = baseModel.trim();
     let datasetRef = dataset.trim();
+
+    if (remoteNeedsHfModel) return;
 
     // A local pick names a file only this device can read; send it to the host
     // first and train from the path it returns. HF ids pass through untouched.
@@ -538,11 +735,59 @@ export function LabModule() {
               </div>
               {lab.status?.studio === "unauthorized" && (
                 <p className="lab__provider-note lab__provider-note--warn">
-                  Studio is running but rejected the server's key. Set
-                  UNSLOTH_API_KEY on the server (apps/server/.env) and restart
-                  it.
+                  Studio is running but rejected the server's key. Studio mints
+                  it on install and on every rotation — paste the current one
+                  below.
                 </p>
               )}
+
+              {/* The local Studio's address and bearer. Saved on the server and
+                  used immediately, so a rotated key no longer means editing
+                  .env and restarting. The key is never read back, so this field
+                  is blank on load whether or not one is set. */}
+              <form className="lab__form" onSubmit={onSaveLocal}>
+                <input
+                  aria-label="Studio URL"
+                  placeholder={
+                    lab.status?.local.baseURL ?? "http://127.0.0.1:8888"
+                  }
+                  value={localURL}
+                  onChange={(e) => setLocalURL(e.target.value)}
+                />
+                <input
+                  aria-label="Studio API key"
+                  type="password"
+                  placeholder={
+                    lab.status?.local.hasKey
+                      ? "Key set — type a new one to replace it"
+                      : "No key set (Studio → Settings → API)"
+                  }
+                  value={localKey}
+                  onChange={(e) => setLocalKey(e.target.value)}
+                />
+                <div className="lab__provider-actions">
+                  <button
+                    type="submit"
+                    disabled={!localURL.trim() && !localKey}
+                  >
+                    Save
+                  </button>
+                  {lab.status?.local.source === "settings" && (
+                    <button
+                      type="button"
+                      onClick={() => void lab.clearLocalStudio()}
+                    >
+                      Revert to .env
+                    </button>
+                  )}
+                </div>
+                <p className="lab__provider-note">
+                  {lab.status?.local.baseURL} —{" "}
+                  {lab.status?.local.source === "settings"
+                    ? "set here"
+                    : "from the server environment"}
+                </p>
+              </form>
 
               {/* Colab fallback. The key is sent to the server and never read
                   back, so this field is always blank on load — re-enter it to
@@ -600,105 +845,131 @@ export function LabModule() {
 
       {tab === "finetune" && (
         <div className="lab__finetune">
-          <LibraryPanel
+          <Section
+            id="model-library"
             title="Model library"
-            library={modelLibrary}
-            selected={baseModel}
-            onSelect={setBaseModel}
-            itemKey={(m) => m.path}
-            unavailableHint="Open the desktop app to browse models on this device — the web preview can't read your filesystem."
-            emptyHint="No models here. Pick a folder holding .gguf files or HuggingFace model directories (a folder with a config.json)."
-            renderItem={(m) => (
-              <>
-                <span className={`lab__lib-badge lab__lib-badge--${m.kind}`}>
-                  {m.kind}
-                </span>
-                <span className="lab__lib-name">{m.name}</span>
-                {m.size !== null && (
-                  <span className="lab__lib-size">{formatSize(m.size)}</span>
-                )}
-              </>
-            )}
-          />
-          <LibraryPanel
+            meta={libraryMeta(modelLibrary)}
+            state={sections}
+          >
+            <LibraryPanel
+              library={modelLibrary}
+              selected={baseModel}
+              onSelect={setBaseModel}
+              itemKey={(m) => m.path}
+              unavailableHint="Open the desktop app to browse models on this device — the web preview can't read your filesystem."
+              emptyHint="No models here. Pick a folder holding .gguf files or HuggingFace model directories (a folder with a config.json)."
+              renderItem={(m) => (
+                <>
+                  <span className={`lab__lib-badge lab__lib-badge--${m.kind}`}>
+                    {m.kind}
+                  </span>
+                  <span className="lab__lib-name">{m.name}</span>
+                  {m.size !== null && (
+                    <span className="lab__lib-size">{formatSize(m.size)}</span>
+                  )}
+                </>
+              )}
+            />
+          </Section>
+          <Section
+            id="dataset-library"
             title="Dataset library"
-            library={datasetLibrary}
-            selected={dataset}
-            onSelect={setDataset}
-            itemKey={(d) => d.path}
-            unavailableHint="Open the desktop app to browse datasets on this device — the web preview can't read your filesystem."
-            emptyHint="No datasets here. Pick a folder holding .jsonl, .json, .csv, or .parquet files."
-            renderItem={(d) => (
-              <>
-                <span className="lab__lib-badge">{d.format}</span>
-                <span className="lab__lib-name">{d.name}</span>
-                {d.size !== null && (
-                  <span className="lab__lib-size">{formatSize(d.size)}</span>
-                )}
-              </>
-            )}
+            meta={libraryMeta(datasetLibrary)}
+            state={sections}
+          >
+            <LibraryPanel
+              library={datasetLibrary}
+              selected={dataset}
+              onSelect={setDataset}
+              itemKey={(d) => d.path}
+              unavailableHint="Open the desktop app to browse datasets on this device — the web preview can't read your filesystem."
+              emptyHint="No datasets here. Pick a folder holding .jsonl, .json, .csv, or .parquet files."
+              renderItem={(d) => (
+                <>
+                  <span className="lab__lib-badge">{d.format}</span>
+                  <span className="lab__lib-name">{d.name}</span>
+                  {d.size !== null && (
+                    <span className="lab__lib-size">{formatSize(d.size)}</span>
+                  )}
+                </>
+              )}
+            />
+          </Section>
+          <DatasetPreviewPanel
+            dataset={dataset}
+            onDetectFormat={setFormat}
+            sections={sections}
           />
-          <DatasetPreviewPanel dataset={dataset} onDetectFormat={setFormat} />
-          <form className="lab__form" onSubmit={onFinetune}>
-            <input
-              aria-label="Base model"
-              placeholder="Base model — pick from the library, or a HuggingFace id"
-              value={baseModel}
-              onChange={(e) => setBaseModel(e.target.value)}
-            />
-            <input
-              aria-label="Dataset"
-              placeholder="Dataset — HF id, or ./path for a local file"
-              value={dataset}
-              onChange={(e) => setDataset(e.target.value)}
-            />
-            <label className="lab__field">
-              Format
-              <select
-                value={format}
-                onChange={(e) => setFormat(e.target.value as FormatType)}
-              >
-                {FORMAT_OPTIONS.map((f) => (
-                  <option key={f} value={f}>
-                    {f}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="lab__field">
-              Max steps
+          <Section id="finetune-form" title="Fine-tune" state={sections}>
+            <form className="lab__form" onSubmit={onFinetune}>
               <input
-                type="number"
-                min={1}
-                value={maxSteps}
-                onChange={(e) => setMaxSteps(Number(e.target.value))}
+                aria-label="Base model"
+                placeholder="Base model — pick from the library, or a HuggingFace id"
+                value={baseModel}
+                onChange={(e) => setBaseModel(e.target.value)}
               />
-            </label>
-            {uploadMsg && <p className="lab__library-note">{uploadMsg}</p>}
-            {/* Studio runs one training job at a time; asking for a second is a
+              {remoteNeedsHfModel && (
+                <p className="lab__library-error">
+                  ⚠️ Training would run on Colab, which can't read a file on this
+                  device. Give the base model as a HuggingFace id — the dataset
+                  still uploads.
+                </p>
+              )}
+              <input
+                aria-label="Dataset"
+                placeholder="Dataset — HF id, or ./path for a local file"
+                value={dataset}
+                onChange={(e) => setDataset(e.target.value)}
+              />
+              <label className="lab__field">
+                Format
+                <select
+                  value={format}
+                  onChange={(e) => setFormat(e.target.value as FormatType)}
+                >
+                  {FORMAT_OPTIONS.map((f) => (
+                    <option key={f} value={f}>
+                      {f}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="lab__field">
+                Max steps
+                <input
+                  type="number"
+                  min={1}
+                  value={maxSteps}
+                  onChange={(e) => setMaxSteps(Number(e.target.value))}
+                />
+              </label>
+              {uploadMsg && <p className="lab__library-note">{uploadMsg}</p>}
+              {/* Studio runs one training job at a time; asking for a second is a
                 guaranteed failure, so the button is disabled instead. It also
                 stays disabled when neither the local nor the Colab trainer is
                 reachable — the server would only reject it (no_trainer) — and
                 while a local model/dataset is being transferred to the host. */}
-            <button
-              type="submit"
-              disabled={
-                !baseModel.trim() ||
-                !dataset.trim() ||
-                lab.running ||
-                uploading ||
-                trainTarget === null
-              }
-            >
-              {uploading
-                ? "Uploading…"
-                : lab.running
-                  ? "A job is running…"
-                  : trainTarget === "colab"
-                    ? "Start fine-tune on Colab"
-                    : "Start fine-tune"}
-            </button>
-          </form>
+              <button
+                type="submit"
+                disabled={
+                  !baseModel.trim() ||
+                  !dataset.trim() ||
+                  lab.running ||
+                  uploading ||
+                  remoteNeedsHfModel ||
+                  trainTarget === null
+                }
+              >
+                {uploading
+                  ? "Uploading…"
+                  : lab.running
+                    ? "A job is running…"
+                    : trainTarget === "colab"
+                      ? "Start fine-tune on Colab"
+                      : "Start fine-tune"}
+              </button>
+            </form>
+          </Section>
         </div>
       )}
 
@@ -707,84 +978,158 @@ export function LabModule() {
           {lab.runs.length === 0 && (
             <li className="lab__empty">No runs yet.</li>
           )}
-          {lab.runs.map((run) => (
-            <li key={run.id} className="lab__run">
-              <span className="lab__run-model">{run.baseModel}</span>
-              <span className="lab__run-dataset">{run.dataset}</span>
-              {run.ggufPath ? (
-                <span className="lab__run-gguf">exported</span>
-              ) : (
-                <button
-                  type="button"
-                  disabled={!run.outputDir || lab.running}
-                  onClick={() => void lab.exportRun(run.id)}
-                >
-                  Export GGUF
-                </button>
-              )}
-            </li>
-          ))}
+          {lab.runs.map((run) => {
+            // The export job for this row, if one has ever run. Jobs come back
+            // newest first, so the first match is the current attempt.
+            const job = lab.jobs.find(
+              (j) => j.kind === "export" && j.runId === run.id,
+            );
+            const active = job?.state === "queued" || job?.state === "running";
+            return (
+              <li key={run.id}>
+                <div className="lab__run">
+                  {/* Newest first, so the top row is the latest run — the
+                      timestamp is what confirms it against a run started
+                      elsewhere. */}
+                  <When at={run.createdAt} className="lab__run-when" />
+                  <span className="lab__run-model">{run.baseModel}</span>
+                  {/* Where the checkpoint physically is. A Colab run's artifacts
+                      live on a machine that goes away, which decides whether the
+                      export needs a Hub push. */}
+                  <span
+                    className={`lab__run-where lab__run-where--${run.provider}`}
+                  >
+                    {run.provider}
+                  </span>
+                  <span className="lab__run-dataset">{run.dataset}</span>
+                  {run.ggufPath ? (
+                    <span
+                      className="lab__run-gguf"
+                      title={`${run.ggufPath} (on the ${run.provider} trainer)`}
+                    >
+                      {run.hubRepo ? `pushed → ${run.hubRepo}` : "exported"}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={!run.outputDir || lab.running}
+                      onClick={() =>
+                        setExporting(exporting === run.id ? null : run.id)
+                      }
+                    >
+                      {active ? "Exporting…" : "Export GGUF"}
+                    </button>
+                  )}
+                </div>
+
+                {/* An export takes minutes and writes to a machine that may not
+                    be this one. Without a line here the only sign anything
+                    happened was a row that didn't change. */}
+                {job && (active || job.state === "failed") && (
+                  <p
+                    className={
+                      job.state === "failed"
+                        ? "lab__run-status lab__run-status--failed"
+                        : "lab__run-status"
+                    }
+                  >
+                    {job.state === "failed" ? "⛔ " : "⏳ "}
+                    {job.error ?? job.detail ?? job.state}
+                  </p>
+                )}
+                {run.ggufPath && !run.hubRepo && (
+                  <p className="lab__run-status">
+                    Written to {run.ggufPath} on the {run.provider} trainer —
+                    not pushed anywhere.
+                  </p>
+                )}
+
+                {exporting === run.id && (
+                  <ExportForm
+                    run={run}
+                    busy={lab.running}
+                    onCancel={() => setExporting(null)}
+                    onSubmit={(req) => {
+                      setExporting(null);
+                      void lab.exportRun(req);
+                    }}
+                  />
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
 
       {tab === "benchmarks" && (
-        <>
-          <form className="lab__form" onSubmit={onBenchmark}>
-            <input
-              aria-label="Model to benchmark"
-              placeholder="Model id"
-              value={benchModel}
-              onChange={(e) => setBenchModel(e.target.value)}
-            />
-            <select
-              aria-label="Suite"
-              value={suite}
-              onChange={(e) => setSuite(e.target.value)}
-            >
-              {suites.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-            <label className="lab__field">
-              Samples per task
+        <div className="lab__benchmarks">
+          <Section id="benchmark-form" title="Run a benchmark" state={sections}>
+            <form className="lab__form" onSubmit={onBenchmark}>
               <input
-                type="number"
-                min={1}
-                value={samples}
-                onChange={(e) => setSamples(Number(e.target.value))}
+                aria-label="Model to benchmark"
+                placeholder="Model id"
+                value={benchModel}
+                onChange={(e) => setBenchModel(e.target.value)}
               />
-            </label>
-            <button
-              type="submit"
-              disabled={!benchModel.trim() || lab.running || lmEvalMissing}
-            >
-              {lmEvalMissing ? "lm-eval not installed" : "Run benchmark"}
-            </button>
-          </form>
+              <select
+                aria-label="Suite"
+                value={suite}
+                onChange={(e) => setSuite(e.target.value)}
+              >
+                {suites.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+              <label className="lab__field">
+                Samples per task
+                <input
+                  type="number"
+                  min={1}
+                  value={samples}
+                  onChange={(e) => setSamples(Number(e.target.value))}
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={!benchModel.trim() || lab.running || lmEvalMissing}
+              >
+                {lmEvalMissing ? "lm-eval not installed" : "Run benchmark"}
+              </button>
+            </form>
+          </Section>
 
-          <table className="lab__scores">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Model</th>
-                <th>Suite</th>
-                <th>Samples</th>
-                <th>Scores</th>
-              </tr>
-            </thead>
-            <tbody>
-              {lab.scores.map((r) => (
-                <ScoreRow key={`${r.at}-${r.suite}-${r.model}`} result={r} />
-              ))}
-            </tbody>
-          </table>
-        </>
+          <Section
+            id="scores"
+            title="Scores"
+            meta={`${lab.scores.length} recorded`}
+            state={sections}
+          >
+            <table className="lab__scores">
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Model</th>
+                  <th>Suite</th>
+                  <th>Samples</th>
+                  <th>Scores</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lab.scores.map((r) => (
+                  <ScoreRow key={`${r.at}-${r.suite}-${r.model}`} result={r} />
+                ))}
+              </tbody>
+            </table>
+          </Section>
+        </div>
       )}
 
+      {/* The job strip: just the latest, as a live line for the run in flight
+          and the last thing to have failed. The full history is the Runs tab. */}
       <ul className="lab__jobs">
-        {lab.jobs.slice(0, 5).map((job) => (
+        {lab.jobs.slice(0, 1).map((job) => (
           <JobLine key={job.id} job={job} />
         ))}
       </ul>

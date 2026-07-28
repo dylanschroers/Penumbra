@@ -6,16 +6,22 @@ import {
   findSuite,
   finetuneRequest,
   type LabJob,
+  looksLocalPath,
   SUITES,
+  studioCredentialsInput,
 } from "@penumbra/shared";
 import type { FastifyInstance } from "fastify";
 import { requireAuth } from "../http/auth";
 import { lmEvalAvailable, runBenchmark } from "./benchmark";
+import type { CredentialStore } from "./credentials";
 import type { LabStore } from "./jobs";
 import { StudioClient, type StudioRun, TrainingBusyError } from "./studio";
 import {
   computeNeed,
   dirFileSizes,
+  freeSpace,
+  isLocalFile,
+  isOutOfSpace,
   resolveDest,
   uploadRoot,
   writeChunk,
@@ -44,6 +50,10 @@ const EXPORT_TIMEOUT_MS = 60 * 60 * 1000;
 export interface LabRouteOptions {
   store: LabStore;
   studio?: StudioClient;
+  /** Runtime address + bearer for the local Studio. Given one, the client above
+   *  is rebuilt whenever they change, and `/lab/provider/local` can set them.
+   *  Omitted in tests, which inject a fake Studio directly. */
+  credentials?: CredentialStore;
   /** Where benchmarked models are served from — Studio, by default. */
   inferenceURL?: string;
   apiKey?: string;
@@ -57,7 +67,8 @@ export function registerLabRoutes(
   app: FastifyInstance,
   {
     store,
-    studio = new StudioClient(),
+    studio: initialStudio = new StudioClient(),
+    credentials,
     inferenceURL,
     apiKey = process.env.UNSLOTH_API_KEY,
     token = process.env.PENUMBRA_AGENT_TOKEN,
@@ -65,7 +76,13 @@ export function registerLabRoutes(
   }: LabRouteOptions,
 ): void {
   const preHandler = requireAuth(token);
-  const baseURL = inferenceURL ?? studio.baseURL;
+
+  // Rebuilt in place when the credentials change, so a rotated key takes effect
+  // on the next request instead of the next restart.
+  let studio = initialStudio;
+  credentials?.onChange((next) => {
+    studio = new StudioClient(next);
+  });
 
   // The optional Colab fallback: a second Studio, reached through a tunnel the
   // user configures at runtime. Held in memory only — the bearer never touches
@@ -133,11 +150,19 @@ export function registerLabRoutes(
       lmEvalAvailable(),
       colab ? colab.probe() : Promise.resolve("stopped" as const),
     ]);
+    const creds = credentials?.current();
     return {
       // Tri-state: "unauthorized" (up, bad/missing key) is not "stopped".
       studio: studioState,
       lmEval: lmEval ? "installed" : "missing",
       suites: SUITES,
+      // Enough to see what the local Studio is pointed at and whether a key is
+      // in play, without ever returning the key itself.
+      local: {
+        baseURL: studio.baseURL,
+        source: creds?.source ?? "env",
+        hasKey: creds ? creds.apiKey !== undefined : Boolean(apiKey),
+      },
       // The URL is not secret and helps the user confirm what they pointed at;
       // the bearer is never returned.
       colab: {
@@ -146,6 +171,32 @@ export function registerLabRoutes(
         studio: colabState,
       },
     };
+  });
+
+  // Point the local Studio somewhere else, or hand it a rotated key. Unlike the
+  // Colab fallback this *is* persisted: it replaces editing .env, and a setting
+  // that vanished on restart would replace it with something worse. The value
+  // is written, never read back.
+  app.post("/lab/provider/local", { preHandler }, async (req, reply) => {
+    if (!credentials) {
+      return reply.code(409).send({ error: "settings_unavailable" });
+    }
+    const parsed = studioCredentialsInput.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
+    if (parsed.data.baseURL === undefined && parsed.data.apiKey === undefined) {
+      return reply.code(400).send({ error: "bad_request" });
+    }
+    const next = credentials.set(parsed.data);
+    return { ok: true, baseURL: next.baseURL, source: next.source };
+  });
+
+  // Forget the stored pair and go back to whatever the environment says.
+  app.delete("/lab/provider/local", { preHandler }, async (_req, reply) => {
+    if (!credentials) {
+      return reply.code(409).send({ error: "settings_unavailable" });
+    }
+    const next = credentials.clear();
+    return { ok: true, baseURL: next.baseURL, source: next.source };
   });
 
   // Configure (or replace) the Colab fallback. The key arrives once here and is
@@ -180,6 +231,8 @@ export function registerLabRoutes(
       return reply.code(400).send({ error: "bad_request" });
     }
     const files: { rel: string; size: number }[] = [];
+    let plan: { path: string; need: string[] };
+    let bytes = 0;
     try {
       for (const f of body.files) {
         if (typeof f?.rel !== "string" || typeof f?.size !== "number") {
@@ -191,10 +244,24 @@ export function registerLabRoutes(
       }
       const modelDir = resolveDest(uploadRoot(), "models", body.name);
       const sizes = await dirFileSizes(modelDir);
-      return { path: modelDir, need: computeNeed(files, (rel) => sizes[rel]) };
+      const need = computeNeed(files, (rel) => sizes[rel]);
+      plan = { path: modelDir, need };
+      const needed = new Set(need);
+      bytes = files
+        .filter((f) => needed.has(f.rel))
+        .reduce((sum, f) => sum + f.size, 0);
     } catch {
       return reply.code(400).send({ error: "bad_path" });
     }
+    // Say up front that a multi-GB model won't fit, rather than filling the disk
+    // and failing mid-transfer on a chunk write.
+    const free = await freeSpace(uploadRoot());
+    if (bytes > free) {
+      return reply
+        .code(507)
+        .send({ error: "insufficient_space", need: bytes, free });
+    }
+    return plan;
   });
 
   // One chunk of a file. Query: kind (datasets|models), rel, offset. Body: the
@@ -213,7 +280,16 @@ export function registerLabRoutes(
       } catch {
         return reply.code(400).send({ error: "bad_path" });
       }
-      await writeChunk(dest, Number(offset) || 0, req.body);
+      try {
+        await writeChunk(dest, Number(offset) || 0, req.body);
+      } catch (err) {
+        // A full disk is the client's problem to report, not a server fault:
+        // name it instead of letting a bare 500 reach the upload UI.
+        if (isOutOfSpace(err)) {
+          return reply.code(507).send({ error: "insufficient_space" });
+        }
+        throw err;
+      }
       return { path: dest };
     },
   );
@@ -288,6 +364,20 @@ export function registerLabRoutes(
     }
     const trainer = pick.client;
 
+    // A model path means something only on the machine holding the file. Colab
+    // is a different machine: it reads an unrecognized model name as a
+    // HuggingFace repo id and rejects a path as an invalid one ("Repo id must
+    // use alphanumeric chars…"). Datasets don't have this problem — those are
+    // pushed to the trainer before the run — but there is no upload endpoint
+    // for a model, so say plainly what's needed instead.
+    if (pick.via === "colab" && looksLocalPath(input.baseModel)) {
+      return reply.code(409).send({
+        error: "remote_model_path",
+        message:
+          "the Colab trainer runs on another machine and cannot read a path from this one — give the base model as a HuggingFace id",
+      });
+    }
+
     const job = store.createJob("finetune");
     const run = store.createRun({
       jobId: job.id,
@@ -296,10 +386,28 @@ export function registerLabRoutes(
         input.dataset.kind === "hf" ? input.dataset.id : input.dataset.path,
       outputDir: null,
       ggufPath: null,
+      hubRepo: null,
+      // Whose disk the checkpoint will land on. Export has to come back to the
+      // same trainer, and by then "auto" may resolve elsewhere.
+      provider: pick.via,
     });
 
     runJob(job, async (report) => {
       report({ detail: `training via ${pick.via}` });
+
+      // Studio only opens a dataset that lives under one of its own dataset
+      // roots, and our upload root is elsewhere by design (a drive with room,
+      // sometimes another machine). So a dataset file this host holds is handed
+      // to Studio first, and the path Studio hands back is what trains. A value
+      // this host can't stat is not ours to send — it's an HF id or a name only
+      // Studio can resolve, and passes through untouched.
+      let datasetPath =
+        input.dataset.kind === "local" ? input.dataset.path : null;
+      if (datasetPath && (await isLocalFile(datasetPath))) {
+        report({ detail: "sending the dataset to Studio" });
+        datasetPath = await trainer.uploadDataset(datasetPath);
+      }
+
       // Snapshot the runs that already exist, so the output dir recorded below
       // is provably the one this training produced.
       const existingRuns = new Set((await trainer.listRuns()).map(runKey));
@@ -317,7 +425,7 @@ export function registerLabRoutes(
           load_in_4bit: true,
           ...(input.dataset.kind === "hf"
             ? { hf_dataset: input.dataset.id }
-            : { local_datasets: [input.dataset.path] }),
+            : { local_datasets: [datasetPath ?? input.dataset.path] }),
         });
       } catch (err) {
         if (err instanceof TrainingBusyError) {
@@ -359,6 +467,26 @@ export function registerLabRoutes(
       // outputDir and export refuses it, which is the safe failure.
       const after = await trainer.listRuns();
       const ours = after.find((r) => !existingRuns.has(runKey(r)));
+
+      // The stream is not the verdict. Studio emits `complete` whenever
+      // training stops being active — a CUDA failure 20 seconds in ends the
+      // stream exactly like a finished run does — so the outcome has to come
+      // from the run record. Without this a crashed run reads as "done" with
+      // no model behind it.
+      //
+      // Only an explicit failure fails the job: a status this client doesn't
+      // know must not turn a good run into a bad one.
+      const failed =
+        ours?.status === "error" ||
+        ours?.status === "stopped" ||
+        Boolean(ours?.error_message);
+      if (failed) {
+        throw new Error(
+          ours?.error_message?.trim() ||
+            `studio reported the run ${ours?.status ?? "unfinished"}`,
+        );
+      }
+
       if (ours?.output_dir) {
         store.setRunArtifacts(run.id, { outputDir: ours.output_dir });
       }
@@ -379,49 +507,98 @@ export function registerLabRoutes(
         .send({ error: "no_checkpoint", message: "run has no output dir yet" });
     }
 
-    // Export targets the local Studio: it needs the checkpoint on the same host,
-    // and a Colab tunnel is ephemeral — by export time the notebook that trained
-    // the run is usually gone. A run trained on Colab therefore exports only
-    // while that session is alive and pointed at as the local Studio; otherwise
-    // loadCheckpoint fails on a path this host cannot see, which is the safe,
-    // visible failure rather than a silently wrong artifact.
-    const job = store.createJob("export");
+    // `outputDir` is a path on the machine that trained the run, so the export
+    // has to go back to that same trainer — handing a Colab checkpoint path to
+    // the local Studio just fails on a path it cannot see. A Colab session is
+    // ephemeral, so it may well be gone; say that plainly here rather than
+    // failing deep inside a job with a network error.
+    const exporter = run.provider === "colab" ? colab : studio;
+    if (!exporter) {
+      return reply.code(409).send({
+        error: "trainer_gone",
+        message:
+          "this run trained on Colab and no Colab endpoint is configured — its checkpoint only exists on that machine",
+      });
+    }
+    if (!(await exporter.reachable())) {
+      return reply.code(409).send({
+        error: "trainer_unreachable",
+        message:
+          run.provider === "colab"
+            ? "the Colab session that trained this run is not answering — a checkpoint on a recycled runtime cannot be exported"
+            : "the local Studio is not answering",
+      });
+    }
+
+    // Attributed to the run, so the Runs tab can show this job's progress on
+    // the row the button belongs to instead of only in the global list.
+    const job = store.createJob("export", run.id);
     runJob(job, async (report) => {
-      report({ detail: "loading checkpoint" });
-      await studio.loadCheckpoint(run.outputDir as string);
       const saveDir = `${run.outputDir}/gguf`;
+      // Every line says where the artifact is going. The trainer's disk is not
+      // this machine, which is the single most surprising thing about export.
+      const where = `${saveDir} on ${run.provider}`;
+      report({ detail: `loading checkpoint — ${where}` });
+      await exporter.loadCheckpoint(run.outputDir as string);
 
       // Baseline the op counter immediately before the export, so the check
       // below tracks *this* operation rather than the load-checkpoint that
       // precedes it. Studio reports the outcome of the last op, so without a
       // baseline an earlier success reads as ours and the job finishes
       // instantly against a stale artifact.
-      const baseline = (await studio.exportStatus()).last_op_seq ?? 0;
+      const baseline = (await exporter.exportStatus()).last_op_seq ?? 0;
 
-      report({ detail: "exporting gguf" });
+      // A push to the Hub is the only way an artifact leaves an ephemeral
+      // trainer: Studio writes exports to its own disk and serves none of them
+      // for download, so a Colab VM keeps them until the runtime recycles.
+      const hub = parsed.data.repoId
+        ? {
+            repoId: parsed.data.repoId,
+            hfToken: parsed.data.hfToken,
+            private: parsed.data.private,
+          }
+        : undefined;
+      // The destination is part of every line from here on: an export that
+      // wrote to a machine you can't reach, with no push, is the failure mode
+      // worth seeing while it happens rather than afterwards.
+      const target = hub
+        ? `${parsed.data.quantization} → ${where}, pushing to ${hub.repoId}`
+        : `${parsed.data.quantization} → ${where}, no hub push`;
+      report({ detail: `exporting ${target}` });
       try {
-        await studio.exportGguf(saveDir, parsed.data.quantization);
+        await exporter.exportGguf(saveDir, parsed.data.quantization, hub);
       } catch (err) {
         // Quantization routinely outlives the HTTP request that starts it — a
         // Cloudflare tunnel cuts the connection at ~100s with a 524 — while the
         // work carries on inside Studio. Losing the kickoff response is not the
         // same as the export failing, so consult the status endpoint (the
         // actual source of truth) and only give up if nothing started.
-        const s = await studio.exportStatus();
+        const s = await exporter.exportStatus();
         const started = s.is_export_active || (s.last_op_seq ?? 0) > baseline;
         if (!started) throw err;
-        report({ detail: "exporting gguf (kickoff response lost, polling)" });
+        report({ detail: `exporting ${target} (still running, polling)` });
       }
 
       // Export runs asynchronously inside Studio, and there is no `status`
       // field to poll: settled means "not active, and the op counter moved".
-      const deadline = Date.now() + EXPORT_TIMEOUT_MS;
+      const started = Date.now();
+      const deadline = started + EXPORT_TIMEOUT_MS;
       for (;;) {
-        const s = await studio.exportStatus();
+        const s = await exporter.exportStatus();
         if (!s.is_export_active && (s.last_op_seq ?? 0) > baseline) {
           if (s.last_op_status === "success") {
+            const path = s.last_op_output_path ?? saveDir;
+            // Recorded, not just reported: for a trainer whose disk is
+            // temporary, the repo is the only lasting answer to "where did the
+            // weights go", and a job detail line is not a record.
             store.setRunArtifacts(run.id, {
-              ggufPath: s.last_op_output_path ?? saveDir,
+              ggufPath: path,
+              hubRepo: hub?.repoId ?? null,
+            });
+            report({
+              detail: hub
+                ? `done — ${path} on ${run.provider}, pushed to ${hub.repoId}`
+                : `done — ${path} on ${run.provider} (not pushed anywhere)`,
             });
             return;
           }
@@ -431,6 +608,13 @@ export function registerLabRoutes(
         }
         // Bounded: a counter that never moves must not poll forever.
         if (Date.now() > deadline) throw new Error("export timed out");
+        // Quantization is minutes of silence otherwise; an elapsed clock is the
+        // difference between "working" and "hung" from the outside.
+        const mins = Math.floor((Date.now() - started) / 60_000);
+        const secs = Math.floor(((Date.now() - started) % 60_000) / 1000);
+        report({
+          detail: `exporting ${target} — ${mins}m${String(secs).padStart(2, "0")}s elapsed`,
+        });
         await new Promise((r) => setTimeout(r, 1000));
       }
     });
@@ -457,8 +641,10 @@ export function registerLabRoutes(
         model: parsed.data.model,
         suite,
         samplesPerTask: parsed.data.samplesPerTask,
-        baseURL,
-        apiKey,
+        // Resolved per run, not at registration: the Studio being benchmarked
+        // is whichever one the current credentials point at.
+        baseURL: inferenceURL ?? studio.baseURL,
+        apiKey: credentials?.current().apiKey ?? apiKey,
         onProgress: (line) => report({ detail: line.slice(0, 200) }),
       });
       store.recordScores(result);

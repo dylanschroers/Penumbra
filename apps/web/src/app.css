@@ -900,9 +900,70 @@ body {
   color: var(--danger);
 }
 
+/* ---- Collapsible sections ----------------------------------------------- */
+
+.lab__section {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  /* A closed section is one header tall and must stay that way — without this
+     the flex column steals its height and the row collapses to nothing. */
+  flex-shrink: 0;
+  min-height: 0;
+}
+
+.lab__section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.45rem 0.5rem;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lab__section-head:hover .lab__section-title {
+  color: var(--primary);
+}
+
+.lab__section-caret {
+  color: var(--muted);
+  font-size: 0.7rem;
+  transition: transform 120ms ease;
+}
+
+/* The caret points down when open, right when closed. */
+.lab__section--closed .lab__section-caret {
+  transform: rotate(-90deg);
+}
+
+.lab__section-meta {
+  margin-left: auto;
+  font-weight: 400;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.lab__section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0 0.5rem 0.5rem;
+  min-height: 0;
+}
+
 /* ---- Model library (finetune tab) -------------------------------------- */
 
-.lab__finetune {
+.lab__finetune,
+.lab__benchmarks {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
@@ -913,26 +974,11 @@ body {
   overflow-y: auto;
 }
 
+/* Chrome (border, padding, title) belongs to the section wrapping this. */
 .lab__library {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  padding: 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-
-.lab__library-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.lab__library-title {
-  font-weight: 600;
-  font-size: 0.8rem;
 }
 
 .lab__library-actions {
@@ -1031,10 +1077,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  padding: 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
 }
 
 .lab__preview-head {
@@ -1157,6 +1199,69 @@ body {
 .lab__job-pct,
 .lab__run-dataset {
   color: var(--muted);
+}
+
+/* Which machine holds this run's checkpoint. Colab is called out because its
+   disk is temporary — that decides whether an export needs a Hub push. */
+.lab__run-where {
+  flex-shrink: 0;
+  padding: 0.05rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.lab__run-where--colab {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+/* What an export is doing, under the run it belongs to. */
+.lab__run-status {
+  margin: 0.15rem 0 0.3rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.lab__run-status--failed {
+  color: var(--danger);
+}
+
+/* The per-run export settings, opened under the row it belongs to. */
+.lab__export {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.3rem 0 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.lab__check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+}
+
+.lab__export-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
+/* When a run happened. Fixed width so the ages line up in a column and the
+   newest is findable by position, not by reading each row. */
+.lab__run-when,
+.lab__job-when {
+  flex-shrink: 0;
+  min-width: 5.5rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .lab__job--failed .lab__job-state {
