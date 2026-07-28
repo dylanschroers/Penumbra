@@ -65,6 +65,8 @@ describe("personal suite", () => {
 
     const result = await runBenchmark({
       model: "fake",
+      servedModel: "fake",
+      target: "local",
       suite: personalSuite,
       samplesPerTask: 8,
       baseURL,
@@ -91,6 +93,8 @@ describe("personal suite", () => {
 
     const result = await runBenchmark({
       model: "fake",
+      servedModel: "fake",
+      target: "local",
       suite: personalSuite,
       samplesPerTask: 2, // both create_task cases
       baseURL,
@@ -112,6 +116,8 @@ describe("personal suite", () => {
 
     await runBenchmark({
       model: "fake",
+      servedModel: "fake",
+      target: "local",
       suite: personalSuite,
       samplesPerTask: 3,
       baseURL,
@@ -134,6 +140,8 @@ describe("personal suite", () => {
     await expect(
       runBenchmark({
         model: "fake",
+        servedModel: "fake",
+        target: "local",
         suite: personalSuite,
         samplesPerTask: 1,
         baseURL,

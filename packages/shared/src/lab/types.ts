@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { targetId } from "../compute/types";
 
 // Wire contracts for the Model Lab (docs/MODEL_LAB.md): fine-tuning,
 // export, and benchmarking. Shared so the server and the UI cannot disagree
@@ -120,7 +121,22 @@ export const taskScore = z.object({
 export const benchmarkResult = z.object({
   suite: z.string(),
   suiteKind,
+  /** What the run *asked* for. Studio ignores the `model` field and serves
+   *  whatever it has loaded, so this is a label, not evidence. */
   model: z.string(),
+  /**
+   * What actually answered, read from the target's `/v1/models` at run time.
+   *
+   * This is the model the scores describe. When it differs from `model` the run
+   * measured something other than what was requested — which produces no error
+   * anywhere, so it has to be recorded to be noticed. Null on rows written
+   * before this was captured.
+   */
+  servedModel: z.string().nullable().default(null),
+  /** Which compute target served it. Two targets can hold different weights
+   *  under the same name, so a score without this cannot be compared to one
+   *  from the other machine. Rows written before this read as "local". */
+  target: targetId.default("local"),
   samplesPerTask: z.number().int(),
   at: z.string().datetime(),
   durationMs: z.number().int().nonnegative(),

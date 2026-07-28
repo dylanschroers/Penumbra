@@ -12,6 +12,8 @@ const result = (over: Partial<BenchmarkResult> = {}): BenchmarkResult => ({
   suite: "penumbra-tools-v1",
   suiteKind: "personal",
   model: "qwen",
+  servedModel: "qwen",
+  target: "local",
   samplesPerTask: 20,
   at: "2026-07-18T12:00:00.000Z",
   durationMs: 1000,
