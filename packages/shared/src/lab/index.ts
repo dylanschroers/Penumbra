@@ -1,3 +1,4 @@
+export { looksLocalPath } from "./paths";
 export { findSuite, SUITES, type SuiteDefinition } from "./suites";
 export {
   type BenchmarkRequest,
@@ -20,7 +21,9 @@ export {
   labJobKind,
   labJobState,
   labRun,
+  type StudioCredentialsInput,
   type SuiteKind,
+  studioCredentialsInput,
   suiteKind,
   type TaskScore,
   taskScore,

@@ -19,7 +19,9 @@ import type Database from "better-sqlite3";
 // describe *this* GPU host's work and mean nothing on another device.
 
 export interface LabStore {
-  createJob(kind: LabJobKind): LabJob;
+  /** `runId` attributes the job to an existing run (an export), so progress can
+   *  be shown on that row rather than only in the global job list. */
+  createJob(kind: LabJobKind, runId?: string): LabJob;
   getJob(id: string): LabJob | undefined;
   listJobs(limit?: number): LabJob[];
   updateJob(
@@ -32,7 +34,7 @@ export interface LabStore {
   createRun(input: Omit<LabRun, "id" | "createdAt">): LabRun;
   setRunArtifacts(
     id: string,
-    patch: Partial<Pick<LabRun, "outputDir" | "ggufPath">>,
+    patch: Partial<Pick<LabRun, "outputDir" | "ggufPath" | "hubRepo">>,
   ): LabRun | undefined;
   getRun(id: string): LabRun | undefined;
   listRuns(): LabRun[];
@@ -41,10 +43,28 @@ export interface LabStore {
   listScores(): BenchmarkResult[];
 }
 
-const JOB_COLUMNS = `id, kind, state, progress, detail, error,
+const JOB_COLUMNS = `id, kind, state, progress, detail, error, run_id AS runId,
   created_at AS createdAt, updated_at AS updatedAt`;
 const RUN_COLUMNS = `id, job_id AS jobId, base_model AS baseModel, dataset,
-  output_dir AS outputDir, gguf_path AS ggufPath, created_at AS createdAt`;
+  output_dir AS outputDir, gguf_path AS ggufPath, hub_repo AS hubRepo,
+  provider, created_at AS createdAt`;
+
+/** Add a column to an existing table, skipping it when already present.
+ *  `CREATE TABLE IF NOT EXISTS` above only builds a *new* database; a database
+ *  from before the column existed needs this. */
+function addColumn(
+  db: Database.Database,
+  table: string,
+  column: string,
+  ddl: string,
+): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as {
+    name: string;
+  }[];
+  if (!columns.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+  }
+}
 
 export function createLabStore(db: Database.Database): LabStore {
   db.exec(`
@@ -55,6 +75,7 @@ CREATE TABLE IF NOT EXISTS lab_jobs (
   progress real,
   detail text,
   error text,
+  run_id text,
   created_at text NOT NULL,
   updated_at text NOT NULL
 );
@@ -68,6 +89,8 @@ CREATE TABLE IF NOT EXISTS lab_runs (
   dataset text NOT NULL,
   output_dir text,
   gguf_path text,
+  hub_repo text,
+  provider text NOT NULL DEFAULT 'local',
   created_at text NOT NULL
 );
 -- One row per task metric. Both benchmark families land here; suite_kind is
@@ -87,9 +110,13 @@ CREATE TABLE IF NOT EXISTS lab_scores (
 CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
 `);
 
+  addColumn(db, "lab_runs", "provider", "text NOT NULL DEFAULT 'local'");
+  addColumn(db, "lab_runs", "hub_repo", "text");
+  addColumn(db, "lab_jobs", "run_id", "text");
+
   const insertJob = db.prepare(
-    `INSERT INTO lab_jobs (id, kind, state, progress, detail, error, created_at, updated_at)
-     VALUES (@id, @kind, @state, NULL, NULL, NULL, @now, @now)`,
+    `INSERT INTO lab_jobs (id, kind, state, progress, detail, error, run_id, created_at, updated_at)
+     VALUES (@id, @kind, @state, NULL, NULL, NULL, @runId, @now, @now)`,
   );
   const selectJob = db.prepare(
     `SELECT ${JOB_COLUMNS} FROM lab_jobs WHERE id = ?`,
@@ -111,8 +138,8 @@ CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
   );
 
   const insertRun = db.prepare(
-    `INSERT INTO lab_runs (id, job_id, base_model, dataset, output_dir, gguf_path, created_at)
-     VALUES (@id, @jobId, @baseModel, @dataset, @outputDir, @ggufPath, @createdAt)`,
+    `INSERT INTO lab_runs (id, job_id, base_model, dataset, output_dir, gguf_path, hub_repo, provider, created_at)
+     VALUES (@id, @jobId, @baseModel, @dataset, @outputDir, @ggufPath, @hubRepo, @provider, @createdAt)`,
   );
   const selectRun = db.prepare(
     `SELECT ${RUN_COLUMNS} FROM lab_runs WHERE id = ?`,
@@ -123,7 +150,8 @@ CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
   const patchRun = db.prepare(
     `UPDATE lab_runs SET
        output_dir = COALESCE(@outputDir, output_dir),
-       gguf_path = COALESCE(@ggufPath, gguf_path)
+       gguf_path = COALESCE(@ggufPath, gguf_path),
+       hub_repo = COALESCE(@hubRepo, hub_repo)
      WHERE id = @id`,
   );
 
@@ -138,12 +166,13 @@ CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
   );
 
   return {
-    createJob(kind) {
+    createJob(kind, runId) {
       const id = randomUUID();
       insertJob.run({
         id,
         kind,
         state: "queued",
+        runId: runId ?? null,
         now: new Date().toISOString(),
       });
       return selectJob.get(id) as LabJob;
@@ -182,6 +211,7 @@ CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
         id,
         outputDir: patch.outputDir ?? null,
         ggufPath: patch.ggufPath ?? null,
+        hubRepo: patch.hubRepo ?? null,
       });
       return selectRun.get(id) as LabRun | undefined;
     },

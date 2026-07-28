@@ -3,8 +3,11 @@
 // server, so the file has to go across first. Files stream in chunks pulled from
 // disk (fsClient.readChunk), so a multi-GB model never sits in the webview whole.
 //
-// Datasets are one file. Models are a directory: we list it, ask the server
-// which files it still needs (it may already hold a copy), and send only those.
+// Datasets are one file. A model is usually a directory: we list it, ask the
+// server which files it still needs (it may already hold a copy), and send only
+// those. A standalone `.gguf` is a single file and goes across on its own — the
+// folder around it may hold a dozen other quants of the same weights, and none
+// of them were asked for.
 
 import { listDir, readChunk } from "../../fs/fsClient";
 
@@ -29,6 +32,34 @@ function headers(token: string | undefined, extra?: Record<string, string>) {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...extra,
   };
+}
+
+/** Bytes as a rounded GB, for a message a person can act on. */
+function gb(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
+/**
+ * Turn a failed upload response into an error worth showing. The server names
+ * the conditions a user can do something about — a full disk above all — so
+ * those get a plain-language message rather than a status code.
+ */
+async function uploadError(res: Response, what: string): Promise<Error> {
+  const body = (await res.json().catch(() => null)) as {
+    error?: string;
+    need?: number;
+    free?: number;
+  } | null;
+  if (body?.error === "insufficient_space") {
+    const sizes =
+      typeof body.need === "number" && typeof body.free === "number"
+        ? ` (needs ${gb(body.need)}, ${gb(body.free)} free)`
+        : "";
+    return new Error(
+      `${what} failed — the server host is out of disk space${sizes}`,
+    );
+  }
+  return new Error(`${what} failed (server responded ${res.status})`);
 }
 
 /** Stream one local file to `<kind>/<rel>` on the host. Returns the host path.
@@ -57,11 +88,7 @@ async function uploadFile(
       }),
       body: chunk,
     });
-    if (!res.ok) {
-      throw new Error(
-        `upload of ${rel} failed (server responded ${res.status})`,
-      );
-    }
+    if (!res.ok) throw await uploadError(res, `upload of ${rel}`);
     path = ((await res.json()) as { path: string }).path;
 
     offset += chunk.byteLength;
@@ -116,17 +143,29 @@ async function collectFiles(dir: string): Promise<LocalFile[]> {
 }
 
 /**
- * Upload a model directory. Asks the server which files it still needs (a full
- * copy already there is skipped), sends only those, and returns the host path to
- * the model directory to use as the base model.
+ * Upload a model — a directory of weights, or a single `.gguf` file. For a
+ * directory, asks the server which files it still needs (a full copy already
+ * there is skipped) and sends only those. Returns the host path to use as the
+ * base model.
  */
 export async function uploadModel(
   target: UploadTarget,
-  localDir: string,
+  localPath: string,
   onProgress?: UploadProgress,
 ): Promise<string> {
-  const name = basename(localDir);
-  const files = await collectFiles(localDir);
+  const name = basename(localPath);
+
+  // One file, not a directory: listing it would fail, and its siblings are other
+  // quants the user didn't pick.
+  if (name.toLowerCase().endsWith(".gguf")) {
+    let sent = 0;
+    return uploadFile(target, "models", name, localPath, (n) => {
+      sent += n;
+      onProgress?.(sent, sent);
+    });
+  }
+
+  const files = await collectFiles(localPath);
 
   const planRes = await fetch(`${target.serverURL}/lab/models/plan`, {
     method: "POST",
@@ -136,9 +175,7 @@ export async function uploadModel(
       files: files.map((f) => ({ rel: f.rel, size: f.size })),
     }),
   });
-  if (!planRes.ok) {
-    throw new Error(`upload plan failed (server responded ${planRes.status})`);
-  }
+  if (!planRes.ok) throw await uploadError(planRes, `upload of ${name}`);
   const plan = (await planRes.json()) as { path: string; need: string[] };
 
   const needed = new Set(plan.need);

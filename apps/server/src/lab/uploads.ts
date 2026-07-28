@@ -1,4 +1,11 @@
-import { mkdir, open, readdir, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  readdir,
+  stat,
+  statfs,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
@@ -40,6 +47,44 @@ export function resolveDest(root: string, kind: string, rel: string): string {
     throw new Error("path escapes the upload root");
   }
   return dest;
+}
+
+/**
+ * Leave the volume this much room rather than filling it to the last byte — a
+ * disk at zero free breaks far more than an upload.
+ */
+export const SPACE_HEADROOM = 256 * 1024 * 1024;
+
+/**
+ * Free bytes on the volume holding `dir`, less the headroom. The upload root may
+ * not exist yet, so probe upwards to the first path that does. Returns Infinity
+ * when no ancestor can be measured: an unknown figure must not veto an upload
+ * that would have succeeded — the write itself still reports ENOSPC.
+ */
+export async function freeSpace(dir: string): Promise<number> {
+  let probe = resolve(dir);
+  for (;;) {
+    try {
+      const fs = await statfs(probe);
+      return Math.max(0, fs.bavail * fs.bsize - SPACE_HEADROOM);
+    } catch {
+      const parent = dirname(probe);
+      if (parent === probe) return Number.POSITIVE_INFINITY;
+      probe = parent;
+    }
+  }
+}
+
+/** True when `path` names a readable file on this host. Used to tell a path we
+ *  hold from a name only the trainer can resolve. */
+export async function isLocalFile(path: string): Promise<boolean> {
+  const s = await stat(path).catch(() => null);
+  return s?.isFile() ?? false;
+}
+
+/** True when `err` is a filesystem "disk is full". */
+export function isOutOfSpace(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | null)?.code === "ENOSPC";
 }
 
 /**
