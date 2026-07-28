@@ -364,6 +364,15 @@ function ExportForm({
             />
             Private repository
           </label>
+          {/* Studio's ExportGGUFRequest has no `private` field and its models
+              don't forbid extras, so the flag is accepted and dropped. Saying
+              so beats a checkbox that quietly does nothing; the adapter and
+              merged exports do honour it, so this note goes away with them. */}
+          <p className="lab__library-note">
+            Note: Studio's GGUF export ignores this — the repo takes your
+            HuggingFace default visibility. Create it as private on the Hub
+            first if that matters.
+          </p>
         </>
       )}
 
