@@ -2,7 +2,14 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { computeNeed, dirFileSizes, resolveDest, writeChunk } from "./uploads";
+import {
+  computeNeed,
+  dirFileSizes,
+  freeSpace,
+  isOutOfSpace,
+  resolveDest,
+  writeChunk,
+} from "./uploads";
 
 describe("resolveDest — path safety", () => {
   const root = "/srv/uploads";
@@ -81,5 +88,37 @@ describe("writeChunk + dirFileSizes", () => {
 
   it("returns an empty map for a missing directory", async () => {
     expect(await dirFileSizes(join(root, "nope"))).toEqual({});
+  });
+});
+
+describe("freeSpace", () => {
+  it("reports the volume's free bytes", async () => {
+    const free = await freeSpace(tmpdir());
+    expect(free).toBeGreaterThan(0);
+    expect(Number.isFinite(free)).toBe(true);
+  });
+
+  it("measures the nearest existing ancestor of a not-yet-created root", async () => {
+    // The upload root is created lazily on the first chunk, so the preflight has
+    // to work before it exists. A real figure (not the Infinity that means
+    // "couldn't measure") proves it walked up to a path that does exist —
+    // asserting the exact number would only test how busy the disk is.
+    const nested = join(tmpdir(), "penumbra-absent", "uploads", "models");
+    const free = await freeSpace(nested);
+    expect(Number.isFinite(free)).toBe(true);
+    expect(free).toBeGreaterThan(0);
+  });
+});
+
+describe("isOutOfSpace", () => {
+  it("recognizes ENOSPC and nothing else", () => {
+    expect(
+      isOutOfSpace(Object.assign(new Error("x"), { code: "ENOSPC" })),
+    ).toBe(true);
+    expect(
+      isOutOfSpace(Object.assign(new Error("x"), { code: "EACCES" })),
+    ).toBe(false);
+    expect(isOutOfSpace(new Error("x"))).toBe(false);
+    expect(isOutOfSpace(null)).toBe(false);
   });
 });
