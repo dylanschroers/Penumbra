@@ -1,0 +1,119 @@
+/* The compute-targets panel, shared by the chat pill and the Model Lab pill.
+   Scoped to .ct so it can sit inside either popover without inheriting either
+   module's form styling. */
+
+.ct {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 20rem;
+}
+
+.ct__loading,
+.ct__note,
+.ct__hint,
+.ct__meta {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.ct__error {
+  font-size: 0.72rem;
+  color: #b91c1c;
+  margin: 0;
+}
+
+.ct__target {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg);
+}
+
+.ct__head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ct__name {
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.ct__state {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+/* A filled dot for a target that can answer, hollow for one that cannot — the
+   same three states the pills use. */
+.ct__dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+}
+
+.ct__dot--ready {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.ct__dot--unauthorized {
+  background: #fbbf24;
+  border-color: #f59e0b;
+}
+
+.ct__addr {
+  margin: 0;
+  font-size: 0.74rem;
+  word-break: break-all;
+}
+
+.ct__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.ct__actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.ct__roles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.ct__roles-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.ct__role {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.76rem;
+}
+
+.ct__role-name {
+  min-width: 6rem;
+}
+
+.ct__fallback {
+  font-size: 0.7rem;
+  color: #b45309;
+}

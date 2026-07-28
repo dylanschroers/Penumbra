@@ -8,6 +8,8 @@ import {
   STORAGE_NAMESPACE,
 } from "@penumbra/shared";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import { ComputeTargets } from "../../compute/ComputeTargets";
+import { useCompute } from "../../compute/useCompute";
 import { isFsAvailable, readHead } from "../../fs/fsClient";
 import { datasetFormat, scanDatasets } from "./datasetLibrary";
 import {
@@ -550,6 +552,9 @@ function DatasetPreviewPanel({
 
 export function LabModule() {
   const lab = useLab();
+  // Which Studio trains, benchmarks, and answers chat. Shared with the chat
+  // pill rather than owned here.
+  const compute = useCompute();
   const modelLibrary = useFileLibrary(
     `${STORAGE_NAMESPACE}.lab.model-dir.v1`,
     scanModels,
@@ -571,12 +576,6 @@ export function LabModule() {
   const [benchModel, setBenchModel] = useState("");
   const [suite, setSuite] = useState("penumbra-tools-v1");
   const [samples, setSamples] = useState(20);
-  const [colabURL, setColabURL] = useState("");
-  const [colabKey, setColabKey] = useState("");
-  // Local Studio address/bearer. Both start blank: the key is never echoed back,
-  // and a blank URL means "leave it where it is".
-  const [localURL, setLocalURL] = useState("");
-  const [localKey, setLocalKey] = useState("");
   const [providerOpen, setProviderOpen] = useState(false);
   // Transfer state for the pre-run upload of a local model/dataset to the host.
   const [uploading, setUploading] = useState(false);
@@ -600,12 +599,15 @@ export function LabModule() {
     selected?.kind === "general" && lab.status?.lmEval === "missing";
 
   // Where a fine-tune would land right now: local Studio when it's up, else the
-  // Colab fallback if it's reachable. null means nothing can train.
-  const colab = lab.status?.colab;
+  // Colab fallback if it's reachable. null means nothing can train. Read from
+  // the compute targets rather than a Lab-owned status, since training shares
+  // them with chat and benchmarking.
+  const localTarget = compute.state?.targets.find((t) => t.id === "local");
+  const colabTarget = compute.state?.targets.find((t) => t.id === "colab");
   const trainTarget: "local" | "colab" | null =
-    lab.status?.studio === "ready"
+    localTarget?.state === "ready"
       ? "local"
-      : colab?.studio === "ready"
+      : colabTarget?.state === "ready"
         ? "colab"
         : null;
 
@@ -615,25 +617,6 @@ export function LabModule() {
   // still has to exist over there. Caught before the run rather than after.
   const remoteNeedsHfModel =
     trainTarget === "colab" && looksLocalPath(baseModel.trim());
-
-  function onSaveColab(event: FormEvent) {
-    event.preventDefault();
-    void lab.setColab(colabURL.trim(), colabKey);
-    // Don't keep the bearer in component state once it's been handed off.
-    setColabKey("");
-  }
-
-  function onSaveLocal(event: FormEvent) {
-    event.preventDefault();
-    const url = localURL.trim();
-    // Send only what was filled in: an untouched field keeps the running value
-    // rather than blanking it.
-    void lab.setLocalStudio({
-      ...(url ? { baseURL: url } : {}),
-      ...(localKey ? { apiKey: localKey } : {}),
-    });
-    setLocalKey("");
-  }
 
   // Report upload progress as a percentage when the total is known, else as the
   // bytes sent so far.
@@ -699,18 +682,19 @@ export function LabModule() {
   return (
     <div className="lab">
       <div className="lab__status">
-        {/* The Studio pill doubles as the compute-provider control: click it to
-            open the popover that configures the Colab fallback. */}
+        {/* The compute pill doubles as the control: click it to open the
+            shared targets panel — the same one the chat pill opens, because it
+            is the same setting. */}
         <button
           type="button"
-          className={`lab__pill lab__pill--${lab.status?.studio ?? "stopped"} lab__pill--action`}
+          className={`lab__pill lab__pill--${localTarget?.state ?? "stopped"} lab__pill--action`}
           onClick={() => setProviderOpen((open) => !open)}
           aria-haspopup="dialog"
           aria-expanded={providerOpen}
-          title="Configure compute providers"
+          title="Configure compute targets"
         >
-          Studio: {lab.status?.studio ?? "unreachable"}
-          {colab?.configured && ` · Colab: ${colab.studio}`}
+          Studio: {localTarget?.state ?? "unreachable"}
+          {colabTarget?.configured && ` · Colab: ${colabTarget.state}`}
           <span className="lab__pill-caret" aria-hidden="true">
             ▾
           </span>
@@ -725,111 +709,15 @@ export function LabModule() {
             <button
               type="button"
               className="lab__popover-backdrop"
-              aria-label="Close compute providers"
+              aria-label="Close compute targets"
               onClick={() => setProviderOpen(false)}
             />
             <div
               className="lab__popover"
               role="dialog"
-              aria-label="Compute providers"
+              aria-label="Compute targets"
             >
-              <div className="lab__popover-head">
-                <span
-                  className={`lab__pill lab__pill--${lab.status?.studio ?? "stopped"}`}
-                >
-                  Local Studio: {lab.status?.studio ?? "unreachable"}
-                </span>
-              </div>
-              {lab.status?.studio === "unauthorized" && (
-                <p className="lab__provider-note lab__provider-note--warn">
-                  Studio is running but rejected the server's key. Studio mints
-                  it on install and on every rotation — paste the current one
-                  below.
-                </p>
-              )}
-
-              {/* The local Studio's address and bearer. Saved on the server and
-                  used immediately, so a rotated key no longer means editing
-                  .env and restarting. The key is never read back, so this field
-                  is blank on load whether or not one is set. */}
-              <form className="lab__form" onSubmit={onSaveLocal}>
-                <input
-                  aria-label="Studio URL"
-                  placeholder={
-                    lab.status?.local.baseURL ?? "http://127.0.0.1:8888"
-                  }
-                  value={localURL}
-                  onChange={(e) => setLocalURL(e.target.value)}
-                />
-                <input
-                  aria-label="Studio API key"
-                  type="password"
-                  placeholder={
-                    lab.status?.local.hasKey
-                      ? "Key set — type a new one to replace it"
-                      : "No key set (Studio → Settings → API)"
-                  }
-                  value={localKey}
-                  onChange={(e) => setLocalKey(e.target.value)}
-                />
-                <div className="lab__provider-actions">
-                  <button
-                    type="submit"
-                    disabled={!localURL.trim() && !localKey}
-                  >
-                    Save
-                  </button>
-                  {lab.status?.local.source === "settings" && (
-                    <button
-                      type="button"
-                      onClick={() => void lab.clearLocalStudio()}
-                    >
-                      Revert to .env
-                    </button>
-                  )}
-                </div>
-                <p className="lab__provider-note">
-                  {lab.status?.local.baseURL} —{" "}
-                  {lab.status?.local.source === "settings"
-                    ? "set here"
-                    : "from the server environment"}
-                </p>
-              </form>
-
-              {/* Colab fallback. The key is sent to the server and never read
-                  back, so this field is always blank on load — re-enter it to
-                  change the endpoint. */}
-              <form className="lab__form" onSubmit={onSaveColab}>
-                <span className="lab__popover-label">Colab fallback</span>
-                <input
-                  aria-label="Colab endpoint URL"
-                  placeholder="https://xxxx.trycloudflare.com"
-                  value={colabURL}
-                  onChange={(e) => setColabURL(e.target.value)}
-                />
-                <input
-                  aria-label="Colab API key"
-                  type="password"
-                  placeholder="Bearer token (optional on a trusted tunnel)"
-                  value={colabKey}
-                  onChange={(e) => setColabKey(e.target.value)}
-                />
-                <div className="lab__provider-actions">
-                  <button type="submit" disabled={!colabURL.trim()}>
-                    {colab?.configured ? "Update" : "Save"}
-                  </button>
-                  {colab?.configured && (
-                    <button type="button" onClick={() => void lab.clearColab()}>
-                      Remove
-                    </button>
-                  )}
-                </div>
-                {colab?.configured && (
-                  <p className="lab__provider-note">
-                    Fallback: {colab.baseURL} — {colab.studio}
-                  </p>
-                )}
-              </form>
+              <ComputeTargets compute={compute} />
             </div>
           </>
         )}

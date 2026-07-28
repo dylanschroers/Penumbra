@@ -77,6 +77,19 @@ describe("getStatus", () => {
     expect(await engine.getStatus()).toEqual({ state: "no_model" });
   });
 
+  // A stale key is the routine failure — Studio mints a new one on every
+  // rotation — and it sends you somewhere completely different from "the
+  // backend isn't running", so the two must not collapse together.
+  it.each([401, 403])("reports unauthorized on %i", async (status) => {
+    mockFetch.mockResolvedValue(res({}, false, status));
+    expect(await engine.getStatus()).toEqual({ state: "unauthorized" });
+  });
+
+  it("still reports stopped for other errors", async () => {
+    mockFetch.mockResolvedValue(res({}, false, 500));
+    expect(await engine.getStatus()).toEqual({ state: "stopped" });
+  });
+
   // Unsloth Studio lists downloaded-but-unloaded models alongside loaded ones,
   // each carrying a `loaded` flag. Reporting the first entry blindly would show
   // "ready" for a model sitting on disk that cannot serve a completion.

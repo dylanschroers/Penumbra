@@ -4,10 +4,10 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createCredentialStore } from "./credentials";
+import { createTargetStore, type TargetStore } from "../compute/targets";
 import { createLabStore, type LabStore } from "./jobs";
 import { registerLabRoutes } from "./routes";
-import { type HubTarget, StudioClient, type TrainingStart } from "./studio";
+import type { HubTarget, StudioClient, TrainingStart } from "./studio";
 
 /** Studio stand-in; only the methods a given test exercises are supplied.
  *
@@ -48,19 +48,36 @@ function fakeStudio(over: Partial<StudioClient> = {}): StudioClient {
 
 let app: FastifyInstance;
 let store: LabStore;
+let targets: TargetStore;
 
 beforeEach(() => {
   store = createLabStore(new Database(":memory:"));
+  // An empty environment, so the local target resolves to Studio's default
+  // address and nothing leaks in from the machine running the tests.
+  targets = createTargetStore(new Database(":memory:"), {});
 });
 afterEach(() => app?.close());
+
+/** Make the Colab target exist. The store decides *whether* a target is
+ *  configured; `build` decides what answers for it. Splitting the two is what
+ *  lets a test route training to Colab without a live tunnel. */
+function configureColab(baseURL = "https://tunnel.example") {
+  targets.set("colab", { baseURL, apiKey: "colab-secret" });
+}
 
 async function build(
   studio = fakeStudio(),
   token?: string,
-  makeColab?: (config: { baseURL: string; apiKey?: string }) => StudioClient,
+  colabStudio?: StudioClient,
 ) {
   app = Fastify();
-  registerLabRoutes(app, { store, studio, token, makeColab });
+  registerLabRoutes(app, {
+    store,
+    targets,
+    token,
+    makeClient: (id) =>
+      id === "colab" ? (colabStudio ?? fakeStudio()) : studio,
+  });
   await app.ready();
   return app;
 }
@@ -99,11 +116,6 @@ const finetuneBody = {
   dataset: { kind: "hf", id: "tatsu-lab/alpaca" },
 };
 
-const colabConfig = {
-  baseURL: "https://tunnel.example",
-  apiKey: "colab-secret",
-};
-
 describe("auth", () => {
   // /lab is a stronger actuator than /agent/chat: it spawns training and writes
   // files. It must never be the one unauthenticated endpoint on the box.
@@ -127,173 +139,32 @@ describe("auth", () => {
 });
 
 describe("GET /lab/status", () => {
-  it("reports Studio reachability and the suite catalog", async () => {
+  it("reports the suite catalog and whether lm-eval is installed", async () => {
     const app = await build();
     const body = (await app.inject({ url: "/lab/status" })).json();
 
-    expect(body.studio).toBe("ready");
     expect(body.suites.map((s: { id: string }) => s.id)).toContain(
       "penumbra-tools-v1",
     );
+    expect(["installed", "missing"]).toContain(body.lmEval);
   });
 
-  it("says so honestly when Studio is down", async () => {
-    const app = await build(fakeStudio({ reachable: async () => false }));
-    expect((await app.inject({ url: "/lab/status" })).json().studio).toBe(
-      "stopped",
-    );
-  });
-
-  it("distinguishes an unauthorized Studio from a stopped one", async () => {
-    const app = await build(
-      fakeStudio({ probe: async () => "unauthorized" as const }),
-    );
-    expect((await app.inject({ url: "/lab/status" })).json().studio).toBe(
-      "unauthorized",
-    );
-  });
-
-  it("reports no Colab fallback until one is configured", async () => {
+  // Target addresses, keys, and readiness live at /compute/targets now: chat
+  // needs them too, so reporting them from a Lab route made the Lab the owner
+  // of a setting it merely shares.
+  it("no longer carries compute configuration", async () => {
     const app = await build();
-    expect(
-      (await app.inject({ url: "/lab/status" })).json().colab,
-    ).toMatchObject({ configured: false, baseURL: null });
+    const body = (await app.inject({ url: "/lab/status" })).json();
+    expect(body.studio).toBeUndefined();
+    expect(body.local).toBeUndefined();
+    expect(body.colab).toBeUndefined();
   });
 });
 
-// Rotating Studio's key used to mean editing .env and restarting the server.
-describe("POST /lab/provider/local", () => {
-  async function buildWithCredentials() {
-    const db = new Database(":memory:");
-    const credentials = createCredentialStore(db, {
-      UNSLOTH_BASE_URL: "http://env:8888",
-      UNSLOTH_API_KEY: "env-key",
-    });
-    app = Fastify();
-    registerLabRoutes(app, {
-      store,
-      credentials,
-      studio: new StudioClient(credentials.current()),
-    });
-    await app.ready();
-    return { app, credentials };
-  }
-
-  it("stores a rotated key and reports where the running values came from", async () => {
-    const { app, credentials } = await buildWithCredentials();
-
-    expect(
-      (await app.inject({ url: "/lab/status" })).json().local,
-    ).toMatchObject({
-      baseURL: "http://env:8888",
-      source: "env",
-      hasKey: true,
-    });
-
-    const res = await app.inject({
-      method: "POST",
-      url: "/lab/provider/local",
-      payload: { baseURL: "http://studio.lan:8888", apiKey: "rotated" },
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(credentials.current().apiKey).toBe("rotated");
-    // The client the lab trains through follows without a restart.
-    expect(
-      (await app.inject({ url: "/lab/status" })).json().local,
-    ).toMatchObject({ baseURL: "http://studio.lan:8888", source: "settings" });
-  });
-
-  it("never sends the key back", async () => {
-    const { app } = await buildWithCredentials();
-    await app.inject({
-      method: "POST",
-      url: "/lab/provider/local",
-      payload: { apiKey: "rotated" },
-    });
-
-    const body = (await app.inject({ url: "/lab/status" })).body;
-    expect(body).not.toContain("rotated");
-    expect(body).not.toContain("env-key");
-  });
-
-  it("reverts to the environment on delete", async () => {
-    const { app } = await buildWithCredentials();
-    await app.inject({
-      method: "POST",
-      url: "/lab/provider/local",
-      payload: { baseURL: "http://studio.lan:8888" },
-    });
-
-    const res = await app.inject({
-      method: "DELETE",
-      url: "/lab/provider/local",
-    });
-
-    expect(res.json()).toMatchObject({
-      baseURL: "http://env:8888",
-      source: "env",
-    });
-  });
-
-  it("rejects an empty patch and a bad URL", async () => {
-    const { app } = await buildWithCredentials();
-    for (const payload of [{}, { baseURL: "not-a-url" }]) {
-      const res = await app.inject({
-        method: "POST",
-        url: "/lab/provider/local",
-        payload,
-      });
-      expect(res.statusCode).toBe(400);
-    }
-  });
-});
-
-describe("Colab provider", () => {
-  it("configures a fallback and reflects it in status, never echoing the key", async () => {
-    const built = fakeStudio({ baseURL: "https://tunnel.example" });
-    const app = await build(fakeStudio(), undefined, () => built);
-
-    const set = await app.inject({
-      method: "POST",
-      url: "/lab/provider/colab",
-      payload: colabConfig,
-    });
-    expect(set.statusCode).toBe(200);
-    // The URL is echoed to confirm the target; the bearer is not.
-    expect(JSON.stringify(set.json())).not.toContain("colab-secret");
-
-    const status = (await app.inject({ url: "/lab/status" })).json();
-    expect(status.colab).toMatchObject({
-      configured: true,
-      baseURL: "https://tunnel.example",
-      studio: "ready",
-    });
-  });
-
-  it("rejects a malformed endpoint", async () => {
-    const app = await build();
-    const res = await app.inject({
-      method: "POST",
-      url: "/lab/provider/colab",
-      payload: { baseURL: "not-a-url" },
-    });
-    expect(res.statusCode).toBe(400);
-  });
-
-  it("clears the fallback on DELETE", async () => {
-    const app = await build(fakeStudio(), undefined, () => fakeStudio());
-    await app.inject({
-      method: "POST",
-      url: "/lab/provider/colab",
-      payload: colabConfig,
-    });
-    await app.inject({ method: "DELETE", url: "/lab/provider/colab" });
-    expect(
-      (await app.inject({ url: "/lab/status" })).json().colab.configured,
-    ).toBe(false);
-  });
-
+// Configuring a target now lives at /compute/targets — see
+// ../compute/routes.test.ts. What stays here is what the *Lab* does with the
+// targets once they exist: route training, and refuse when it cannot.
+describe("Colab as a trainer", () => {
   // The whole point: when the local GPU host is offline, training routes to the
   // configured Colab tunnel instead of failing.
   it("trains via Colab when the local Studio is unreachable", async () => {
@@ -310,13 +181,9 @@ describe("Colab provider", () => {
     const app = await build(
       fakeStudio({ reachable: async () => false }),
       undefined,
-      () => colab,
+      colab,
     );
-    await app.inject({
-      method: "POST",
-      url: "/lab/provider/colab",
-      payload: colabConfig,
-    });
+    configureColab();
 
     const { jobId } = (
       await app.inject({
@@ -330,6 +197,17 @@ describe("Colab provider", () => {
     expect(colabTrained).toBe(true);
   });
 
+  it("refuses to train on Colab while none is configured", async () => {
+    const app = await build(fakeStudio({ reachable: async () => false }));
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/finetune",
+      payload: { ...finetuneBody, provider: "colab" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("colab_not_configured");
+  });
+
   // Colab resolves an unknown model name against HuggingFace, so a path from
   // this machine comes back as "Repo id must use alphanumeric chars…" minutes
   // later. There is no model-upload endpoint to fix it with, so refuse early.
@@ -337,13 +215,9 @@ describe("Colab provider", () => {
     const app = await build(
       fakeStudio({ reachable: async () => false }),
       undefined,
-      () => fakeStudio({ baseURL: "https://tunnel.example" }),
+      fakeStudio({ baseURL: "https://tunnel.example" }),
     );
-    await app.inject({
-      method: "POST",
-      url: "/lab/provider/colab",
-      payload: colabConfig,
-    });
+    configureColab();
 
     const res = await app.inject({
       method: "POST",
@@ -679,13 +553,9 @@ describe("POST /lab/export", () => {
         },
       }),
       undefined,
-      () => colab,
+      colab,
     );
-    await app.inject({
-      method: "POST",
-      url: "/lab/provider/colab",
-      payload: colabConfig,
-    });
+    configureColab();
 
     const run = seedRun(store, "/root/outputs/run", "colab");
     const { jobId } = (

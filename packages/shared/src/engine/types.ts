@@ -18,16 +18,30 @@ export interface ChatMessage {
 
 /**
  * Readiness of the model backend, for the status pill:
- *  - stopped:  nothing answering at the configured address
- *  - no_model: the backend is up but reports no loaded model
- *  - ready:    /v1/chat/completions will work
+ *  - stopped:      nothing answering at the configured address
+ *  - unauthorized: answering, but rejecting the key it was given
+ *  - no_model:     the backend is up but reports no loaded model
+ *  - ready:        /v1/chat/completions will work
+ *
+ * `unauthorized` is not folded into `stopped` for the same reason
+ * StudioReachability keeps them apart: "running with a stale key" and "not
+ * running" send you to different places, and Studio mints a fresh key on every
+ * rotation, so the first is routine rather than exotic.
  */
-export type AgentState = "stopped" | "no_model" | "ready";
+export type AgentState = "stopped" | "unauthorized" | "no_model" | "ready";
 
 export interface AgentStatus {
   state: AgentState;
   /** Loaded model id, present only when state is "ready". */
   model?: string;
+  /**
+   * Which compute target answered, when the backend has more than one to choose
+   * from. Absent for Tier 0, which is always the embedded server.
+   *
+   * Reported with the state rather than fetched separately so the pill can
+   * never show one target's name beside another's readiness.
+   */
+  target?: { id: string; label: string };
 }
 
 /** What a tool-using turn emits: each tool run as it happens, then the answer. */

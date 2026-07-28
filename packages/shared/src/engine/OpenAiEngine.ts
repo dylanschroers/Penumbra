@@ -84,6 +84,12 @@ export class OpenAiEngine implements Engine {
         headers: this.headers,
         signal: AbortSignal.timeout(this.statusTimeoutMs),
       });
+      // A backend that answers but rejects the key is a different fix from one
+      // that isn't running — see AgentState. Studio rotates its key on every
+      // reinstall, so this is the ordinary case, not an edge one.
+      if (res.status === 401 || res.status === 403) {
+        return { state: "unauthorized" };
+      }
       if (!res.ok) return { state: "stopped" };
       const body = (await res.json()) as {
         data?: Array<{ id?: string; loaded?: boolean }>;
