@@ -453,6 +453,61 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+  /* Anchors .agent__popover, which hangs off the status pill. */
+  position: relative;
+}
+
+/* The pill becomes a control on the server tier: the fix for "key rejected" or
+   "not answering" is the compute panel, and it should not live in another
+   module. Mirrors .lab__pill--action, which opens the same panel. */
+.agent__pill--action {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.agent__pill--action:hover {
+  border-color: var(--primary);
+}
+
+.agent__pill-caret {
+  font-size: 0.6rem;
+  opacity: 0.7;
+}
+
+.agent__popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  border: none;
+  padding: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.agent__popover {
+  position: absolute;
+  z-index: 21;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  width: min(22rem, 90vw);
+  padding: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface, var(--bg));
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
+}
+
+/* A model change mid-thread. Reads as a rule across the conversation rather
+   than as a turn, because it is the shell talking, not the assistant. */
+.agent__notice {
+  margin: 0.5rem 0;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--border);
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-align: center;
 }
 
 /* Provider selector: a small segmented control routing the chat to a backend
@@ -507,6 +562,14 @@ body {
   color: var(--primary-text);
   background: var(--primary);
   border-color: var(--primary);
+}
+
+/* Answering, but rejecting the key: a warning, not "off". Same treatment as
+   .lab__pill--unauthorized — it is the same condition seen from the chat. */
+.agent__pill--unauthorized {
+  color: #7c4a03;
+  background: #fbbf24;
+  border-color: #f59e0b;
 }
 
 .agent__messages {

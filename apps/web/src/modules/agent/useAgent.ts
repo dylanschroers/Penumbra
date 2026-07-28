@@ -17,7 +17,13 @@ import {
 /** One tool the model ran during a turn, shown inline in the thread. */
 export type ToolStep = { name: string; result: string };
 /** A message as the UI holds it: wire content plus any tool steps that ran. */
-export type DisplayMessage = ChatMessage & { steps?: ToolStep[] };
+export type DisplayMessage = ChatMessage & {
+  steps?: ToolStep[];
+  /** A marker written by the shell rather than by anyone in the conversation.
+   *  Shown in the thread, never replayed as history — it is a note *about* the
+   *  conversation, and feeding it back would put it in the model's mouth. */
+  notice?: boolean;
+};
 
 export function useAgent() {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
@@ -25,9 +31,35 @@ export function useAgent() {
   const [busy, setBusy] = useState(false);
   const [provider, setProviderState] = useState<ProviderKind>(getProvider);
   const abortRef = useRef<AbortController | null>(null);
+  /** Which compute target last answered, so a change can be noticed. */
+  const lastTarget = useRef<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
-    setStatus(await engine.getStatus());
+    const next = await engine.getStatus();
+    setStatus(next);
+
+    // A conversation can change model underneath itself: the target is
+    // reassigned in the compute panel, or a Colab session ends and the role
+    // falls back to the local Studio. Either way the transcript would otherwise
+    // hold answers from two models with nothing separating them — the same
+    // class of silent wrongness as a crashed training run reading as done.
+    const id = next.target?.id ?? null;
+    const previous = lastTarget.current;
+    lastTarget.current = id;
+    if (!previous || !id || previous === id) return;
+    setMessages((prev) =>
+      // Nothing to interleave in an empty thread.
+      prev.length === 0
+        ? prev
+        : [
+            ...prev,
+            {
+              role: "assistant",
+              notice: true,
+              content: `Now answering from ${next.target?.label ?? id}. Replies below this line come from a different model than the ones above.`,
+            },
+          ],
+    );
   }, []);
 
   // Route the chat to a different provider, then re-check status so the pill
@@ -61,9 +93,13 @@ export function useAgent() {
       if (!trimmed || busy) return;
 
       // History is role + content only; tool steps are display-only and never
-      // replayed (each turn runs a fresh tool loop).
+      // replayed (each turn runs a fresh tool loop). Notices are dropped for a
+      // stronger reason: they are the shell talking about the conversation, and
+      // replaying one would present it as something the assistant said.
       const history: ChatMessage[] = [
-        ...messages.map(({ role, content }) => ({ role, content })),
+        ...messages
+          .filter((m) => !m.notice)
+          .map(({ role, content }) => ({ role, content })),
         { role: "user", content: trimmed },
       ];
       setMessages((prev) => [

@@ -1,19 +1,21 @@
 import { join } from "node:path";
 import {
   benchmarkRequest,
-  colabProviderConfig,
   exportRequest,
   findSuite,
   finetuneRequest,
   type LabJob,
   looksLocalPath,
   SUITES,
-  studioCredentialsInput,
 } from "@penumbra/shared";
 import type { FastifyInstance } from "fastify";
+import type {
+  TargetCredentials,
+  TargetId,
+  TargetStore,
+} from "../compute/targets";
 import { requireAuth } from "../http/auth";
 import { lmEvalAvailable, runBenchmark } from "./benchmark";
-import type { CredentialStore } from "./credentials";
 import type { LabStore } from "./jobs";
 import { StudioClient, type StudioRun, TrainingBusyError } from "./studio";
 import {
@@ -49,46 +51,38 @@ const EXPORT_TIMEOUT_MS = 60 * 60 * 1000;
 
 export interface LabRouteOptions {
   store: LabStore;
-  studio?: StudioClient;
-  /** Runtime address + bearer for the local Studio. Given one, the client above
-   *  is rebuilt whenever they change, and `/lab/provider/local` can set them.
-   *  Omitted in tests, which inject a fake Studio directly. */
-  credentials?: CredentialStore;
-  /** Where benchmarked models are served from — Studio, by default. */
+  /** Where compute lives and which target each role uses. Addresses and keys
+   *  are read at the moment they are needed, so a rotated key or a retargeted
+   *  role takes effect on the next request with nothing to invalidate. */
+  targets: TargetStore;
+  /** Builds a Studio client for a target. Injectable so tests can supply fakes
+   *  without standing up a live Studio or tunnel. */
+  makeClient?: (id: TargetId, creds: TargetCredentials) => StudioClient;
+  /** Overrides where benchmarked models are served from. Unset means the target
+   *  assigned to the benchmark role. */
   inferenceURL?: string;
-  apiKey?: string;
   token?: string;
-  /** Builds the Colab fallback trainer from the config a user submits.
-   *  Injectable so tests can supply a fake without standing up a live tunnel. */
-  makeColab?: (config: { baseURL: string; apiKey?: string }) => StudioClient;
 }
 
 export function registerLabRoutes(
   app: FastifyInstance,
   {
     store,
-    studio: initialStudio = new StudioClient(),
-    credentials,
+    targets,
+    makeClient = (_id, creds) => new StudioClient(creds),
     inferenceURL,
-    apiKey = process.env.UNSLOTH_API_KEY,
     token = process.env.PENUMBRA_AGENT_TOKEN,
-    makeColab = (config) => new StudioClient(config),
   }: LabRouteOptions,
 ): void {
   const preHandler = requireAuth(token);
 
-  // Rebuilt in place when the credentials change, so a rotated key takes effect
-  // on the next request instead of the next restart.
-  let studio = initialStudio;
-  credentials?.onChange((next) => {
-    studio = new StudioClient(next);
-  });
-
-  // The optional Colab fallback: a second Studio, reached through a tunnel the
-  // user configures at runtime. Held in memory only — the bearer never touches
-  // disk and must be re-entered after a restart, the same posture the local
-  // Studio key keeps. `null` until configured.
-  let colab: StudioClient | null = null;
+  /** The Studio for a target, or null when it has no address yet. Built per
+   *  call rather than cached: a client is a URL and a header map, so there is
+   *  nothing to keep alive — and nothing that can go stale against the store. */
+  function clientFor(id: TargetId): StudioClient | null {
+    if (!targets.list().find((t) => t.id === id)?.configured) return null;
+    return makeClient(id, targets.credentials(id));
+  }
 
   /** Choose the Studio to train on. "auto" prefers local and falls back to a
    *  reachable Colab; an explicit provider is honored as asked. Returns the
@@ -99,7 +93,21 @@ export function registerLabRoutes(
     | { ok: true; client: StudioClient; via: "local" | "colab" }
     | { ok: false; error: string; message: string }
   > {
-    if (provider === "local") return { ok: true, client: studio, via: "local" };
+    const local = clientFor("local");
+    const colab = clientFor("colab");
+
+    if (provider === "local") {
+      // Local always has an address (an environment default at worst), so this
+      // branch cannot be unconfigured — but the type says it can.
+      if (!local) {
+        return {
+          ok: false,
+          error: "no_trainer",
+          message: "the local Studio has no address configured",
+        };
+      }
+      return { ok: true, client: local, via: "local" };
+    }
     if (provider === "colab") {
       if (!colab) {
         return {
@@ -111,8 +119,8 @@ export function registerLabRoutes(
       return { ok: true, client: colab, via: "colab" };
     }
     // auto: local first, then a reachable Colab.
-    if (await studio.reachable()) {
-      return { ok: true, client: studio, via: "local" };
+    if (local && (await local.reachable())) {
+      return { ok: true, client: local, via: "local" };
     }
     if (colab && (await colab.reachable())) {
       return { ok: true, client: colab, via: "colab" };
@@ -143,75 +151,13 @@ export function registerLabRoutes(
       .catch((err) => store.failJob(job.id, err));
   };
 
-  app.get("/lab/status", { preHandler }, async () => {
-    // Probe both providers in parallel; a missing Colab is simply "stopped".
-    const [studioState, lmEval, colabState] = await Promise.all([
-      studio.probe(),
-      lmEvalAvailable(),
-      colab ? colab.probe() : Promise.resolve("stopped" as const),
-    ]);
-    const creds = credentials?.current();
-    return {
-      // Tri-state: "unauthorized" (up, bad/missing key) is not "stopped".
-      studio: studioState,
-      lmEval: lmEval ? "installed" : "missing",
-      suites: SUITES,
-      // Enough to see what the local Studio is pointed at and whether a key is
-      // in play, without ever returning the key itself.
-      local: {
-        baseURL: studio.baseURL,
-        source: creds?.source ?? "env",
-        hasKey: creds ? creds.apiKey !== undefined : Boolean(apiKey),
-      },
-      // The URL is not secret and helps the user confirm what they pointed at;
-      // the bearer is never returned.
-      colab: {
-        configured: colab !== null,
-        baseURL: colab?.baseURL ?? null,
-        studio: colabState,
-      },
-    };
-  });
-
-  // Point the local Studio somewhere else, or hand it a rotated key. Unlike the
-  // Colab fallback this *is* persisted: it replaces editing .env, and a setting
-  // that vanished on restart would replace it with something worse. The value
-  // is written, never read back.
-  app.post("/lab/provider/local", { preHandler }, async (req, reply) => {
-    if (!credentials) {
-      return reply.code(409).send({ error: "settings_unavailable" });
-    }
-    const parsed = studioCredentialsInput.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
-    if (parsed.data.baseURL === undefined && parsed.data.apiKey === undefined) {
-      return reply.code(400).send({ error: "bad_request" });
-    }
-    const next = credentials.set(parsed.data);
-    return { ok: true, baseURL: next.baseURL, source: next.source };
-  });
-
-  // Forget the stored pair and go back to whatever the environment says.
-  app.delete("/lab/provider/local", { preHandler }, async (_req, reply) => {
-    if (!credentials) {
-      return reply.code(409).send({ error: "settings_unavailable" });
-    }
-    const next = credentials.clear();
-    return { ok: true, baseURL: next.baseURL, source: next.source };
-  });
-
-  // Configure (or replace) the Colab fallback. The key arrives once here and is
-  // held only in memory — see the `colab` declaration above.
-  app.post("/lab/provider/colab", { preHandler }, async (req, reply) => {
-    const parsed = colabProviderConfig.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
-    colab = makeColab(parsed.data);
-    return { ok: true, baseURL: colab.baseURL };
-  });
-
-  app.delete("/lab/provider/colab", { preHandler }, async () => {
-    colab = null;
-    return { ok: true };
-  });
+  // What the Lab needs that isn't compute: whether the general suite can run,
+  // and what suites exist. Target addresses, keys, and readiness moved to
+  // /compute/targets — chat needs them too, and they were never Lab-specific.
+  app.get("/lab/status", { preHandler }, async () => ({
+    lmEval: (await lmEvalAvailable()) ? "installed" : "missing",
+    suites: SUITES,
+  }));
 
   // --- Upload: bring a client-local model or dataset onto this host ---------
   //
@@ -512,7 +458,7 @@ export function registerLabRoutes(
     // the local Studio just fails on a path it cannot see. A Colab session is
     // ephemeral, so it may well be gone; say that plainly here rather than
     // failing deep inside a job with a network error.
-    const exporter = run.provider === "colab" ? colab : studio;
+    const exporter = clientFor(run.provider);
     if (!exporter) {
       return reply.code(409).send({
         error: "trainer_gone",
@@ -637,14 +583,16 @@ export function registerLabRoutes(
 
     const job = store.createJob("benchmark");
     runJob(job, async (report) => {
+      // Resolved per run, not at registration: the model being benchmarked is
+      // served by whichever target the benchmark role currently resolves to,
+      // which the user can change between one run and the next.
+      const via = targets.resolve("benchmark");
       const result = await runBenchmark({
         model: parsed.data.model,
         suite,
         samplesPerTask: parsed.data.samplesPerTask,
-        // Resolved per run, not at registration: the Studio being benchmarked
-        // is whichever one the current credentials point at.
-        baseURL: inferenceURL ?? studio.baseURL,
-        apiKey: credentials?.current().apiKey ?? apiKey,
+        baseURL: inferenceURL ?? via.baseURL,
+        apiKey: via.apiKey,
         onProgress: (line) => report({ detail: line.slice(0, 200) }),
       });
       store.recordScores(result);

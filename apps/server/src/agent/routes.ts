@@ -1,6 +1,7 @@
 import type { AgentEvent, ChatMessage, Engine } from "@penumbra/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import type { TargetStore } from "../compute/targets";
 import { requireAuth } from "../http/auth";
 
 // The Tier-1 agent's HTTP surface. Two routes: readiness for the status pill,
@@ -21,17 +22,33 @@ const chatBody = z.object({
 
 export interface AgentRouteOptions {
   engine: Engine;
+  /** Compute targets, so readiness can say *which* Studio it is reporting on.
+   *  Optional: a server with a single fixed backend has nothing to name. */
+  targets?: TargetStore;
   /** Shared secret; when unset the routes serve loopback only. */
   token?: string;
 }
 
 export function registerAgentRoutes(
   app: FastifyInstance,
-  { engine, token = process.env.PENUMBRA_AGENT_TOKEN }: AgentRouteOptions,
+  {
+    engine,
+    targets,
+    token = process.env.PENUMBRA_AGENT_TOKEN,
+  }: AgentRouteOptions,
 ): void {
   const preHandler = requireAuth(token);
 
-  app.get("/agent/status", { preHandler }, async () => engine.getStatus());
+  // Readiness carries the target that produced it. Resolved here rather than
+  // left to the client to pair up, so a pill can never show one target's name
+  // beside another's state.
+  app.get("/agent/status", { preHandler }, async () => {
+    const status = await engine.getStatus();
+    if (!targets) return status;
+    const id = targets.effective("chat");
+    const target = targets.list().find((t) => t.id === id);
+    return { ...status, target: { id, label: target?.label ?? id } };
+  });
 
   app.post("/agent/chat", { preHandler }, async (req, reply) => {
     const parsed = chatBody.safeParse(req.body);

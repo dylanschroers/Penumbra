@@ -156,16 +156,35 @@ results:
   recorded — the run then has no output dir and export refuses it, which is the
   safe failure.
 
-## Compute providers
+## Compute targets
 
-Training targets the local Studio by default. An optional **Colab fallback** can
-be configured at runtime: a second Studio reached through a tunnel, held in
-memory only, so its bearer never touches disk and must be re-entered after a
-restart. `auto` prefers local and falls back to a reachable Colab.
+Two Studios are known: **local**, whose address and bearer are persisted (the
+environment is the deployment default, and a value set through the API outranks
+it), and **Colab**, a second Studio reached through a tunnel and held in memory
+only, so its bearer never touches disk and must be re-entered after a restart.
 
-Export deliberately does **not** follow the fallback. It needs the checkpoint on
-the same host, and a Colab tunnel is ephemeral — by export time the notebook
-that trained the run is usually gone. A Colab-trained run therefore exports only
-while that session is alive and pointed at as the local Studio; otherwise it
-fails visibly on a path the host cannot see, rather than producing a silently
-wrong artifact.
+Every target is a full Studio — the key is unscoped (fact 1) — so they do not
+differ in what they *can* do. They differ in whether their configuration
+survives a restart.
+
+Targets are configured at `/compute/*`, not under `/lab/*`, because chat uses
+them too: the Studio a conversation runs against is the same one the Lab trains
+and benchmarks on. `GET /compute/targets` reports both, never a bearer. Roles
+are assigned there:
+
+- **chat** and **benchmark** each name a target. An assignment can outlive the
+  target it names — Colab's config dies with the process — so the response
+  carries both what was asked for and what it currently resolves to, and the UI
+  says when the two differ rather than misreporting where answers came from.
+- **training** is *not* an assignment. It is chosen per run in
+  `finetuneRequest.provider`, where `auto` prefers local and falls back to a
+  reachable Colab. That is the right granularity: where one job goes, not where
+  all training goes.
+- **export** is not assignable at all. It follows `lab_runs.provider`, because
+  `outputDir` is a path on the machine that trained the run. A Colab session
+  that has ended cannot export its checkpoint, and the route says so with a 409
+  rather than failing deep inside a job on a path the local Studio cannot see.
+
+One GPU holds one model, so chat and benchmarking on the same target contend: a
+benchmark evicts the model the assistant is using. Pointing them at different
+targets is the only real fix, which is why the assignments are shown together.
