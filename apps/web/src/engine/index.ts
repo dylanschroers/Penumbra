@@ -12,6 +12,7 @@ import type {
   Engine,
   ToolBindings,
 } from "@penumbra/shared";
+import { migrateStorageKey, STORAGE_NAMESPACE } from "@penumbra/shared";
 import { AGENT_SYSTEM, runTool, toolSpecs } from "../agent/tools";
 import { LocalEngine } from "./LocalEngine";
 import { RemoteEngine } from "./RemoteEngine";
@@ -71,7 +72,8 @@ export const PROVIDERS: readonly ProviderInfo[] = [
   },
 ];
 
-const PROVIDER_KEY = "penumbra.provider";
+const PROVIDER_KEY = `${STORAGE_NAMESPACE}.provider.v1`;
+const LEGACY_PROVIDER_KEY = "penumbra.provider";
 
 /** Delegates every call to whichever provider is currently selected. Switching is
  *  instant — it just flips a pointer; no connection opens until getStatus/runAgent. */
@@ -121,6 +123,7 @@ class SwitchableEngine implements Engine {
 }
 
 function loadProvider(): ProviderKind {
+  migrateStorageKey(LEGACY_PROVIDER_KEY, PROVIDER_KEY);
   try {
     const saved = localStorage.getItem(PROVIDER_KEY);
     if (saved === "local" || saved === "server" || saved === "cloud") {

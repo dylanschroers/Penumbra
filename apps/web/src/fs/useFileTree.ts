@@ -1,3 +1,4 @@
+import { migrateStorageKey, STORAGE_NAMESPACE } from "@penumbra/shared";
 import { useCallback, useEffect, useState } from "react";
 import {
   type DirEntry,
@@ -9,16 +10,18 @@ import {
 
 // Owns the file sidebar's state: the set of imported root folders and, for each
 // expanded directory, its lazily-loaded children. Roots are the only thing that
-// persists (to localStorage — the same prototype-era choice the workspace layout
-// makes); everything else is rebuilt on demand from disk, so nothing here can go
-// stale against the real filesystem for long.
+// persists (to localStorage, a prototype-era choice); everything else is rebuilt
+// on demand from disk, so nothing here can go stale against the real filesystem
+// for long.
 //
 // Desktop-only. On the web build isFsAvailable is false and every action no-ops,
 // so the component can render a placeholder without special-casing the hook.
 
-const ROOTS_KEY = "penumbra.fs.roots";
+const ROOTS_KEY = `${STORAGE_NAMESPACE}.fs.roots.v1`;
+const LEGACY_ROOTS_KEY = "penumbra.fs.roots";
 
 function loadRoots(): string[] {
+  migrateStorageKey(LEGACY_ROOTS_KEY, ROOTS_KEY);
   try {
     const raw = localStorage.getItem(ROOTS_KEY);
     const parsed = raw ? JSON.parse(raw) : [];

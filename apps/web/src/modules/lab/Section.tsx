@@ -6,11 +6,14 @@
 // has never touched is open, so adding a section later doesn't silently start it
 // hidden.
 
+import { migrateStorageKey, STORAGE_NAMESPACE } from "@penumbra/shared";
 import { type ReactNode, useCallback, useState } from "react";
 
-const STORAGE_KEY = "penumbra.lab.collapsed";
+const STORAGE_KEY = `${STORAGE_NAMESPACE}.lab.collapsed.v1`;
+const LEGACY_STORAGE_KEY = "penumbra.lab.collapsed";
 
 function readCollapsed(): Set<string> {
+  migrateStorageKey(LEGACY_STORAGE_KEY, STORAGE_KEY);
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     const ids = raw ? JSON.parse(raw) : [];
