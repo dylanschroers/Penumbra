@@ -8,18 +8,21 @@ to it directly.
 
 ## How it's wired
 
-- `Cargo.toml` — depends on `tauri-plugin-shell`.
 - `tauri.conf.json` → `bundle.resources` — ships everything in `binaries/`
   (the server **and its shared libraries**) and `models/` into the app bundle.
   Directory globs, so a build without the assets still succeeds; the sidecar
   simply doesn't start.
-- `src/lib.rs` — registers the shell plugin and, on startup, resolves the
-  bundled `llama-server` (`llama-server.exe` on Windows) + model from the
-  resource dir and spawns the server with the guidance flags
+- `src/lib.rs` — on startup, resolves the bundled `llama-server`
+  (`llama-server.exe` on Windows) + model from the resource dir and spawns the
+  server (via `std::process::Command`) with the guidance flags
   (`--jinja --reasoning-format none --reasoning-budget 0`). It is
   **best-effort**: if the binary or weights are missing it logs a line and the
   app runs normally (the model just shows offline). Backend spawning is not
   capability-gated, so no `capabilities/` change is needed.
+- **Shutdown is hardened** so a dead app never leaves the sidecar squatting on
+  `:8080`: on Linux the child is armed with `PR_SET_PDEATHSIG` (the kernel kills
+  it when the app dies, including on a crash or SIGKILL), and a `RunEvent::Exit`
+  handler kills it on graceful shutdown / on platforms without that primitive.
 - `LocalEngine` (web) defaults to `http://127.0.0.1:8080` — matches the port.
 
 ### Why not `externalBin`

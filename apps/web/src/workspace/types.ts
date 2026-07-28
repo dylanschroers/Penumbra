@@ -1,37 +1,53 @@
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 
 // The frontend counterpart to the backend tool registry (docs/ARCHITECTURE.md →
 // "The tool registry is the spine"): a module is *defined once* here and the
-// workspace canvas can place, render, and persist it without knowing anything
-// about its internals.
+// shell renders it without knowing anything about its internals.
 
-/** A capability the workspace can render as a free-placed module. */
-export interface ModuleDefinition {
-  /** Stable id, also the key persisted in a placed instance. */
+/** What every module carries, whichever view shape it uses. */
+interface ModuleBase {
+  /** Stable id, also the key the shell tracks an open module by. */
   id: string;
   /** Shown in the module's title bar. */
   title: string;
-  /** Default size in grid units (columns × rows) when first added. */
-  defaultSize: { w: number; h: number };
-  /** Optional minimum size in grid units. */
-  minSize?: { w: number; h: number };
-  /** The module's own self-contained UI. */
+}
+
+/**
+ * A module with a single view, shown wherever it currently sits. The shell keeps
+ * the one instance alive and moves it between the dock card and the focus pane,
+ * so its state survives the trip.
+ *
+ * Fine while a module's dock and expanded presentations are one layout at two
+ * sizes. Once they want to be genuinely different designs — or the dock card
+ * should stay live *while* the module is expanded — split it.
+ */
+export interface SingleViewModule extends ModuleBase {
   Component: ComponentType;
 }
 
 /**
- * A module placed on the canvas. Positions/sizes are in grid units (not pixels)
- * — react-grid-layout maps them to pixels from the live container width. This is
- * user-authored layout (Plane A); persisted to localStorage for now, destined
- * for the shared SQLite schema once the interaction settles.
+ * A module split into one state owner and two views.
+ *
+ * `Provider` is mounted once per open module and owns everything the views
+ * share or must not lose: data, effects, polls, in-flight work, and any form
+ * state the user would be annoyed to retype. `Compact` and `Expanded` are
+ * projections of it, so they can render *at the same time* — a live dock
+ * thumbnail beside the expanded module — and either can be unmounted freely.
+ *
+ * The rule that keeps this honest: if losing it on an unmount would be a bug,
+ * it belongs in the Provider, not in a view.
  */
-export interface ModuleInstance {
-  /** Unique per placement, so the same module can appear more than once. */
-  instanceId: string;
-  /** Which ModuleDefinition this renders (FK into the registry). */
-  moduleId: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
+export interface SplitViewModule extends ModuleBase {
+  Provider: ComponentType<{ children: ReactNode }>;
+  /** The dock card: a live summary that reads well small. */
+  Compact: ComponentType;
+  /** The focus pane: the full depth. */
+  Expanded: ComponentType;
+}
+
+export type ModuleDefinition = SingleViewModule | SplitViewModule;
+
+/** Whether this module carries the state-owner + two-views shape. */
+export function isSplitView(def: ModuleDefinition): def is SplitViewModule {
+  return "Provider" in def;
 }

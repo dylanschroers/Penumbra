@@ -21,6 +21,35 @@
  * owned by the feature, so bumping one key never disturbs another. */
 export const STORAGE_NAMESPACE = "app";
 
+/**
+ * Move a localStorage value from a key that predates the convention above onto
+ * its namespaced name, once, in place. This is the migration the header
+ * demands: renaming a key without one does not lose the data loudly, it loses
+ * it silently, because the app simply looks somewhere the value isn't.
+ *
+ * Call it from the loader that reads `newKey`, before the read, so the value is
+ * moved before anything can conclude it is absent. Safe to call on every load:
+ * once `oldKey` is gone it does nothing. An existing `newKey` always wins — a
+ * value written under the current name is never overwritten by a stale one.
+ *
+ * No-ops without localStorage, so a shared module can call it under Node.
+ */
+export function migrateStorageKey(oldKey: string, newKey: string): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    const legacy = localStorage.getItem(oldKey);
+    if (legacy === null) return;
+    if (localStorage.getItem(newKey) === null) {
+      localStorage.setItem(newKey, legacy);
+    }
+    localStorage.removeItem(oldKey);
+  } catch {
+    // Non-fatal: a blocked or full localStorage means the old value stays put
+    // and the caller falls back to its default, which is the pre-migration
+    // behaviour rather than a new failure.
+  }
+}
+
 /** OPFS SAH pool name for the browser build's SQLite database. This is a
  * directory in the origin's private filesystem — renaming it strands the
  * database inside the old directory. */

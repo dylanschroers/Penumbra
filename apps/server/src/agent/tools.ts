@@ -20,7 +20,7 @@ import type { ServerTaskStore } from "../store/tasks";
 // and every model-emitted call is validated against the contract's schema
 // before anything executes. Only the backing store differs (the server's
 // SQLite, not the browser's), which is the whole point of Tier 1: the turn runs
-// with no client in the loop (docs/UNSLOTH_TIER1_PLAN.md §2).
+// with no client in the loop (docs/SYNC.md → Server-side writes).
 
 /** The model-facing tool list, derived from the shared contracts. */
 export const toolSpecs: ToolSpec[] = taskTools.map(toToolSpec);

@@ -1,11 +1,12 @@
 import { type FormEvent, useState } from "react";
-import type { AgentStatus } from "../../engine";
+import { type AgentStatus, PROVIDERS } from "../../engine";
+import { Markdown } from "./Markdown";
 import { useAgent } from "./useAgent";
 
 // The assistant module: a status pill plus a chat against the embedded local
 // model (Tier 0). It can call task tools (see ../../agent/tools) and shows each
-// tool it ran inline. Card chrome (title bar, drag, resize, close) belongs to
-// the workspace ModuleFrame, so this renders only its inner content.
+// tool it ran inline. Card chrome (title bar, expand, close) belongs to the
+// shell — the dock card or the focus pane — so this renders only inner content.
 
 const TOOL_LABEL: Record<string, string> = {
   create_task: "Added task",
@@ -31,7 +32,7 @@ function StatusPill({ status }: { status: AgentStatus }) {
 }
 
 export function AgentModule() {
-  const { messages, status, busy, send } = useAgent();
+  const { messages, status, busy, send, provider, setProvider } = useAgent();
   const [draft, setDraft] = useState("");
 
   const ready = status.state === "ready";
@@ -45,6 +46,25 @@ export function AgentModule() {
   return (
     <div className="agent">
       <div className="agent__status">
+        <div className="agent__providers">
+          {/* Each button is individually labelled + aria-pressed; a wrapper role
+              would only trip useSemanticElements for little a11y gain. */}
+          {PROVIDERS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className={`agent__provider${
+                provider === p.id ? " agent__provider--active" : ""
+              }`}
+              onClick={() => setProvider(p.id)}
+              disabled={!p.available}
+              aria-pressed={provider === p.id}
+              title={p.hint}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
         <StatusPill status={status} />
       </div>
 
@@ -66,7 +86,13 @@ export function AgentModule() {
                 </div>
               ))}
               {m.content.trim() ? (
-                <div className="agent__bubble">{m.content.trim()}</div>
+                <div className="agent__bubble">
+                  {m.role === "assistant" ? (
+                    <Markdown>{m.content.trim()}</Markdown>
+                  ) : (
+                    m.content.trim()
+                  )}
+                </div>
               ) : busy && i === messages.length - 1 ? (
                 <div className="agent__bubble agent__bubble--pending">…</div>
               ) : null}
