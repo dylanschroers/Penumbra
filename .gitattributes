@@ -1,0 +1,13 @@
+# Normalize text files to LF in the repository and on checkout.
+#
+# Git for Windows ships with core.autocrlf=true in its *system* config, so a
+# Windows clone would otherwise land CRLF in the working tree while the index
+# stays LF. Biome formats to LF and checks the working tree, so every file then
+# fails `pnpm lint`. Pinning eol=lf here overrides the inherited setting for
+# this repo without asking each contributor to reconfigure their git.
+* text=auto eol=lf
+
+# Already detected as binary by content; declared so nothing can mangle them.
+*.icns binary
+*.ico  binary
+*.png  binary
