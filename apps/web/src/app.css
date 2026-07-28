@@ -45,188 +45,6 @@ body {
   font-family: system-ui, -apple-system, sans-serif;
 }
 
-/* Workspace canvas */
-.workspace {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.workspace__bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.9rem 1.25rem;
-  border-bottom: 1px solid var(--border);
-  /* Sit above the canvas so the add-module dropdown overlays the tiles. */
-  position: relative;
-  z-index: 20;
-  background: var(--surface);
-}
-
-.workspace__title {
-  margin: 0;
-  font-size: 1.25rem;
-  letter-spacing: -0.02em;
-}
-
-.workspace__brand {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-/* Sync status light (see src/sync/SyncStatusLight.tsx). */
-.sync-light {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.sync-light--pending {
-  background: var(--muted);
-}
-
-.sync-light--connected {
-  background: #4ade80;
-}
-
-.sync-light--disconnected {
-  background: var(--danger);
-}
-
-:root[data-theme="light"] .sync-light--connected {
-  background: #16a34a;
-}
-
-.workspace__actions {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.workspace__canvas {
-  flex: 1;
-  padding: 0.75rem;
-  position: relative;
-}
-
-/* Add-module dropdown */
-.add-menu {
-  position: relative;
-}
-
-.add-menu__trigger {
-  font-size: 1.2rem;
-  line-height: 1;
-  padding: 0.3rem 0.65rem;
-}
-
-.add-menu__list {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 0.35rem);
-  z-index: 30;
-  min-width: 11rem;
-  margin: 0;
-  padding: 0.25rem;
-  list-style: none;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-}
-
-.add-menu__item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 0.5rem 0.6rem;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-size: 0.9rem;
-  border-radius: calc(var(--radius) - 2px);
-  cursor: pointer;
-}
-
-.add-menu__item:hover {
-  background: var(--bg);
-}
-
-.workspace__empty {
-  padding-top: 3rem;
-}
-
-.workspace__item {
-  height: 100%;
-}
-
-/* Module card chrome */
-.module-frame {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-
-.module-frame__bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.4rem 0.4rem 0.4rem 0.75rem;
-  border-bottom: 1px solid var(--border);
-  cursor: move;
-  user-select: none;
-}
-
-.module-frame__title {
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
-.module-frame__close {
-  cursor: pointer;
-}
-
-.module-frame__body {
-  flex: 1;
-  padding: 0.9rem;
-  overflow: auto;
-}
-
-/* Grid placeholder shown while dragging/resizing */
-/* Scoped under .workspace so it outranks react-grid-layout's own
-   `.react-grid-item.react-grid-placeholder { background: red }` (same specificity,
-   loaded later) instead of tying with it. */
-.workspace .react-grid-item.react-grid-placeholder {
-  background: #ab13ab;
-  border-radius: var(--radius);
-}
-
-/* Make the resize handle discoverable. The bundled CSS keeps it at opacity 0
-   until hover and draws a dark arrow that vanishes on a dark surface, so show a
-   faint handle always (full on hover) and tint the arrow with the theme. Scoped
-   under .workspace to outrank the bundled rule, which is imported afterwards. */
-.workspace .react-grid-item > .react-resizable-handle {
-  opacity: 0.35;
-}
-
-.workspace .react-grid-item:hover > .react-resizable-handle {
-  opacity: 1;
-}
-
-.workspace .react-grid-item > .react-resizable-handle::after {
-  border-right-color: var(--muted);
-  border-bottom-color: var(--muted);
-}
-
 /* Add-task form */
 .add-form {
   display: flex;
@@ -296,6 +114,73 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* Tasks, compact (the dock card). A glance at what's outstanding — no controls,
+   since every action lives in the expanded view. */
+.tasks-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.tasks-compact__counts {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.tasks-compact__done {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.tasks-compact__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.tasks-compact__item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.tasks-compact__dot {
+  flex: none;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.tasks-compact__dot--low {
+  color: var(--prio-low);
+}
+.tasks-compact__dot--medium {
+  color: var(--prio-medium);
+}
+.tasks-compact__dot--high {
+  color: var(--prio-high);
+}
+
+/* One line per task: the card is narrow, so clip rather than wrap. */
+.tasks-compact__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-compact__more {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
 }
 
 .task {

@@ -5,8 +5,8 @@ import { useAgent } from "./useAgent";
 
 // The assistant module: a status pill plus a chat against the embedded local
 // model (Tier 0). It can call task tools (see ../../agent/tools) and shows each
-// tool it ran inline. Card chrome (title bar, drag, resize, close) belongs to
-// the workspace ModuleFrame, so this renders only its inner content.
+// tool it ran inline. Card chrome (title bar, expand, close) belongs to the
+// shell — the dock card or the focus pane — so this renders only inner content.
 
 const TOOL_LABEL: Record<string, string> = {
   create_task: "Added task",

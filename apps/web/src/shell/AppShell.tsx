@@ -1,11 +1,14 @@
 import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { isFsAvailable } from "../fs/fsClient";
 import { AgentModule } from "../modules/agent/AgentModule";
 import { getModule, MODULES } from "../workspace/registry";
+import { isSplitView } from "../workspace/types";
 import { FileSidebar } from "./FileSidebar";
 import { MODULE_ICONS } from "./icons";
 import { Logo } from "./Logo";
 import { ModuleDock } from "./ModuleDock";
+import { ModuleSlot, type ModuleView } from "./ModuleSlot";
 import { ServerStatus } from "./ServerStatus";
 import "./shell.css";
 
@@ -66,6 +69,46 @@ export function AppShell() {
   // Whether the logo is currently held down — drives the fill-up feedback on the
   // mark (see .shell-logo--holding) while the hold-to-launcher timer runs.
   const [holding, setHolding] = useState(false);
+
+  // Whether the dock's tray is showing, reported up by ModuleDock. The compact
+  // views are rendered here, not in the dock, so this is where they can be left
+  // unrendered while the tray is shut.
+  const [dockOpen, setDockOpen] = useState(false);
+
+  // Modules are rendered *here*, and portalled into the slots that show them.
+  //
+  // Every module view renders into its own detached <div> — its "host" — which
+  // ModuleSlot then claims into the dock card or the focus pane. Rendering the
+  // views here rather than in place is what lets a split module's Provider (a
+  // React ancestor of both views) sit above them while their DOM lives in two
+  // different parts of the shell.
+  //
+  // Two arrangements, keyed off the registry entry:
+  //   split  — Provider wraps a compact and an expanded view, each with its own
+  //            host, both live at once: the dock card keeps a working summary
+  //            while the module is expanded.
+  //   single — one view with one host that *moves* between the dock and the
+  //            centre. Moving a DOM node doesn't remount the React tree
+  //            portalled into it, so the module keeps its state on the trip.
+  //
+  // Either way a module mounts once. Rendering <Component /> in both places
+  // instead would mount two independent copies — two Model Labs polling /lab/*
+  // on their own timers, each holding half of the user's form.
+  const hosts = useRef(new Map<string, HTMLDivElement>());
+
+  function moduleHost(id: string, view: ModuleView): HTMLDivElement {
+    const key = `${id}:${view}`;
+    let host = hosts.current.get(key);
+    if (!host) {
+      host = document.createElement("div");
+      // Layout-transparent: the host generates no box, so a view lays out
+      // inside a slot exactly as it would as a direct child, and the existing
+      // card CSS needs no changes.
+      host.style.display = "contents";
+      hosts.current.set(key, host);
+    }
+    return host;
+  }
 
   // Long-press bookkeeping for the logo. `holdTimer` fires the launcher return;
   // `didHold` tells the trailing click to stand down once a hold has handled it.
@@ -136,6 +179,12 @@ export function AppShell() {
     setOpenModuleIds((prev) => prev.filter((x) => x !== id));
     // If the removed module was center-focused, drop it back out of focus too.
     setFocusedId((curr) => (curr === id ? null : curr));
+    // Drop the module's hosts: closing is meant to discard it, so re-adding one
+    // gets fresh nodes and therefore a fresh instance. React still holds its own
+    // references while it unmounts the portals on the next render.
+    for (const key of hosts.current.keys()) {
+      if (key.startsWith(`${id}:`)) hosts.current.delete(key);
+    }
   }
 
   // Open a module in the centre: add it to the dock's open set and focus it.
@@ -147,7 +196,6 @@ export function AppShell() {
   }
 
   const focused = launched && focusedId ? getModule(focusedId) : null;
-  const FocusedComponent = focused?.Component;
 
   const minimized_ = launched && minimized;
   const dragged = draggingModule ? getModule(draggingModule) : null;
@@ -198,6 +246,40 @@ export function AppShell() {
 
       {launched && (
         <>
+          {/* The modules themselves. A flat, keyed list — opening or closing one
+              must not disturb the others, and must never reach the shell body
+              below (nesting each Provider around the rest of the tree would
+              remount the sidebar and the assistant on every add).
+
+              Mounted only while launched, so returning to the launcher still
+              tears them down rather than leaving them polling behind the
+              intro. */}
+          {openModuleIds.map((id) => {
+            const def = getModule(id);
+            if (!def) return null;
+
+            if (!isSplitView(def)) {
+              const Component = def.Component;
+              return createPortal(<Component />, moduleHost(id, "single"), id);
+            }
+
+            // The Provider owns the state both views read; each view is
+            // portalled to its own slot, and rendered only while it can be seen
+            // — the compact view while the dock's tray is open, the expanded one
+            // while focused. Both are pure projections of the Provider, so
+            // dropping and rebuilding them loses nothing; the Provider itself
+            // stays mounted and keeps the module live either way.
+            const { Provider, Compact, Expanded } = def;
+            return (
+              <Provider key={id}>
+                {dockOpen &&
+                  createPortal(<Compact />, moduleHost(id, "compact"))}
+                {focusedId === id &&
+                  createPortal(<Expanded />, moduleHost(id, "expanded"))}
+              </Provider>
+            );
+          })}
+
           <ServerStatus />
 
           <div className="shell__body">
@@ -212,7 +294,7 @@ export function AppShell() {
               {/* Both columns always render so grid-template-columns can animate
                   the swap; the focus column collapses to 0fr when unfocused. */}
               <section className="shell__focus">
-                {focused && FocusedComponent && (
+                {focused && (
                   <div className="focus-card">
                     <div className="focus-card__bar">
                       <span className="focus-card__title">
@@ -227,9 +309,13 @@ export function AppShell() {
                         ↙ Dock
                       </button>
                     </div>
-                    <div className="focus-card__body">
-                      <FocusedComponent />
-                    </div>
+                    <ModuleSlot
+                      className="focus-card__body"
+                      host={moduleHost(
+                        focused.id,
+                        isSplitView(focused) ? "expanded" : "single",
+                      )}
+                    />
                   </div>
                 )}
               </section>
@@ -279,6 +365,7 @@ export function AppShell() {
             openIds={openModuleIds}
             addableIds={ADDABLE_MODULE_IDS}
             focusedId={focusedId}
+            hostFor={moduleHost}
             onExpand={(id) => {
               // Expanding a module is the opposite of minimized — leave that
               // state so the chat isn't left collapsed under a focused module.
@@ -288,6 +375,7 @@ export function AppShell() {
             onAdd={addModule}
             onRemove={removeModule}
             dragActive={draggingModule !== null}
+            onTrayOpenChange={setDockOpen}
             onModuleDragStart={setDraggingModule}
             onModuleDragEnd={() => {
               setDraggingModule(null);
