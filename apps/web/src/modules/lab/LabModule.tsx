@@ -44,7 +44,8 @@ export const looksLocalPath = (v: string): boolean =>
   /^(~|\/|\\\\|[A-Za-z]:[\\/])/.test(v);
 
 // The Model Lab: fine-tune a model, export it, and benchmark it. Card chrome
-// belongs to the workspace ModuleFrame, so this renders only inner content.
+// belongs to the shell's dock card / focus pane, so this renders only inner
+// content.
 //
 // Scores from the two suite families are shown side by side and never averaged
 // — a model can gain reasoning ability while getting worse at calling

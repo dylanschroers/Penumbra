@@ -872,23 +872,17 @@
     transform 0.25s ease;
 }
 
-.dock:hover .dock__tray,
-.dock--pinned .dock__tray {
+/* One class, set from ModuleDock's `trayOpen`, covers every way the tray opens
+   (pointer on the dock, a pin, an in-flight drag). Deliberately not a `:hover`
+   rule: the shell also decides what to *mount* from that same flag, and a
+   CSS-only hover diverges from it whenever the dock moves under a still pointer
+   — which showed up as an open tray full of empty cards. See the note beside
+   `hovered` in ModuleDock. */
+.dock--open .dock__tray {
   max-height: 15rem;
   padding: 0.85rem 1rem;
   opacity: 1;
   transform: translateY(0);
-}
-
-/* Force the tray shut right after expanding a module, overriding :hover (same
-   specificity, so this must come after the open rule to win). Cleared when the
-   pointer leaves the dock, so a later hover reopens it normally. */
-.dock--stowed .dock__tray {
-  max-height: 0;
-  padding-top: 0;
-  padding-bottom: 0;
-  opacity: 0;
-  transform: translateY(0.5rem);
 }
 
 /* Standardized brief card: every dock card is the same footprint regardless of
@@ -968,6 +962,22 @@
   padding: 0.6rem;
   overflow: auto;
   font-size: 0.85rem;
+}
+
+/* Stands in for the module while it is expanded to the centre — same footprint
+   as the body it replaces, so the card doesn't resize as it hands the module
+   over. Use the card's ⤢/▣ button to bring it back. */
+.dock-card__away {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.6rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 /* ---- Add-module card --------------------------------------------------- */

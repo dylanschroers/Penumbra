@@ -1,53 +1,36 @@
 import { AgentModule } from "../modules/agent/AgentModule";
 import { ColorPickerModule } from "../modules/color/ColorPickerModule";
 import { LabModule } from "../modules/lab/LabModule";
-import { TasksModule } from "../modules/tasks/TasksModule";
+import {
+  TasksCompact,
+  TasksExpanded,
+  TasksProvider,
+} from "../modules/tasks/TasksModule";
 import { WeatherModule } from "../modules/weather/WeatherModule";
 import type { ModuleDefinition } from "./types";
 
 // The module registry. Adding a future module (weather, notes, …) is one entry
-// here plus its component — the canvas, the "add module" menu, and persistence
-// all pick it up automatically.
+// here plus its component — the shell's dock and its "add module" card pick it
+// up automatically. The shell sizes modules from CSS, so an entry carries no
+// geometry.
+//
+// An entry takes one of two shapes (see ./types): a single `Component` that the
+// shell moves between the dock and the centre, or the split `Provider` +
+// `Compact` + `Expanded`, which keeps a live dock summary alongside the
+// expanded module. Tasks is the worked example of the split; the rest are still
+// single-view and get converted as their compact designs land.
 export const MODULES: ModuleDefinition[] = [
   {
     id: "tasks",
     title: "Tasks",
-    // Widths are in 24-col units (see COLS in Workspace.tsx): 8/24 == a third of
-    // the canvas, same as the old 4/12, but it can now snap at half-column steps.
-    defaultSize: { w: 8, h: 6 },
-    minSize: { w: 6, h: 3 },
-    Component: TasksModule,
+    Provider: TasksProvider,
+    Compact: TasksCompact,
+    Expanded: TasksExpanded,
   },
-  {
-    id: "color",
-    title: "Color Picker",
-    // Sized to fit the static 180px wheel plus the slider and hex row.
-    defaultSize: { w: 6, h: 9 },
-    minSize: { w: 5, h: 8 },
-    Component: ColorPickerModule,
-  },
-  {
-    id: "weather",
-    title: "Weather",
-    defaultSize: { w: 7, h: 8 },
-    minSize: { w: 6, h: 7 },
-    Component: WeatherModule,
-  },
-  {
-    id: "lab",
-    title: "Model Lab",
-    // Wide: the benchmark table compares runs side by side.
-    defaultSize: { w: 12, h: 10 },
-    minSize: { w: 8, h: 8 },
-    Component: LabModule,
-  },
-  {
-    id: "agent",
-    title: "Assistant",
-    defaultSize: { w: 8, h: 10 },
-    minSize: { w: 6, h: 7 },
-    Component: AgentModule,
-  },
+  { id: "color", title: "Color Picker", Component: ColorPickerModule },
+  { id: "weather", title: "Weather", Component: WeatherModule },
+  { id: "lab", title: "Model Lab", Component: LabModule },
+  { id: "agent", title: "Assistant", Component: AgentModule },
 ];
 
 /** Look up a module definition by id. */
