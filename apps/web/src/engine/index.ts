@@ -12,8 +12,13 @@ import type {
   Engine,
   ToolBindings,
 } from "@penumbra/shared";
-import { migrateStorageKey, STORAGE_NAMESPACE } from "@penumbra/shared";
-import { AGENT_SYSTEM, runTool, toolSpecs } from "../agent/tools";
+import {
+  composeSystem,
+  migrateStorageKey,
+  STORAGE_NAMESPACE,
+} from "@penumbra/shared";
+import { cachedPersona } from "../agent/prompt";
+import { runTool, toolSpecs } from "../agent/tools";
 import { LocalEngine } from "./LocalEngine";
 import { RemoteEngine } from "./RemoteEngine";
 
@@ -32,10 +37,16 @@ export { LocalEngine, type LocalEngineConfig } from "./LocalEngine";
 export { RemoteEngine, type RemoteEngineConfig } from "./RemoteEngine";
 
 /** Tier 0 runs tools in the browser, against the client's own store. Tier 1
- *  binds nothing here — the server owns its own tools. */
+ *  binds nothing here — the server owns its own tools.
+ *
+ *  `system` is a getter, not a value: runAgent reads it at the start of every
+ *  turn, so an edited persona takes effect on the next message rather than the
+ *  next reload. Freezing it here is what would make the two tiers drift. */
 const clientBindings: ToolBindings = {
   tools: toolSpecs,
-  system: AGENT_SYSTEM,
+  get system() {
+    return composeSystem(cachedPersona());
+  },
   runTool,
 };
 
