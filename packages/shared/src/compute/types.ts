@@ -60,6 +60,19 @@ export const assignInput = z.object({
   target: targetId,
 });
 
+/**
+ * Body for making a model resident on a target.
+ *
+ * `variant` is a GGUF quantization label. Optional because a repo names its own
+ * default and resolving it server-side keeps the picker to one choice; sent
+ * when the caller wants a specific one, which on a small card is the difference
+ * between fitting in VRAM and not.
+ */
+export const loadModelInput = z.object({
+  model: z.string().min(1),
+  variant: z.string().optional(),
+});
+
 export type TargetId = z.infer<typeof targetId>;
 export type ComputeRole = z.infer<typeof computeRole>;
 export type TargetState = z.infer<typeof targetState>;
@@ -67,3 +80,4 @@ export type ComputeTarget = z.infer<typeof computeTarget>;
 export type ComputeState = z.infer<typeof computeState>;
 export type TargetConfigInput = z.infer<typeof targetConfigInput>;
 export type AssignInput = z.infer<typeof assignInput>;
+export type LoadModelInput = z.infer<typeof loadModelInput>;

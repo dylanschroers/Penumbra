@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { StudioClient } from "../lab/studio";
 import { registerComputeRoutes } from "./routes";
 import { createTargetStore, type TargetStore } from "./targets";
 
@@ -30,6 +31,168 @@ const local = (body: { targets: { id: string }[] }) =>
   body.targets.find((t) => t.id === "local");
 const colab = (body: { targets: { id: string }[] }) =>
   body.targets.find((t) => t.id === "colab");
+
+// Changing which model a target serves, from the panel that already says which
+// target answers. One GPU holds one model, so a load is always a replacement —
+// which is why the route reports what Studio ended up with rather than echoing
+// what was asked for.
+describe("model loading", () => {
+  /** Rebuild the app with a Studio stand-in for the local target. */
+  async function withStudio(over: Record<string, unknown>) {
+    await app.close();
+    app = Fastify();
+    registerComputeRoutes(app, {
+      targets,
+      makeClient: () =>
+        ({
+          probe: async () => "ready",
+          loadedModel: async () => "resident-model",
+          listLocalModels: async () => [],
+          ggufVariants: async () => ({
+            variants: [],
+            defaultVariant: "Q4_K_M",
+          }),
+          loadModel: async () => {},
+          ...over,
+        }) as unknown as StudioClient,
+    });
+    await app.ready();
+    return app;
+  }
+
+  it("lists a target's models and marks the resident one", async () => {
+    const app = await withStudio({
+      listLocalModels: async () => [
+        {
+          id: "a/gguf",
+          load_id: "a/gguf",
+          display_name: "A",
+          size_bytes: 7_000_000_000,
+          model_format: "gguf",
+          capabilities: { can_chat: true, requires_variant: true },
+        },
+        {
+          id: "resident-model",
+          load_id: "resident-model",
+          display_name: "Resident",
+          size_bytes: 1_000_000_000,
+          model_format: "gguf",
+          capabilities: { can_chat: true, requires_variant: true },
+        },
+      ],
+    });
+
+    const body = (
+      await app.inject({ url: "/compute/targets/local/models" })
+    ).json();
+    expect(body.models).toHaveLength(2);
+    expect(body.models[0]).toMatchObject({
+      id: "a/gguf",
+      loaded: false,
+      requiresVariant: true,
+    });
+    expect(body.models[1]).toMatchObject({
+      id: "resident-model",
+      loaded: true,
+    });
+  });
+
+  it("loads a model and reports what the backend ended up serving", async () => {
+    const loads: [string, string | undefined][] = [];
+    const app = await withStudio({
+      loadModel: async (m: string, v?: string) => {
+        loads.push([m, v]);
+      },
+      loadedModel: async () => "a/gguf",
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/load",
+      payload: { model: "a/gguf" },
+    });
+    expect(res.statusCode).toBe(200);
+    // Not echoed from the request: Studio is the authority on what it serves.
+    expect(res.json()).toEqual({ loaded: "a/gguf" });
+    // A GGUF repo holds several quants and Studio will not choose, so its own
+    // default is resolved on the way through.
+    expect(loads).toEqual([["a/gguf", "Q4_K_M"]]);
+  });
+
+  it("honours an explicit variant instead of the default", async () => {
+    const loads: [string, string | undefined][] = [];
+    const app = await withStudio({
+      loadModel: async (m: string, v?: string) => {
+        loads.push([m, v]);
+      },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/load",
+      payload: { model: "a/gguf", variant: "UD-Q8_K_XL" },
+    });
+    expect(loads).toEqual([["a/gguf", "UD-Q8_K_XL"]]);
+  });
+
+  // "It did not load" with no reason sends you to Studio's logs for something
+  // this call already knows.
+  it("reports why a load failed", async () => {
+    const app = await withStudio({
+      loadModel: async () => {
+        throw new Error("studio /api/inference/load responded 500: OOM");
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/load",
+      payload: { model: "too-big" },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: "load_failed" });
+    expect(res.json().message).toContain("OOM");
+  });
+
+  it("refuses a target with no address", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/colab/load",
+      payload: { model: "anything" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("not_configured");
+  });
+
+  it("404s an unknown target and 400s a bodyless load", async () => {
+    expect(
+      (await app.inject({ url: "/compute/targets/lambda/models" })).statusCode,
+    ).toBe(404);
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/load",
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("is gated with the rest of the compute surface", async () => {
+    const gated = Fastify();
+    registerComputeRoutes(gated, { targets, token: "secret" });
+    await gated.ready();
+    expect(
+      (await gated.inject({ url: "/compute/targets/local/models" })).statusCode,
+    ).toBe(401);
+    expect(
+      (
+        await gated.inject({
+          method: "POST",
+          url: "/compute/targets/local/load",
+          payload: { model: "x" },
+        })
+      ).statusCode,
+    ).toBe(401);
+    await gated.close();
+  });
+});
 
 describe("auth", () => {
   // Same class of endpoint as /lab and /agent: it decides where a model runs.

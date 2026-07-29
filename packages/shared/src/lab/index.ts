@@ -1,6 +1,8 @@
 export { looksLocalPath } from "./paths";
 export { findSuite, SUITES, type SuiteDefinition } from "./suites";
 export {
+  type AvailableModel,
+  availableModel,
   type BenchmarkRequest,
   type BenchmarkResult,
   benchmarkRequest,

@@ -114,6 +114,37 @@ describe("jobs", () => {
   });
 });
 
+// Nothing survives a restart except the rows, so a job left mid-flight names a
+// process that no longer exists. Left alone it claims to be running forever,
+// which wedged the Lab in practice: the form disables itself while a job runs,
+// so one orphan blocked every later run, and Cancel could not clear it because
+// the controller had died with the process holding it.
+describe("orphaned jobs on startup", () => {
+  /** A store over a database that already holds a job in `state`. */
+  function reopenWith(state: string) {
+    const db = new Database(":memory:");
+    const first = createLabStore(db);
+    const job = first.createJob("benchmark");
+    first.updateJob(job.id, { state: state as never, detail: "48%" });
+    // A second store over the same file is what a restart looks like.
+    return { store: createLabStore(db), id: job.id };
+  }
+
+  it.each(["running", "queued"])("fails a %s job left behind", (state) => {
+    const { store, id } = reopenWith(state);
+    const job = store.getJob(id);
+    expect(job?.state).toBe("failed");
+    expect(job?.error).toContain("Interrupted");
+  });
+
+  // Only the unsettled ones. A finished job is a record, and rewriting it would
+  // destroy the outcome it exists to report.
+  it.each(["done", "failed", "cancelled"])("leaves a %s job alone", (state) => {
+    const { store, id } = reopenWith(state);
+    expect(store.getJob(id)?.state).toBe(state);
+  });
+});
+
 describe("runs", () => {
   it("records artifacts as each stage produces them", () => {
     const job = store.createJob("finetune");

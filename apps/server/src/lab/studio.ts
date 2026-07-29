@@ -1,6 +1,7 @@
 import { openAsBlob } from "node:fs";
 import { basename } from "node:path";
 import {
+  type AvailableModel,
   type ModelCatalogEntry,
   normalizeBaseUrl,
   pickLoadedModel,
@@ -36,6 +37,70 @@ export interface StudioRun {
    *  way (see `startTraining`'s caller). */
   status?: string;
   error_message?: string | null;
+}
+
+/** One row of Studio's local inventory. Only the fields we consume are typed;
+ *  `load_id` is the identifier to hand back to load or train, which is not
+ *  always the display id. */
+export interface StudioLocalModel {
+  id?: string;
+  load_id?: string;
+  display_name?: string;
+  size_bytes?: number;
+  model_format?: string;
+  capabilities?: { can_chat?: boolean; requires_variant?: boolean };
+}
+
+/**
+ * Studio's id scheme for a model discovered in an Ollama store.
+ *
+ * These are filtered out of the listings, because Studio cannot load one. Its
+ * inventory hands out these opaque references, and its own load route never
+ * decodes them: `materialize_ollama_model_ref` in
+ * hub/services/models/ollama.py exists for exactly this and, per that module's
+ * own docstrings, is what "the load route later calls" — but nothing anywhere
+ * calls it, and routes/inference.py does not mention ollama at all. Sent one,
+ * Studio treats the whole string as a path, fails to read config.json, selects
+ * the transformers runtime for what its own listing calls a GGUF, and dies in
+ * AutoConfig. Offering a model that cannot load is worse than not offering it.
+ *
+ * Drop this filter if a later Studio wires the resolver up.
+ */
+const OLLAMA_REF_PREFIX = "ollama-manifest:";
+
+/** One quantization of a GGUF repo. `downloaded` is the difference between
+ *  loading in seconds and pulling gigabytes first. */
+export interface GgufVariant {
+  quant?: string;
+  filename?: string;
+  size_bytes?: number;
+  downloaded?: boolean;
+}
+
+/**
+ * Map Studio's inventory to the wire shape the pickers use.
+ *
+ * Shared by the two routes that offer models — the benchmark form's, resolved
+ * by role, and the compute panel's, resolved by target — so the two cannot
+ * disagree about what a model is called or which one is resident.
+ */
+export function toAvailableModels(
+  models: StudioLocalModel[],
+  served: string | null,
+): AvailableModel[] {
+  return models.map((m) => {
+    const id = m.load_id ?? m.id ?? "";
+    return {
+      id,
+      label: m.display_name ?? id,
+      format: m.model_format ?? "unknown",
+      sizeBytes: m.size_bytes ?? 0,
+      requiresVariant: m.capabilities?.requires_variant ?? false,
+      // Compared on the served id, which is what /v1/models reports and what a
+      // score is recorded against.
+      loaded: !!served && (id === served || m.id === served),
+    };
+  });
 }
 
 /** Where to publish an export, so it outlives the machine that produced it.
@@ -176,6 +241,82 @@ export class StudioClient {
   async loadedModel(): Promise<string | null> {
     const body = await this.json<{ data?: ModelCatalogEntry[] }>("/v1/models");
     return pickLoadedModel(body.data ?? []) ?? null;
+  }
+
+  /**
+   * Every model this Studio can serve: its own models dir, the HuggingFace
+   * cache, LM Studio, and Ollama, all in one listing.
+   *
+   * A different question from `/v1/models`, which reports what is *resident*.
+   * This is what could be, which is what a picker needs — and the two together
+   * are what let one say which of the offered models is the one a run would
+   * actually measure.
+   *
+   * Only chat-capable rows are returned: a benchmark drives a chat endpoint, so
+   * a base model that cannot hold a conversation is not a candidate. Verified
+   * against hub/routes/inventory.py → GET /api/hub/local.
+   */
+  async listLocalModels(): Promise<StudioLocalModel[]> {
+    const body = await this.json<{ models?: StudioLocalModel[] }>(
+      "/api/hub/local",
+    );
+    return (body.models ?? []).filter(
+      (m) =>
+        m.capabilities?.can_chat !== false &&
+        !(m.load_id ?? m.id ?? "").startsWith(OLLAMA_REF_PREFIX),
+    );
+  }
+
+  /**
+   * The quantizations a GGUF repo offers, and which one Studio would pick.
+   *
+   * Answered from the local cache when possible: the alternative reaches the
+   * HuggingFace API, and this runs on the way to a load that is about to read
+   * those same files off disk anyway.
+   */
+  async ggufVariants(
+    repoId: string,
+  ): Promise<{ variants: GgufVariant[]; defaultVariant?: string }> {
+    const q = new URLSearchParams({
+      repo_id: repoId,
+      prefer_local_cache: "true",
+      offline: "true",
+    });
+    const body = await this.json<{
+      variants?: GgufVariant[];
+      default_variant?: string;
+    }>(`/api/hub/gguf-variants?${q}`);
+    return {
+      variants: body.variants ?? [],
+      defaultVariant: body.default_variant,
+    };
+  }
+
+  /**
+   * Make a model resident, so completions run against it.
+   *
+   * One GPU holds one model, so this *evicts* whatever was loaded — including
+   * the model a conversation has been talking to (docs/MODEL_LAB.md → Compute
+   * targets). The caller is expected to know that; the transcript marker is what
+   * tells the user.
+   *
+   * A GGUF repo holds several quantizations and Studio will not guess between
+   * them, so one is resolved here when the caller did not name it. Weights page
+   * in from disk before this answers, which for a large model is minutes, hence
+   * the timeout far past the default.
+   */
+  async loadModel(modelPath: string, variant?: string): Promise<void> {
+    await this.json(
+      "/api/inference/load",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          model_path: modelPath,
+          ...(variant ? { gguf_variant: variant } : {}),
+        }),
+      },
+      AbortSignal.timeout(15 * 60_000),
+    );
   }
 
   /**

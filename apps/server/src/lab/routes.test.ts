@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import Fastify, { type FastifyInstance } from "fastify";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTargetStore, type TargetStore } from "../compute/targets";
 import { createLabStore, type LabStore } from "./jobs";
 import { registerLabRoutes } from "./routes";
@@ -31,6 +31,7 @@ function fakeStudio(over: Partial<StudioClient> = {}): StudioClient {
     listRuns: async () => [],
     async *trainingProgress() {},
     loadCheckpoint: async () => {},
+    listLocalModels: async () => [],
     // A real export advances the op counter when it finishes.
     exportGguf: async () => {
       opSeq += 1;
@@ -878,6 +879,197 @@ describe("POST /lab/export", () => {
     await new Promise((r) => setTimeout(r, 150));
     expect(store.getJob(jobId)?.state).toBe("running");
     expect(store.getRun(run.id)?.ggufPath).toBeNull();
+  });
+});
+
+// Stopping a run you started by mistake. The suites already honour a signal —
+// the personal loop checks it per case, the general one SIGTERMs lm_eval — so
+// what is tested here is that a controller reaches them and that the outcome is
+// recorded as a deliberate stop rather than a break.
+describe("POST /lab/jobs/:id/cancel", () => {
+  /** Start a benchmark and hand back its job id. */
+  async function startBenchmark(app: FastifyInstance) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/benchmark",
+      payload: {
+        model: "loaded-model",
+        suite: "penumbra-tools-v1",
+        samplesPerTask: 50,
+      },
+    });
+    expect(res.statusCode).toBe(202);
+    return res.json().jobId as string;
+  }
+
+  it("stops a running benchmark and records it as cancelled", async () => {
+    // Accepts the request and never answers, so the run is genuinely in flight
+    // when the cancel lands. A refused port would finish first and the test
+    // would pass or fail on a race rather than on the behaviour.
+    const hanging = createServer(() => {});
+    const url = await new Promise<string>((resolve) =>
+      hanging.listen(0, "127.0.0.1", () =>
+        resolve(`http://127.0.0.1:${(hanging.address() as AddressInfo).port}`),
+      ),
+    );
+
+    try {
+      const app = await build(fakeStudio(), undefined, undefined, url);
+      const id = await startBenchmark(app);
+      await vi.waitFor(async () => {
+        const job = (await app.inject({ url: `/lab/jobs/${id}` })).json();
+        expect(job.state).toBe("running");
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/lab/jobs/${id}/cancel`,
+      });
+      expect(res.statusCode).toBe(202);
+
+      // The signal reaches the in-flight fetch, so this settles rather than
+      // waiting out a request that was never going to answer.
+      await vi.waitFor(async () => {
+        const job = (await app.inject({ url: `/lab/jobs/${id}` })).json();
+        expect(job.state).toBe("cancelled");
+      });
+
+      // A partial suite is not a result; nothing may be written for one.
+      expect((await app.inject({ url: "/lab/scores" })).json()).toEqual([]);
+    } finally {
+      hanging.closeAllConnections();
+      await new Promise<void>((r) => hanging.close(() => r()));
+    }
+  });
+
+  // A row can outlive the process that owned it, and the user's instinct is to
+  // press Cancel. Answering 409 there left the job "running" forever, blocking
+  // every later run with no way out of the UI.
+  it("clears a job whose process is gone rather than refusing", async () => {
+    const app = await build();
+    const orphan = store.createJob("benchmark");
+    store.updateJob(orphan.id, { state: "running" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/lab/jobs/${orphan.id}/cancel`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, reconciled: true });
+    expect(store.getJob(orphan.id)?.state).toBe("failed");
+  });
+
+  it("404s an unknown job", async () => {
+    const app = await build();
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/jobs/nope/cancel",
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("refuses a job that has already finished", async () => {
+    const app = await build();
+    const id = await startBenchmark(app);
+    await vi.waitFor(async () => {
+      const job = (await app.inject({ url: `/lab/jobs/${id}` })).json();
+      expect(["done", "failed"]).toContain(job.state);
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/lab/jobs/${id}/cancel`,
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("not_running");
+  });
+
+  it("is gated like the rest of the lab surface", async () => {
+    const app = await build(fakeStudio(), "secret");
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/jobs/any/cancel",
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
+// The picker's list. Free text here used to be a trap: Studio ignores the
+// `model` a request names and answers from whatever is resident, so a typo
+// returned a full score attributed to another model rather than an error.
+describe("GET /lab/models", () => {
+  const inventory = [
+    {
+      id: "unsloth/gemma-4-12b-it-GGUF",
+      load_id: "unsloth/gemma-4-12b-it-GGUF",
+      display_name: "gemma-4-12b-it",
+      size_bytes: 7_366_421_920,
+      model_format: "gguf",
+      capabilities: { can_chat: true, requires_variant: true },
+    },
+    {
+      id: "loaded-model",
+      load_id: "loaded-model",
+      display_name: "loaded-model",
+      size_bytes: 1_132_952_128,
+      model_format: "gguf",
+      capabilities: { can_chat: true, requires_variant: true },
+    },
+  ];
+
+  it("lists the target's models and marks the resident one", async () => {
+    const app = await build(
+      fakeStudio({ listLocalModels: async () => inventory }),
+    );
+    const body = (await app.inject({ url: "/lab/models" })).json();
+
+    expect(body.target).toBe("local");
+    expect(body.models.map((m: { id: string }) => m.id)).toEqual([
+      "unsloth/gemma-4-12b-it-GGUF",
+      "loaded-model",
+    ]);
+    // `loadedModel` is the fake's default, and is the only entry a benchmark
+    // would actually measure.
+    expect(
+      body.models.filter((m: { loaded: boolean }) => m.loaded),
+    ).toHaveLength(1);
+    expect(body.models[1]).toMatchObject({
+      loaded: true,
+      format: "gguf",
+      requiresVariant: true,
+      sizeBytes: 1_132_952_128,
+    });
+  });
+
+  // The form has to stay usable when the inventory cannot be read: an empty
+  // picker is recoverable, an error that blanks the Lab is not.
+  it("answers empty rather than failing when the target will not list", async () => {
+    const app = await build(
+      fakeStudio({
+        listLocalModels: async () => {
+          throw new Error("studio /api/hub/local responded 500");
+        },
+      }),
+    );
+    const res = await app.inject({ url: "/lab/models" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ target: "local", models: [] });
+  });
+
+  it("marks nothing loaded when the target has nothing resident", async () => {
+    const app = await build(
+      fakeStudio({
+        listLocalModels: async () => inventory,
+        loadedModel: async () => null,
+      }),
+    );
+    const body = (await app.inject({ url: "/lab/models" })).json();
+    expect(body.models.some((m: { loaded: boolean }) => m.loaded)).toBe(false);
+  });
+
+  it("is gated like the rest of the lab surface", async () => {
+    const app = await build(fakeStudio(), "secret");
+    expect((await app.inject({ url: "/lab/models" })).statusCode).toBe(401);
   });
 });
 

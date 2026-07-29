@@ -1,4 +1,9 @@
-import type { ComputeRole, ComputeState, TargetId } from "@penumbra/shared";
+import type {
+  AvailableModel,
+  ComputeRole,
+  ComputeState,
+  TargetId,
+} from "@penumbra/shared";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 
@@ -25,6 +30,15 @@ export interface Compute {
   ) => Promise<void>;
   clearTarget: (id: TargetId) => Promise<void>;
   assign: (role: ComputeRole, target: TargetId) => Promise<void>;
+  /** What each target can serve, keyed by target id. Empty until fetched. */
+  models: Partial<Record<TargetId, AvailableModel[]>>;
+  /** Fetch a target's inventory. Called when its card opens, not on the poll:
+   *  it reaches the target's disk and is far heavier than a reachability probe. */
+  loadModels: (id: TargetId) => Promise<void>;
+  /** Make a model resident there. Evicts whatever was loaded. */
+  loadModel: (id: TargetId, model: string) => Promise<void>;
+  /** The target with a load in flight, if any. */
+  loading: TargetId | null;
 }
 
 /**
@@ -35,6 +49,10 @@ export interface Compute {
 export function useCompute(enabled = true): Compute {
   const [state, setState] = useState<ComputeState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [models, setModels] = useState<
+    Partial<Record<TargetId, AvailableModel[]>>
+  >({});
+  const [loading, setLoading] = useState<TargetId | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -69,10 +87,49 @@ export function useCompute(enabled = true): Compute {
     [refresh],
   );
 
+  const loadModels = useCallback(async (id: TargetId) => {
+    try {
+      const body = await api<{ models: AvailableModel[] }>(
+        `/compute/targets/${id}/models`,
+      );
+      setModels((prev) => ({ ...prev, [id]: body.models }));
+    } catch {
+      // An inventory that will not answer leaves the picker empty; the card's
+      // own state already says why, and an error banner here would blame the
+      // wrong thing.
+      setModels((prev) => ({ ...prev, [id]: [] }));
+    }
+  }, []);
+
+  const loadModel = useCallback(
+    async (id: TargetId, model: string) => {
+      setLoading(id);
+      try {
+        await api(`/compute/targets/${id}/load`, {
+          method: "POST",
+          body: JSON.stringify({ model }),
+        });
+        setError(null);
+        // Re-read both: the pill's model and the list's "loaded" marker are the
+        // same fact, and refreshing one without the other shows them disagreeing.
+        await Promise.all([refresh(), loadModels(id)]);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setLoading(null);
+      }
+    },
+    [refresh, loadModels],
+  );
+
   return {
     state,
     error,
     refresh,
+    models,
+    loadModels,
+    loadModel,
+    loading,
     // Send only what changed: an omitted field keeps its current value, while
     // an empty apiKey is an explicit "no bearer".
     setTarget: (id, patch) =>

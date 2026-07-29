@@ -1,5 +1,5 @@
 import type { ComputeTarget, TargetId } from "@penumbra/shared";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import type { Compute } from "./useCompute";
 import "./compute.css";
 
@@ -49,6 +49,27 @@ function TargetCard({
 }) {
   const [baseURL, setBaseURL] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [pick, setPick] = useState("");
+
+  const models = compute.models[target.id];
+  const resident = models?.find((m) => m.loaded);
+  const busy = compute.loading === target.id;
+
+  // Fetched when the card can actually serve it, and not on the poll: this
+  // reaches the target's disk to enumerate models, which is far heavier than
+  // the reachability probe the poll already does.
+  useEffect(() => {
+    if (target.state === "ready" && models === undefined) {
+      void compute.loadModels(target.id);
+    }
+  }, [target.state, target.id, models, compute]);
+
+  // Follow the backend rather than holding a stale choice: a model loaded from
+  // elsewhere, or evicted, would otherwise leave this box naming something that
+  // is no longer what answers.
+  useEffect(() => {
+    if (resident) setPick(resident.id);
+  }, [resident]);
 
   function onSave(event: FormEvent) {
     event.preventDefault();
@@ -93,6 +114,57 @@ function TargetCard({
       </p>
 
       {hint && <p className="ct__hint">{hint}</p>}
+
+      {/* Which model this target is serving, and a way to change it. Only for a
+          target that is answering: a list from an unreachable Studio would be
+          stale, and loading into one is not a thing that can happen. */}
+      {target.state === "ready" && (
+        <div className="ct__models">
+          <label className="ct__models-label" htmlFor={`load-${target.id}`}>
+            Loaded model
+          </label>
+          <div className="ct__models-row">
+            <select
+              id={`load-${target.id}`}
+              value={pick}
+              disabled={busy || !models?.length}
+              onChange={(e) => setPick(e.target.value)}
+            >
+              {models === undefined && <option value="">Reading…</option>}
+              {models?.length === 0 && (
+                <option value="">No models on this target</option>
+              )}
+              {models?.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.loaded ? "● " : ""}
+                  {m.label} · {m.format}
+                  {m.sizeBytes > 0
+                    ? ` · ${(m.sizeBytes / 1e9).toFixed(1)} GB`
+                    : ""}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={busy || !pick || pick === resident?.id}
+              onClick={() => void compute.loadModel(target.id, pick)}
+              title="Load this model here, replacing whatever is loaded now"
+            >
+              {busy ? "Loading…" : "Load"}
+            </button>
+          </div>
+          {/* One GPU holds one model, so this is never additive. Said plainly
+              because the model being replaced may be the one a conversation is
+              part-way through. */}
+          <p className="ct__models-note">
+            {busy
+              ? "Weights are paging in; a large model takes a few minutes."
+              : resident
+                ? `Serving ${resident.label}. Loading another replaces it.`
+                : "Nothing loaded — chat and benchmarks have nothing to answer with."}
+          </p>
+        </div>
+      )}
 
       <form className="ct__form" onSubmit={onSave}>
         <input

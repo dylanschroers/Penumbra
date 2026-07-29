@@ -1,4 +1,5 @@
 import type {
+  AvailableModel,
   BenchmarkResult,
   FinetuneRequest,
   LabJob,
@@ -32,25 +33,37 @@ export interface LabStatus {
   suites: SuiteDefinition[];
 }
 
+/** What the benchmark target can serve, and which of it is resident. */
+export interface AvailableModels {
+  target: string;
+  models: AvailableModel[];
+}
+
 export function useLab() {
   const [status, setStatus] = useState<LabStatus | null>(null);
   const [jobs, setJobs] = useState<LabJob[]>([]);
   const [runs, setRuns] = useState<LabRun[]>([]);
   const [scores, setScores] = useState<BenchmarkResult[]>([]);
+  const [available, setAvailable] = useState<AvailableModels | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [s, j, r, sc] = await Promise.all([
+      const [s, j, r, sc, av] = await Promise.all([
         api<LabStatus>("/lab/status"),
         api<LabJob[]>("/lab/jobs"),
         api<LabRun[]>("/lab/runs"),
         api<BenchmarkResult[]>("/lab/scores"),
+        // Reaches the target's inventory, so it is the one call here that can
+        // be slow. A failure leaves the picker empty rather than blanking the
+        // whole Lab, which the other four would do.
+        api<AvailableModels>("/lab/models").catch(() => null),
       ]);
       setStatus(s);
       setJobs(j);
       setRuns(r);
       setScores(sc);
+      setAvailable(av);
       setError(null);
     } catch (err) {
       setStatus(null);
@@ -86,6 +99,7 @@ export function useLab() {
     jobs,
     runs,
     scores,
+    available,
     error,
     running: jobs.some((j) => j.state === "running"),
     finetune: (req: FinetuneRequest) => act("/lab/finetune", req),
@@ -95,6 +109,9 @@ export function useLab() {
     exportRun: (req: ExportRequestInput) => act("/lab/export", req),
     benchmark: (model: string, suite: string, samplesPerTask: number) =>
       act("/lab/benchmark", { model, suite, samplesPerTask }),
+    // Stops a running benchmark. No scores are written for a partial run, so
+    // cancelling costs the run and nothing else.
+    cancelJob: (id: string) => act(`/lab/jobs/${id}/cancel`, {}),
     // Transfer a client-local file to the Studio host and return the path there
     // to train from. Desktop only (needs disk access).
     uploadDataset: (localPath: string, onProgress?: UploadProgress) =>
