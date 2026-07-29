@@ -499,6 +499,91 @@ body {
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
 }
 
+/* The system prompt panel. Wider than the compute panel: it shows the fixed
+   policy in full, and a persona box you can actually read while editing. */
+.agent__popover:has(.prompt) {
+  width: min(32rem, 92vw);
+}
+
+.prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.prompt__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.prompt__label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+/* Shown, not hidden: seeing the prompt means seeing the half you cannot change.
+   Scrolls rather than growing, so the editor stays on screen beside it. */
+.prompt__policy {
+  margin: 0;
+  max-height: 8rem;
+  overflow-y: auto;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.prompt__input {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.prompt__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.prompt__count--over {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.prompt__hint {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.prompt__error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--danger);
+}
+
+.prompt__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
 /* A model change mid-thread. Reads as a rule across the conversation rather
    than as a turn, because it is the shell talking, not the assistant. */
 .agent__notice {

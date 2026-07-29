@@ -3,7 +3,9 @@
 import "./env";
 import cors from "@fastify/cors";
 import type { AgentEvent, ChatMessage, Engine } from "@penumbra/shared";
+import { composeSystem } from "@penumbra/shared";
 import Fastify from "fastify";
+import { createPromptStore } from "./agent/prompt";
 import { registerAgentRoutes } from "./agent/routes";
 import { createServerTools } from "./agent/tools";
 import { UnslothEngine } from "./agent/UnslothEngine";
@@ -51,6 +53,7 @@ registerComputeRoutes(app, { targets });
 // with no client in the turn loop (docs/SYNC.md → Server-side writes).
 const tasks = createServerTaskStore(sqlite, sync);
 const bindings = createServerTools(tasks);
+const prompts = createPromptStore(sqlite);
 
 // Built per call, from whichever target the chat role resolves to right now. An
 // engine is a URL, a key, and the bindings — constructing one opens no
@@ -62,9 +65,15 @@ const currentEngine: Engine = {
     chatEngine().runAgent(messages, signal) as AsyncGenerator<AgentEvent>,
 };
 function chatEngine(): UnslothEngine {
-  return new UnslothEngine({ bindings, ...targets.resolve("chat") });
+  // The persona is read here rather than captured with the bindings, for the
+  // same reason the credentials are: an edit must reach the next turn without a
+  // restart, and there is nothing to invalidate if nothing is cached.
+  return new UnslothEngine({
+    bindings: { ...bindings, system: composeSystem(prompts.current().persona) },
+    ...targets.resolve("chat"),
+  });
 }
-registerAgentRoutes(app, { engine: currentEngine, targets });
+registerAgentRoutes(app, { engine: currentEngine, targets, prompts });
 
 // Model Lab: fine-tuning, export, and benchmarking (docs/MODEL_LAB.md). Same
 // gate as the agent routes.

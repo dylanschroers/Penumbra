@@ -3,6 +3,7 @@ import { ComputeTargets } from "../../compute/ComputeTargets";
 import { useCompute } from "../../compute/useCompute";
 import { type AgentStatus, PROVIDERS } from "../../engine";
 import { Markdown } from "./Markdown";
+import { PromptPanel } from "./PromptPanel";
 import { useAgent } from "./useAgent";
 
 // The assistant module: a status pill plus a chat against the embedded local
@@ -60,9 +61,12 @@ function emptyHint(status: AgentStatus, provider: string): string {
 }
 
 export function AgentModule() {
-  const { messages, status, busy, send, provider, setProvider } = useAgent();
+  const { messages, status, busy, send, clear, provider, setProvider } =
+    useAgent();
   const [draft, setDraft] = useState("");
-  const [targetsOpen, setTargetsOpen] = useState(false);
+  // Two panels, one at a time: they open from adjacent controls and overlap.
+  const [panel, setPanel] = useState<"targets" | "prompt" | null>(null);
+  const targetsOpen = panel === "targets";
 
   // The pill is only a control for the server tier: Tier 0 runs the embedded
   // llama-server, which has no target to point anywhere.
@@ -72,15 +76,15 @@ export function AgentModule() {
   // asks the server about Studios it is not using.
   const compute = useCompute(canConfigure);
 
-  // Escape closes the panel, matching the backdrop click.
+  // Escape closes whichever panel is open, matching the backdrop click.
   useEffect(() => {
-    if (!targetsOpen) return;
+    if (!panel) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setTargetsOpen(false);
+      if (e.key === "Escape") setPanel(null);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [targetsOpen]);
+  }, [panel]);
 
   const ready = status.state === "ready";
 
@@ -117,7 +121,7 @@ export function AgentModule() {
           <button
             type="button"
             className={`agent__pill agent__pill--${status.state} agent__pill--action`}
-            onClick={() => setTargetsOpen((open) => !open)}
+            onClick={() => setPanel(targetsOpen ? null : "targets")}
             aria-haspopup="dialog"
             aria-expanded={targetsOpen}
             title="Configure compute targets"
@@ -131,21 +135,58 @@ export function AgentModule() {
           <StatusPill status={status} />
         )}
 
-        {targetsOpen && (
+        {/* The transcript is the model's context, so a thread that has gone
+            wrong stays wrong: every turn replays it, and a small model copies
+            its own earlier answer over the system prompt. Discarding it is the
+            only way out, which makes this a control and not a convenience. */}
+        <button
+          type="button"
+          className="agent__pill agent__pill--action"
+          onClick={clear}
+          disabled={messages.length === 0}
+          title="Discard this conversation and start a fresh one"
+        >
+          Clear
+        </button>
+
+        {/* Beside the pill because the two belong together: which model answers,
+            and what it is told to do. Available on every tier — the prompt is
+            shared, so editing it from a Tier-0 chat is not a category error. */}
+        <button
+          type="button"
+          className="agent__pill agent__pill--action"
+          onClick={() => setPanel(panel === "prompt" ? null : "prompt")}
+          aria-haspopup="dialog"
+          aria-expanded={panel === "prompt"}
+          title="View and edit the system prompt"
+        >
+          Prompt
+          <span className="agent__pill-caret" aria-hidden="true">
+            ▾
+          </span>
+        </button>
+
+        {panel && (
           <>
             {/* A transparent backdrop so a click anywhere outside dismisses. */}
             <button
               type="button"
               className="agent__popover-backdrop"
-              aria-label="Close compute targets"
-              onClick={() => setTargetsOpen(false)}
+              aria-label={
+                targetsOpen ? "Close compute targets" : "Close system prompt"
+              }
+              onClick={() => setPanel(null)}
             />
             <div
               className="agent__popover"
               role="dialog"
-              aria-label="Compute targets"
+              aria-label={targetsOpen ? "Compute targets" : "System prompt"}
             >
-              <ComputeTargets compute={compute} />
+              {targetsOpen ? (
+                <ComputeTargets compute={compute} />
+              ) : (
+                <PromptPanel />
+              )}
             </div>
           </>
         )}
