@@ -1,3 +1,4 @@
+import cors from "@fastify/cors";
 import type { AgentEvent, Engine } from "@penumbra/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -162,5 +163,34 @@ describe("POST /agent/chat", () => {
     expect(last?.[1]).toMatchObject({
       message: expect.stringContaining("studio responded 500"),
     });
+  });
+
+  // The stream writes to the raw socket, which bypasses everything Fastify
+  // queued on the reply. Without the merge in openSseStream, cors's header is
+  // dropped here and *only* here: /agent/status keeps working, the browser
+  // discards the chat response before any of it reaches the client, and the
+  // turn fails as "Failed to fetch" with nothing naming CORS. Asserted against
+  // the real plugin rather than a stub, since the bug was that the plugin's
+  // header never reached the socket.
+  it("keeps CORS headers on the event stream", async () => {
+    app = Fastify();
+    await app.register(cors, { origin: true });
+    registerAgentRoutes(app, { engine: fakeEngine([answer]) });
+    await app.ready();
+
+    const origin = "http://localhost:5173";
+    const stream = await app.inject({
+      method: "POST",
+      url: "/agent/chat",
+      headers: { origin },
+      payload: { messages: [{ role: "user", content: "hi" }] },
+    });
+    expect(stream.headers["access-control-allow-origin"]).toBe(origin);
+    // The stream's own headers still win, and the body is unaffected.
+    expect(stream.headers["content-type"]).toContain("text/event-stream");
+    expect(parseSse(stream.body)).toEqual([
+      ["agent", answer],
+      ["done", {}],
+    ]);
   });
 });

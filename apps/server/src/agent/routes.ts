@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { TargetStore } from "../compute/targets";
 import { requireAuth } from "../http/auth";
+import { openSseStream } from "../http/sse";
 
 // The Tier-1 agent's HTTP surface. Two routes: readiness for the status pill,
 // and a chat turn that streams tool runs as they happen.
@@ -60,11 +61,7 @@ export function registerAgentRoutes(
     // Server-Sent Events: one JSON event per line-pair. The turn is short and
     // non-streaming per step, but tool runs must surface as they happen rather
     // than all at once when the answer lands.
-    reply.raw.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    });
+    openSseStream(reply);
 
     // A client that disconnects must not leave a model generating and tools
     // firing. Partial effects stand — already-executed tool writes are not
