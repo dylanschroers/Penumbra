@@ -7,6 +7,8 @@ export {
   computeRole,
   computeState,
   computeTarget,
+  type LoadModelInput,
+  loadModelInput,
   type TargetConfigInput,
   type TargetId,
   type TargetState,

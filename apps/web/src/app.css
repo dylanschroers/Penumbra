@@ -1301,6 +1301,18 @@ body {
   color: var(--danger);
 }
 
+/* Muted, not red: a run stopped on purpose is not a failure, and colouring it
+   like one would send you looking for a bug you already know is not there. */
+.lab__job--cancelled .lab__job-state {
+  color: var(--muted);
+}
+
+.lab__job-cancel {
+  margin-left: auto;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.72rem;
+}
+
 .lab__job-detail {
   color: var(--muted);
   overflow: hidden;

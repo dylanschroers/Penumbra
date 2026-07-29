@@ -101,8 +101,17 @@ function When({ at, className }: { at: string; className: string }) {
   );
 }
 
-function JobLine({ job }: { job: LabJob }) {
+function JobLine({
+  job,
+  onCancel,
+}: {
+  job: LabJob;
+  onCancel?: (id: string) => void;
+}) {
   const pct = job.progress === null ? null : Math.round(job.progress * 100);
+  // Only a benchmark holds a controller server-side; offering it elsewhere
+  // would promise a stop the route answers with not_cancellable.
+  const stoppable = job.kind === "benchmark" && job.state === "running";
   return (
     <li className={`lab__job lab__job--${job.state}`}>
       <span className="lab__job-kind">{job.kind}</span>
@@ -110,6 +119,16 @@ function JobLine({ job }: { job: LabJob }) {
       {pct !== null && <span className="lab__job-pct">{pct}%</span>}
       <When at={job.updatedAt} className="lab__job-when" />
       <span className="lab__job-detail">{job.error ?? job.detail ?? ""}</span>
+      {stoppable && onCancel && (
+        <button
+          type="button"
+          className="lab__job-cancel"
+          onClick={() => onCancel(job.id)}
+          title="Stop this run. No scores are recorded for a partial benchmark."
+        >
+          Cancel
+        </button>
+      )}
     </li>
   );
 }
@@ -600,6 +619,8 @@ export function LabModule() {
   const [maxSteps, setMaxSteps] = useState(60);
   const [benchModel, setBenchModel] = useState("");
   const [suite, setSuite] = useState("penumbra-tools-v1");
+  const benchModels = lab.available?.models ?? [];
+  const benchLoaded = benchModels.find((m) => m.loaded);
   const [samples, setSamples] = useState(20);
   const [providerOpen, setProviderOpen] = useState(false);
   // Transfer state for the pre-run upload of a local model/dataset to the host.
@@ -622,6 +643,23 @@ export function LabModule() {
   const selected = suites.find((s) => s.id === suite);
   const lmEvalMissing =
     selected?.kind === "general" && lab.status?.lmEval === "missing";
+
+  /**
+   * Why the run button is disabled, or null when it is not.
+   *
+   * A greyed-out button with no explanation is a dead end: the commonest cause
+   * is another job still running, which is invisible from the form itself, and
+   * the second is a suite whose harness is not installed on the server.
+   */
+  const benchBlocked = !benchModels.length
+    ? "No models to benchmark. The target must be reachable with a model on it."
+    : !benchModel.trim()
+      ? "Pick a model to benchmark."
+      : lab.running
+        ? "Another job is running. Wait for it to finish, or cancel it below."
+        : lmEvalMissing
+          ? "This suite runs lm-evaluation-harness, which the server cannot find. See docs/EVAL.md §5, and set LM_EVAL_BIN if it is in a venv."
+          : null;
 
   // Where a fine-tune would land right now: local Studio when it's up, else the
   // Colab fallback if it's reachable. null means nothing can train. Read from
@@ -698,6 +736,15 @@ export function LabModule() {
       format,
     });
   }
+
+  // Preselect whatever is resident. Studio answers from that model no matter
+  // which id the request names, so it is the only choice that measures what it
+  // claims to; picking anything else is asking for a mislabeled row.
+  useEffect(() => {
+    if (benchModel) return;
+    const loaded = lab.available?.models.find((m) => m.loaded);
+    if (loaded) setBenchModel(loaded.id);
+  }, [benchModel, lab.available]);
 
   function onBenchmark(event: FormEvent) {
     event.preventDefault();
@@ -985,12 +1032,33 @@ export function LabModule() {
         <div className="lab__benchmarks">
           <Section id="benchmark-form" title="Run a benchmark" state={sections}>
             <form className="lab__form" onSubmit={onBenchmark}>
-              <input
+              {/* A list rather than a text field. Studio ignores the `model` it
+                  is sent and answers with whatever is resident, so a typo here
+                  never failed — it returned a full score attributed to another
+                  model. The options come from the target that would actually
+                  run it. */}
+              <select
                 aria-label="Model to benchmark"
-                placeholder="Model id"
                 value={benchModel}
                 onChange={(e) => setBenchModel(e.target.value)}
-              />
+              >
+                {benchModels.length === 0 && (
+                  <option value="">No models visible on this target</option>
+                )}
+                {benchModels.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.loaded ? "● " : ""}
+                    {m.label} · {m.format}
+                    {/* Ollama rows carry no size: Studio's scanner links the
+                        blob but never stats it, so 0 means "not reported"
+                        rather than "empty", and "0.0 GB" would read as a
+                        broken model. */}
+                    {m.sizeBytes > 0
+                      ? ` · ${(m.sizeBytes / 1e9).toFixed(1)} GB`
+                      : " · size not reported"}
+                  </option>
+                ))}
+              </select>
               <select
                 aria-label="Suite"
                 value={suite}
@@ -1011,12 +1079,31 @@ export function LabModule() {
                   onChange={(e) => setSamples(Number(e.target.value))}
                 />
               </label>
+              {/* The title carries the reason: a disabled control that does not
+                  say why leaves you guessing at a cause the form cannot show,
+                  most often a job still running from a previous attempt. */}
               <button
                 type="submit"
-                disabled={!benchModel.trim() || lab.running || lmEvalMissing}
+                disabled={benchBlocked !== null}
+                title={benchBlocked ?? "Run this suite against the model above"}
               >
                 {lmEvalMissing ? "lm-eval not installed" : "Run benchmark"}
               </button>
+              {benchBlocked && (
+                <p className="lab__library-note">{benchBlocked}</p>
+              )}
+              {/* Choosing here does not load anything: the target serves what
+                  it already has. Saying so beats letting a run come back
+                  labelled with one model and scored from another — the row
+                  records both, but by then it has cost you the run. */}
+              {benchLoaded && benchModel && benchModel !== benchLoaded.id && (
+                <p className="lab__library-note">
+                  {benchLoaded.label} is the model actually loaded, so it is
+                  what these scores would describe. Load{" "}
+                  {benchModel.split(/[\\/]/).pop()} in Studio first, or pick the
+                  loaded one.
+                </p>
+              )}
             </form>
           </Section>
 
@@ -1056,7 +1143,11 @@ export function LabModule() {
           and the last thing to have failed. The full history is the Runs tab. */}
       <ul className="lab__jobs">
         {lab.jobs.slice(0, 1).map((job) => (
-          <JobLine key={job.id} job={job} />
+          <JobLine
+            key={job.id}
+            job={job}
+            onCancel={(id) => void lab.cancelJob(id)}
+          />
         ))}
       </ul>
     </div>

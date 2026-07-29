@@ -175,6 +175,25 @@ CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
      FROM lab_scores ORDER BY at DESC, rowid ASC`,
   );
 
+  // Nothing survives a restart except the rows. A job left "running" or
+  // "queued" was owned by a process that no longer exists, so it cannot make
+  // progress, cannot be cancelled, and will never settle on its own — it just
+  // sits there claiming to be in flight. That was enough to wedge the Lab: the
+  // form disables itself while a job is running, so one orphan blocked every
+  // later run, and Cancel could not clear it because the controller died with
+  // the process that held it.
+  //
+  // Failed rather than cancelled: nobody stopped this, it was interrupted, and
+  // the same rule the export path already follows applies — a run is not done
+  // unless completion was actually reported.
+  db.prepare(
+    `UPDATE lab_jobs
+        SET state = 'failed',
+            error = 'Interrupted: the server restarted while this was running.',
+            updated_at = @now
+      WHERE state IN ('running', 'queued')`,
+  ).run({ now: new Date().toISOString() });
+
   return {
     createJob(kind, runId) {
       const id = randomUUID();

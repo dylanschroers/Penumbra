@@ -18,7 +18,12 @@ import { requireAuth } from "../http/auth";
 import { openSseStream } from "../http/sse";
 import { lmEvalAvailable, runBenchmark } from "./benchmark";
 import type { LabStore } from "./jobs";
-import { StudioClient, type StudioRun, TrainingBusyError } from "./studio";
+import {
+  StudioClient,
+  type StudioRun,
+  TrainingBusyError,
+  toAvailableModels,
+} from "./studio";
 import {
   computeNeed,
   dirFileSizes,
@@ -134,13 +139,25 @@ export function registerLabRoutes(
     };
   }
 
-  /** Run work in the background, keeping the job record current. The job row
-   *  is the source of truth: the client may be gone, and must still be able to
-   *  read what happened. */
+  /**
+   * Controllers for jobs that can still be stopped, keyed by job id.
+   *
+   * In memory rather than in the job row: a controller belongs to a running
+   * process in *this* server, so one that outlived a restart would name work
+   * nobody can reach. A job left running by a restart is already handled as a
+   * job whose progress simply stops.
+   */
+  const inFlight = new Map<string, AbortController>();
+
+  /** Run work in the background, keeping the job record current. The job row is
+   *  the source of truth: the client may be gone, and must still be able to read
+   *  what happened. A controller, when given, makes the job stoppable. */
   const runJob = (
     job: LabJob,
     work: (report: (patch: Partial<LabJob>) => void) => Promise<void>,
+    controller?: AbortController,
   ): void => {
+    if (controller) inFlight.set(job.id, controller);
     store.updateJob(job.id, { state: "running" });
     void work((patch) => store.updateJob(job.id, patch))
       .then(() => {
@@ -149,8 +166,69 @@ export function registerLabRoutes(
           store.updateJob(job.id, { state: "done", progress: 1 });
         }
       })
-      .catch((err) => store.failJob(job.id, err));
+      .catch((err) => {
+        // The work rejects either way, so the signal is what tells a deliberate
+        // stop from a break. Recorded as cancelled, with no scores written: a
+        // partial run is not a result, and half a suite recorded as a whole one
+        // is exactly the mislabeled row the rest of this file guards against.
+        if (controller?.signal.aborted) {
+          store.updateJob(job.id, {
+            state: "cancelled",
+            detail: "cancelled before it finished",
+          });
+          return;
+        }
+        store.failJob(job.id, err);
+      })
+      .finally(() => inFlight.delete(job.id));
   };
+
+  /**
+   * Stop a running job.
+   *
+   * Only the work that holds a controller can be stopped, which today is a
+   * benchmark: it owns its subprocess (or its own request loop) and killing it
+   * leaves nothing behind. Training is not cancellable here on purpose — the
+   * run belongs to Studio, so stopping it means telling Studio, and abandoning
+   * this side would leave a job row saying "cancelled" over a GPU still
+   * training.
+   */
+  app.post<{ Params: { id: string } }>(
+    "/lab/jobs/:id/cancel",
+    { preHandler },
+    async (req, reply) => {
+      const job = store.getJob(req.params.id);
+      if (!job) return reply.code(404).send({ error: "not_found" });
+      if (job.state !== "running" && job.state !== "queued") {
+        // Already finished: nothing to stop, and saying so beats reporting a
+        // success that did nothing.
+        return reply
+          .code(409)
+          .send({ error: "not_running", message: `job is ${job.state}` });
+      }
+      const controller = inFlight.get(job.id);
+      if (!controller) {
+        // Training holds no controller by design. Anything else claiming to run
+        // without one is an orphan whose process is gone — a restart mid-run,
+        // caught here rather than left to sit as a permanently "running" row
+        // that blocks the next run and refuses to be stopped.
+        if (job.kind === "benchmark") {
+          store.updateJob(job.id, {
+            state: "failed",
+            error: "Interrupted: the server restarted while this was running.",
+          });
+          return { ok: true, reconciled: true };
+        }
+        return reply.code(409).send({
+          error: "not_cancellable",
+          message: `a ${job.kind} job cannot be stopped from here`,
+        });
+      }
+      controller.abort();
+      // 202: the state flips when the work unwinds, not now.
+      return reply.code(202).send({ ok: true });
+    },
+  );
 
   // What the Lab needs that isn't compute: whether the general suite can run,
   // and what suites exist. Target addresses, keys, and readiness moved to
@@ -244,6 +322,33 @@ export function registerLabRoutes(
   app.get("/lab/jobs", { preHandler }, async () => store.listJobs());
   app.get("/lab/runs", { preHandler }, async () => store.listRuns());
   app.get("/lab/scores", { preHandler }, async () => store.listScores());
+
+  /**
+   * What the benchmark target can serve, for the picker.
+   *
+   * Read from the target a run would actually go to, not from "local": with
+   * benchmarking assigned to Colab, offering this host's models would name
+   * models that machine has never seen. An unreachable target answers with an
+   * empty list rather than an error — the form stays usable, and the pill
+   * already reports why nothing is there.
+   *
+   * `loaded` is the point of the endpoint as much as the list is. Studio serves
+   * whatever is resident regardless of the id sent, so the entry marked loaded
+   * is the one a benchmark would really measure.
+   */
+  app.get("/lab/models", { preHandler }, async () => {
+    const id = targets.effective("benchmark");
+    const client = clientFor(id);
+    if (!client) return { target: id, models: [] };
+
+    const [models, served] = await Promise.all([
+      client.listLocalModels().catch(() => []),
+      client.loadedModel().catch(() => null),
+    ]);
+    // Same mapping the compute panel's list goes through, so the two views of
+    // one inventory cannot disagree about a model's name or which is resident.
+    return { target: id, models: toAvailableModels(models, served) };
+  });
 
   app.get<{ Params: { id: string } }>(
     "/lab/jobs/:id",
@@ -598,28 +703,37 @@ export function registerLabRoutes(
     }
 
     const job = store.createJob("benchmark");
-    runJob(job, async (report) => {
-      report({
-        detail:
-          served === parsed.data.model
-            ? `benchmarking ${served} on ${targetId}`
-            : `benchmarking ${served} on ${targetId} (requested ${parsed.data.model})`,
-      });
-      // The scores describe `served`, wherever it ran. Carried into the record
-      // rather than only into a job line, because the comparison these feed is
-      // the whole point of keeping them.
-      const result = await runBenchmark({
-        model: parsed.data.model,
-        servedModel: served,
-        target: targetId,
-        suite,
-        samplesPerTask: parsed.data.samplesPerTask,
-        baseURL: inferenceURL ?? via.baseURL,
-        apiKey: via.apiKey,
-        onProgress: (line) => report({ detail: line.slice(0, 200) }),
-      });
-      store.recordScores(result);
-    });
+    // A benchmark is the one job worth stopping mid-flight: the wrong suite or
+    // the wrong sample count can otherwise tie up the GPU for an hour with a
+    // result nobody wants.
+    const controller = new AbortController();
+    runJob(
+      job,
+      async (report) => {
+        report({
+          detail:
+            served === parsed.data.model
+              ? `benchmarking ${served} on ${targetId}`
+              : `benchmarking ${served} on ${targetId} (requested ${parsed.data.model})`,
+        });
+        // The scores describe `served`, wherever it ran. Carried into the record
+        // rather than only into a job line, because the comparison these feed is
+        // the whole point of keeping them.
+        const result = await runBenchmark({
+          model: parsed.data.model,
+          servedModel: served,
+          target: targetId,
+          suite,
+          samplesPerTask: parsed.data.samplesPerTask,
+          baseURL: inferenceURL ?? via.baseURL,
+          apiKey: via.apiKey,
+          signal: controller.signal,
+          onProgress: (line) => report({ detail: line.slice(0, 200) }),
+        });
+        store.recordScores(result);
+      },
+      controller,
+    );
 
     return reply.code(202).send({ jobId: job.id });
   });
