@@ -15,6 +15,7 @@ import type {
   TargetStore,
 } from "../compute/targets";
 import { requireAuth } from "../http/auth";
+import { openSseStream } from "../http/sse";
 import { lmEvalAvailable, runBenchmark } from "./benchmark";
 import type { LabStore } from "./jobs";
 import { StudioClient, type StudioRun, TrainingBusyError } from "./studio";
@@ -262,11 +263,7 @@ export function registerLabRoutes(
       const job = store.getJob(req.params.id);
       if (!job) return reply.code(404).send({ error: "not_found" });
 
-      reply.raw.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
+      openSseStream(reply);
       let open = true;
       req.raw.on("close", () => {
         open = false;
