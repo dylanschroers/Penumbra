@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { SuiteDefinition } from "@penumbra/shared";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseLmEvalResults, runBenchmark } from "./benchmark";
+import { lmEvalEnv, parseLmEvalResults, runBenchmark } from "./benchmark";
 
 // The personal suite is driven against a real HTTP model server, so the request
 // shape and scoring are exercised end to end without a model. The general
@@ -148,6 +148,23 @@ describe("personal suite", () => {
       }),
     ).rejects.toThrow("responded 500");
     server.close();
+  });
+});
+
+// A POSIX box never sees this, which is exactly why it is pinned: the failure
+// is invisible off Windows and cost a full run to find.
+describe("lmEvalEnv", () => {
+  it("forces UTF-8 so the child can print its own summary table", () => {
+    const env = lmEvalEnv();
+    expect(env.PYTHONIOENCODING).toBe("utf-8");
+    expect(env.PYTHONUTF8).toBe("1");
+  });
+
+  it("passes the bearer through, defaulting to a placeholder", () => {
+    expect(lmEvalEnv("sk-real").OPENAI_API_KEY).toBe("sk-real");
+    // lm_eval's OpenAI client refuses to start without one, and a local Studio
+    // may legitimately have no key.
+    expect(lmEvalEnv().OPENAI_API_KEY).toBe("dummy");
   });
 });
 
