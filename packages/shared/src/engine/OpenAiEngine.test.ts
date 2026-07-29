@@ -56,12 +56,41 @@ function makeEngine(overrides: { maxToolSteps?: number } = {}) {
 /** For tests that never touch a tool. */
 const engine = makeEngine().engine;
 
-/** The JSON body of the nth fetch call. */
+/**
+ * The JSON body of the nth *chat* call.
+ *
+ * Indexed over chat calls rather than all fetches: a turn also reads /v1/models
+ * to learn which model is actually serving it, so counting raw calls would tie
+ * every assertion here to how many times the engine happens to probe.
+ */
 function bodyOf(call: number): Record<string, unknown> {
-  return JSON.parse(mockFetch.mock.calls[call]?.[1]?.body as string);
+  const chats = mockFetch.mock.calls.filter(
+    (c) => !String(c[0]).includes("/v1/models"),
+  );
+  return JSON.parse(chats[call]?.[1]?.body as string);
 }
 
-beforeEach(() => mockFetch.mockReset());
+/** Chat replies for the turn under test, in order. */
+let chatQueue: Response[] = [];
+
+/** Script the model's chat replies. The listing is answered separately. */
+function queueChat(...replies: Response[]): void {
+  chatQueue.push(...replies);
+}
+
+beforeEach(() => {
+  chatQueue = [];
+  mockFetch.mockReset();
+  // Routed by URL, not by call order. runAgent asks /v1/models what is loaded
+  // before it prompts, so an ordered queue would hand the listing a chat reply
+  // and shift every later assertion by one. Tests that care about the listing
+  // (getStatus, and the identity tests) override this with mockResolvedValue.
+  mockFetch.mockImplementation(async (url: string) =>
+    String(url).includes("/v1/models")
+      ? res({ data: [{ id: "test-model", loaded: true }] })
+      : (chatQueue.shift() ?? answerReply("")),
+  );
+});
 
 describe("getStatus", () => {
   it("reports ready with the loaded model id", async () => {
@@ -145,19 +174,95 @@ describe("getStatus", () => {
   });
 });
 
+// A model cannot know which weights are serving it, and a small one asked
+// outright will invent an answer that reads exactly like a real one — the bug
+// that had Qwen3-1.7B introducing itself as "Penumbra, developed by Anthropic".
+// Studio ignores the `model` field of a request, so the configured id is not the
+// answer either; only the listing is.
+describe("identity in the system prompt", () => {
+  /** The system message the turn actually sent. */
+  const systemSent = () =>
+    (bodyOf(0).messages as Array<{ role: string; content: string }>)[0]
+      ?.content;
+
+  it("tells the model which model and backend are serving it", async () => {
+    queueChat(answerReply("hi"));
+    await collect(engine.runAgent([{ role: "user", content: "x" }]));
+    expect(systemSent()).toContain("sys");
+    expect(systemSent()).toContain('running as the model "test-model"');
+    expect(systemSent()).toContain("test model backend");
+  });
+
+  // The configured id is a placeholder for Studio ("unsloth"), so stating it
+  // would be the same confident wrongness by a different route.
+  it("states the served id, not the configured one", async () => {
+    queueChat(answerReply("hi"));
+    await collect(engine.runAgent([{ role: "user", content: "x" }]));
+    expect(systemSent()).not.toContain('running as the model "m"');
+  });
+
+  // Better to say nothing than to assert an identity that may be wrong: the
+  // prompt already instructs the model to admit it does not know.
+  it("omits the line when the backend cannot be asked", async () => {
+    mockFetch.mockImplementation(async (url: string) =>
+      String(url).includes("/v1/models")
+        ? res({}, false, 503)
+        : answerReply("hi"),
+    );
+    await collect(engine.runAgent([{ role: "user", content: "x" }]));
+    expect(systemSent()).toBe("sys");
+  });
+
+  it("omits the line when nothing is loaded", async () => {
+    mockFetch.mockImplementation(async (url: string) =>
+      String(url).includes("/v1/models")
+        ? res({ data: [{ id: "on-disk", loaded: false }] })
+        : answerReply("hi"),
+    );
+    await collect(engine.runAgent([{ role: "user", content: "x" }]));
+    expect(systemSent()).toBe("sys");
+  });
+});
+
 describe("runAgent", () => {
   it("yields a single answer and strips <think> blocks", async () => {
-    mockFetch.mockResolvedValueOnce(answerReply("<think>secret</think>Hello"));
+    queueChat(answerReply("<think>secret</think>Hello"));
     const events = await collect(
       engine.runAgent([{ role: "user", content: "hi" }]),
     );
     expect(events).toEqual([{ kind: "answer", text: "Hello" }]);
   });
 
+  // The prompt forbids emoji, but a small model appends one anyway the moment a
+  // reply turns warm, so the answer is cleaned rather than trusted.
+  it.each([
+    ["Hello! How can I help? 😊", "Hello! How can I help?"],
+    ["Done ✅ and saved", "Done and saved"],
+    ["Nice work 👍🏽 today", "Nice work today"],
+    ["Ready 👨‍👩‍👧 now", "Ready now"],
+  ])("strips emoji from %j", async (raw, cleaned) => {
+    queueChat(answerReply(raw));
+    const events = await collect(
+      engine.runAgent([{ role: "user", content: "hi" }]),
+    );
+    expect(events).toEqual([{ kind: "answer", text: cleaned }]);
+  });
+
+  it("leaves ordinary punctuation and markdown alone", async () => {
+    queueChat(answerReply("**Bold**, a list:\n- one\n- two\n\n`code()` 100%"));
+    const events = await collect(
+      engine.runAgent([{ role: "user", content: "hi" }]),
+    );
+    expect(events).toEqual([
+      {
+        kind: "answer",
+        text: "**Bold**, a list:\n- one\n- two\n\n`code()` 100%",
+      },
+    ]);
+  });
+
   it("runs a tool, feeds the result back, then yields the answer", async () => {
-    mockFetch
-      .mockResolvedValueOnce(toolReply("create_task", '{"title":"x"}'))
-      .mockResolvedValueOnce(answerReply("done"));
+    queueChat(toolReply("create_task", '{"title":"x"}'), answerReply("done"));
     const { engine, runTool } = makeEngine();
     const events = await collect(
       engine.runAgent([{ role: "user", content: "add x" }]),
@@ -179,9 +284,7 @@ describe("runAgent", () => {
   });
 
   it("passes empty args to runTool when the model emits malformed JSON", async () => {
-    mockFetch
-      .mockResolvedValueOnce(toolReply("create_task", "{bad"))
-      .mockResolvedValueOnce(answerReply("done"));
+    queueChat(toolReply("create_task", "{bad"), answerReply("done"));
     const { engine, runTool } = makeEngine();
     await collect(engine.runAgent([{ role: "user", content: "x" }]));
     expect(runTool).toHaveBeenCalledWith("create_task", {});
@@ -229,15 +332,19 @@ describe("configuration", () => {
       headers: { Authorization: "Bearer sk-test" },
     });
 
-    mockFetch.mockResolvedValueOnce(res({ data: [{ id: "gpt-oss" }] }));
+    /** Headers of the first request whose URL matches, by endpoint not order. */
+    const headersFor = (match: string) =>
+      mockFetch.mock.calls.find((c) => String(c[0]).includes(match))?.[1]
+        ?.headers;
+
     await engine.getStatus();
-    expect(mockFetch.mock.calls[0]?.[1]?.headers).toMatchObject({
+    expect(headersFor("/v1/models")).toMatchObject({
       Authorization: "Bearer sk-test",
     });
 
-    mockFetch.mockResolvedValueOnce(answerReply("hi"));
+    queueChat(answerReply("hi"));
     await collect(engine.runAgent([{ role: "user", content: "x" }]));
-    expect(mockFetch.mock.calls[1]?.[1]?.headers).toMatchObject({
+    expect(headersFor("/v1/chat/completions")).toMatchObject({
       "Content-Type": "application/json",
       Authorization: "Bearer sk-test",
     });
@@ -249,7 +356,7 @@ describe("configuration", () => {
   // server-side tools (studio/backend/routes/inference.py →
   // _explicit_studio_tool_loop_requested). Nothing should ever add these.
   it("never asks the backend to run its own tool loop", async () => {
-    mockFetch.mockResolvedValueOnce(answerReply("hi"));
+    queueChat(answerReply("hi"));
     await collect(engine.runAgent([{ role: "user", content: "x" }]));
     const body = bodyOf(0);
     expect(body).not.toHaveProperty("enable_tools");
@@ -262,7 +369,7 @@ describe("configuration", () => {
       baseURL: "http://studio",
       model: "gpt-oss-20b",
     });
-    mockFetch.mockResolvedValueOnce(answerReply("hi"));
+    queueChat(answerReply("hi"));
     await collect(engine.runAgent([{ role: "user", content: "x" }]));
     expect(bodyOf(0).model).toBe("gpt-oss-20b");
   });
