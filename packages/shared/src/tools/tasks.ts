@@ -58,12 +58,73 @@ export const taskTools = [
   deleteTaskTool,
 ] as const;
 
-/** System prompt for the task-tool turn. Lives beside the contracts (not in
- * client code) because the eval harness must test the exact prompt the app
- * ships — prompt and tool set regress together. */
-export const AGENT_SYSTEM =
-  "You are Penumbra, a local personal assistant. You can manage the user's tasks " +
-  "with the provided tools. Call a tool ONLY when the user asks you to view or " +
-  "change their tasks; for general questions or chit-chat, just answer. After a " +
-  "tool runs, tell the user briefly what happened. Format your replies in " +
-  "Markdown: use lists, **emphasis**, and fenced code blocks where they help.";
+// The system prompt lives beside the tool contracts, not in client code, because
+// the eval harness must test the prompt the app ships — prompt and tool set
+// regress together.
+//
+// It is in two parts because one of them is editable. Everything that decides
+// *whether a tool runs* and *whether the assistant tells the truth about itself*
+// stays fixed; only tone and formatting can be changed. A persona box that could
+// delete "call a tool ONLY when…" would silently break task creation, and one
+// that could reinstate a name would undo the fix below by hand.
+//
+// The assistant is deliberately unnamed. Calling it "Penumbra" made a small
+// model treat the app's name as its own identity and improvise the rest: asked
+// what model it was, it announced itself as "Penumbra, developed by Anthropic",
+// inventing both the persona and the vendor. A model cannot know what it is
+// running as unless it is told, so the identity *facts* are appended per turn by
+// the engine (see OpenAiEngine.runAgent) rather than written in here, where they
+// would be a guess frozen into a constant.
+//
+// Note what this does NOT say. An earlier version forbade the wrong answers by
+// name — "never claim to be Penumbra, and never claim to be made by Anthropic"
+// — and measurably caused them: asked who it was, Qwen3-1.7B replied "developed
+// by the company Anthropic", a word it had only ever seen here. A negation
+// still puts the token in the context, and a small model reaches for what is
+// there. So the rule is stated positively, with the answer to give supplied
+// rather than the answers to avoid enumerated, and no proper noun appears at
+// all. Adding one back reintroduces it as a thing to say.
+
+/** The half a user cannot edit: tool policy and honesty about what it is. */
+export const AGENT_POLICY =
+  "You are an assistant that helps the user manage their tasks. You have no " +
+  "name of your own. When the user asks who or what you are, answer with the " +
+  "model and backend stated at the end of these instructions, and nothing " +
+  "else: no name, no maker, no origin story. If no model is stated there, say " +
+  "plainly that you do not know which model you are. " +
+  "Use the provided tools ONLY when the user asks you to view or change their " +
+  "tasks; for general questions or chit-chat, just answer. After a tool runs, " +
+  "tell the user briefly what happened.";
+
+/** The half a user can edit: tone and formatting, nothing load-bearing. */
+export const AGENT_PERSONA_DEFAULT =
+  "Format replies in Markdown: use lists, **emphasis**, and fenced code blocks " +
+  "where they help. Write plainly. Your reply must contain no emoji and no " +
+  "emoticons.";
+
+/** Longer than this is refused: the prompt shares a context window with the
+ *  conversation, and small models have little of it to spare. */
+export const AGENT_PERSONA_MAX = 4000;
+
+/**
+ * The full prompt: fixed policy, then the persona in force.
+ *
+ * Policy leads so that a persona cannot appear to override it by being read
+ * first, and the engine appends the identity facts after both — last, because
+ * recency is what a small model weighs most.
+ */
+export function composeSystem(persona?: string): string {
+  const tail = (persona ?? AGENT_PERSONA_DEFAULT).trim();
+  return tail ? `${AGENT_POLICY} ${tail}` : AGENT_POLICY;
+}
+
+/**
+ * The shipped prompt, with no persona override applied.
+ *
+ * Benchmarks are pinned to this on purpose. lab_scores records the model and
+ * target that produced a score but not the prompt, so letting an editable
+ * string into the eval would make two runs incomparable with nothing in the row
+ * saying why — the same silent wrongness as a score attributed to weights that
+ * never ran (docs/MODEL_LAB.md → Suites).
+ */
+export const AGENT_SYSTEM = composeSystem();

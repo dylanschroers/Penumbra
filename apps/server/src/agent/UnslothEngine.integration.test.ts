@@ -21,8 +21,18 @@ interface Recorded {
   body: Record<string, unknown>;
 }
 
-/** A scriptable stand-in for Studio's /v1 surface. */
-function startFakeStudio(replies: unknown[]) {
+/**
+ * A scriptable stand-in for Studio's /v1 surface.
+ *
+ * `replies` scripts the chat endpoint only. The listing is answered separately
+ * because a turn reads it before prompting, to learn which model is actually
+ * serving it — routing by URL keeps that out of the chat script instead of
+ * letting it eat the first scripted reply.
+ */
+function startFakeStudio(
+  replies: unknown[],
+  models: unknown = { data: [{ id: "gpt-oss-20b", loaded: true }] },
+) {
   const recorded: Recorded[] = [];
   let next = 0;
   /** Resolves the pending response, letting a test hold a request open. */
@@ -39,15 +49,23 @@ function startFakeStudio(replies: unknown[]) {
         auth: req.headers.authorization,
         body: raw ? JSON.parse(raw) : {},
       });
-      await gate;
+      const listing = (req.url ?? "").includes("/v1/models");
+      // The gate exists to hold a *turn* open. The listing always answers:
+      // holding it would stall the pre-prompt probe instead of the request the
+      // test means to catch in flight.
+      if (!listing) await gate;
       if (res.destroyed) return; // client aborted while we were held
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(replies[next++] ?? replies.at(-1)));
+      res.end(
+        JSON.stringify(listing ? models : (replies[next++] ?? replies.at(-1))),
+      );
     });
   });
 
   return {
     recorded,
+    /** Chat round trips only — the listing is plumbing, not a turn. */
+    chats: () => recorded.filter((r) => !r.url.includes("/v1/models")),
     listen: () =>
       new Promise<string>((resolve) => {
         server.listen(0, "127.0.0.1", () => {
@@ -79,8 +97,8 @@ let baseURL: string;
 
 afterEach(() => studio?.close());
 
-async function boot(replies: unknown[]) {
-  studio = startFakeStudio(replies);
+async function boot(replies: unknown[], models?: unknown) {
+  studio = startFakeStudio(replies, models);
   baseURL = await studio.listen();
 }
 
@@ -88,7 +106,7 @@ describe("UnslothEngine over real HTTP", () => {
   beforeEach(() => vi.unstubAllGlobals());
 
   it("probes status and sends the bearer token", async () => {
-    await boot([{ data: [{ id: "gpt-oss-20b" }] }]);
+    await boot([], { data: [{ id: "gpt-oss-20b" }] });
     const engine = new UnslothEngine({
       bindings: { tools: [], system: "sys", runTool: vi.fn() },
       baseURL,
@@ -134,10 +152,10 @@ describe("UnslothEngine over real HTTP", () => {
       { kind: "answer", text: "Added it." },
     ]);
 
-    // Two round trips, and the second carried the tool result back to the model
-    // in the role the protocol requires.
-    expect(studio.recorded).toHaveLength(2);
-    const second = studio.recorded[1]?.body.messages as Array<
+    // Two chat round trips, and the second carried the tool result back to the
+    // model in the role the protocol requires.
+    expect(studio.chats()).toHaveLength(2);
+    const second = studio.chats()[1]?.body.messages as Array<
       Record<string, unknown>
     >;
     expect(second.at(-1)).toEqual({
@@ -145,13 +163,17 @@ describe("UnslothEngine over real HTTP", () => {
       tool_call_id: "call_1",
       content: 'Created task "buy milk".',
     });
-    // The system prompt leads every turn, and tool_choice stays auto.
-    expect(second[0]).toEqual({ role: "system", content: "sys" });
-    expect(studio.recorded[1]?.body.tool_choice).toBe("auto");
+    // The system prompt leads every turn, carrying the bindings' text plus the
+    // model actually serving the turn — read off the listing over real HTTP,
+    // which is the only place that fact exists.
+    expect(second[0]?.role).toBe("system");
+    expect(second[0]?.content).toContain("sys");
+    expect(second[0]?.content).toContain("gpt-oss-20b");
+    expect(studio.chats()[1]?.body.tool_choice).toBe("auto");
 
     // The real specs survive JSON serialization in the shape the OpenAI seam
     // requires — this is the payload Studio will be handed.
-    const wireTools = studio.recorded[0]?.body.tools as Array<{
+    const wireTools = studio.chats()[0]?.body.tools as Array<{
       type: string;
       function: { name: string; description: string; parameters: unknown };
     }>;
@@ -181,8 +203,8 @@ describe("UnslothEngine over real HTTP", () => {
       .runAgent([{ role: "user", content: "x" }], controller.signal)
       .next();
 
-    // Let the request reach the server, then abort while it is held open.
-    await vi.waitFor(() => expect(studio.recorded).toHaveLength(1));
+    // Let the chat request reach the server, then abort while it is held open.
+    await vi.waitFor(() => expect(studio.chats()).toHaveLength(1));
     controller.abort();
 
     await expect(turn).rejects.toThrow(/abort/i);
