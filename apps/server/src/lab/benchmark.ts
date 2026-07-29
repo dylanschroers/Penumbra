@@ -229,6 +229,32 @@ export async function lmEvalAvailable(): Promise<boolean> {
   });
 }
 
+/**
+ * Environment for the lm_eval child.
+ *
+ * The UTF-8 pair is load-bearing on a Windows host. lm_eval finishes the run,
+ * writes results.json, and *then* prints a summary table containing "↑" — which
+ * cp1252, Python's default stdout encoding there, cannot encode. The process
+ * died with a UnicodeEncodeError and exited 1 after the evaluation had already
+ * succeeded, so every general-suite run failed at the last step with its scores
+ * sitting on disk unread.
+ *
+ * Fixed on the child rather than by accepting a non-zero exit whenever
+ * results.json happens to exist: that would swallow the failures worth seeing,
+ * and a run that dies partway through a task also leaves a file behind.
+ *
+ * Exported for the test — this is invisible on a POSIX CI box and would return
+ * unnoticed.
+ */
+export function lmEvalEnv(apiKey?: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    OPENAI_API_KEY: apiKey ?? "dummy",
+    PYTHONIOENCODING: "utf-8",
+    PYTHONUTF8: "1",
+  };
+}
+
 async function runGeneralSuite(opts: BenchmarkOptions): Promise<TaskScore[]> {
   const outDir = await mkdtemp(join(tmpdir(), "penumbra-lmeval-"));
   const args = [
@@ -249,7 +275,7 @@ async function runGeneralSuite(opts: BenchmarkOptions): Promise<TaskScore[]> {
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(LM_EVAL_BIN, args, {
-      env: { ...process.env, OPENAI_API_KEY: opts.apiKey ?? "dummy" },
+      env: lmEvalEnv(opts.apiKey),
     });
     // A client abort must kill the subprocess, or a cancelled benchmark keeps
     // burning GPU for hours.
