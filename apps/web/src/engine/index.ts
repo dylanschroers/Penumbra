@@ -66,7 +66,7 @@ export const PROVIDERS: readonly ProviderInfo[] = [
   {
     id: "local",
     label: "Local",
-    hint: "Embedded llama-server — offline, always available",
+    hint: "Embedded llama-server: offline, always available",
     available: true,
   },
   {
@@ -78,7 +78,7 @@ export const PROVIDERS: readonly ProviderInfo[] = [
   {
     id: "cloud",
     label: "Cloud",
-    hint: "Hosted frontier model — coming soon",
+    hint: "Hosted frontier model: coming soon",
     available: false,
   },
 ];

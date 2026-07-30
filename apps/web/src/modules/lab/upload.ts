@@ -56,7 +56,7 @@ async function uploadError(res: Response, what: string): Promise<Error> {
         ? ` (needs ${gb(body.need)}, ${gb(body.free)} free)`
         : "";
     return new Error(
-      `${what} failed — the server host is out of disk space${sizes}`,
+      `${what} failed: the server host is out of disk space${sizes}`,
     );
   }
   return new Error(`${what} failed (server responded ${res.status})`);

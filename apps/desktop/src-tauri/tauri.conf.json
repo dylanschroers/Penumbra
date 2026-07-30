@@ -11,7 +11,13 @@
   },
   "app": {
     "windows": [
-      { "label": "main", "title": "Penumbra", "width": 1280, "height": 800 }
+      {
+        "label": "main",
+        "title": "Penumbra",
+        "width": 1280,
+        "height": 800,
+        "decorations": false
+      }
     ],
     "security": { "csp": null }
   },
