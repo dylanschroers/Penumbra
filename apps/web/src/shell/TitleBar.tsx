@@ -6,6 +6,13 @@ import { Logo } from "./Logo";
 // handling also gives it double-click-to-maximize — and the controls mirror the
 // Windows layout. The web build never renders this; AppShell gates on the
 // Tauri probe (isFsAvailable).
+//
+// Two maximize permissions are in capabilities/default.json, and both are
+// needed: the button below calls `toggleMaximize` (core:window:allow-toggle-
+// maximize), while Tauri's injected drag-region script invokes a *different*
+// command on double-click, `internal_toggle_maximize`
+// (core:window:allow-internal-toggle-maximize). Drop either and half the
+// gesture set fails at runtime with a permission error.
 export function TitleBar() {
   const win = getCurrentWindow();
   return (
