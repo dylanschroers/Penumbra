@@ -1033,6 +1033,21 @@
   overflow: auto;
 }
 
+/* An embedded page (a module that is just an iframe, e.g. Primordia) fills its
+   window or dock card edge-to-edge. */
+.module-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.win__body:has(.module-frame),
+.dock-card__body:has(.module-frame) {
+  padding: 0;
+  overflow: hidden;
+}
+
 /* ---- Dock -------------------------------------------------------------- */
 
 .dock {

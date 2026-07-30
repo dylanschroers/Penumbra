@@ -4,6 +4,7 @@
 export const MODULE_ICONS: Record<string, string> = {
   tasks: "✅",
   color: "🎨",
+  primordia: "🌊",
   weather: "⛅",
   lab: "🧪",
   agent: "💬",

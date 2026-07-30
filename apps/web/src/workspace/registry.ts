@@ -1,6 +1,7 @@
 import { AgentModule } from "../modules/agent/AgentModule";
 import { ColorPickerModule } from "../modules/color/ColorPickerModule";
 import { LabModule } from "../modules/lab/LabModule";
+import { PrimordiaModule } from "../modules/primordia/PrimordiaModule";
 import {
   TasksCompact,
   TasksExpanded,
@@ -28,6 +29,7 @@ export const MODULES: ModuleDefinition[] = [
     Expanded: TasksExpanded,
   },
   { id: "color", title: "Color Picker", Component: ColorPickerModule },
+  { id: "primordia", title: "Primordia", Component: PrimordiaModule },
   { id: "weather", title: "Weather", Component: WeatherModule },
   { id: "lab", title: "Model Lab", Component: LabModule },
   { id: "agent", title: "Assistant", Component: AgentModule },
