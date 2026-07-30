@@ -12,7 +12,7 @@ import { ModuleSlot, type ModuleView } from "./ModuleSlot";
 export function ModuleDock({
   openIds,
   addableIds,
-  focusedId,
+  activeIds,
   hostFor,
   onExpand,
   onAdd,
@@ -26,12 +26,14 @@ export function ModuleDock({
   openIds: string[];
   /** Every module the dock is allowed to offer (registry minus the assistant). */
   addableIds: string[];
-  focusedId: string | null;
+  /** Modules currently showing as a window on the desk. */
+  activeIds: string[];
   /** The shell's host node for one of a module's views. The dock shows a module
    *  by claiming that node (see ModuleSlot) rather than rendering it here — the
    *  views are rendered in AppShell, under the state their Provider owns. */
   hostFor: (id: string, view: ModuleView) => HTMLElement;
-  onExpand: (id: string | null) => void;
+  /** Toggle a module's desk window (open centred / close back to the dock). */
+  onExpand: (id: string) => void;
   onAdd: (id: string) => void;
   onRemove: (id: string) => void;
   /** An add-list item started being dragged toward the workspace. */
@@ -57,6 +59,20 @@ export function ModuleDock({
   // with an empty card until you moved the pointer out and back in.
   const [hovered, setHovered] = useState(false);
   const dockRef = useRef<HTMLDivElement>(null);
+
+  // A pinned tray also closes on a click anywhere outside the dock — the pin
+  // means "hold open while I work in here", not "stay until I find the handle
+  // again".
+  useEffect(() => {
+    if (!pinned) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (dockRef.current && !dockRef.current.contains(event.target as Node)) {
+        setPinned(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [pinned]);
 
   // Native mouseenter/mouseleave, deliberately not React's onMouseEnter/Leave.
   //
@@ -87,7 +103,7 @@ export function ModuleDock({
   // the dock's visibility answers to the pointer, not to what the module is
   // doing. It used to force itself shut here, which read as the dock flinching
   // away every time the expand toggle was pressed.
-  function handleExpand(id: string | null) {
+  function handleExpand(id: string) {
     (document.activeElement as HTMLElement | null)?.blur();
     onExpand(id);
   }
@@ -115,13 +131,25 @@ export function ModuleDock({
         {openIds.map((id) => {
           const def = getModule(id);
           if (!def) return null;
-          const active = focusedId === id;
+          const active = activeIds.includes(id);
           return (
             <div
               key={id}
               className={`dock-card${active ? " dock-card--active" : ""}`}
             >
-              <div className="dock-card__bar">
+              {/* The bar doubles as a drag handle: drag the card onto the desk
+                  to place its window there (drop position picks the snap). */}
+              {/* biome-ignore lint/a11y/noStaticElementInteractions: drag-out is a pointer shortcut; the same action is on the bar's expand button. */}
+              <div
+                className="dock-card__bar"
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData("text/plain", id);
+                  e.dataTransfer.effectAllowed = "copy";
+                  onModuleDragStart(id);
+                }}
+                onDragEnd={onModuleDragEnd}
+              >
                 <span className="dock-card__title">
                   {MODULE_ICONS[id]} {def.title}
                 </span>
@@ -129,7 +157,7 @@ export function ModuleDock({
                   <button
                     type="button"
                     className="dock-card__btn"
-                    onClick={() => handleExpand(active ? null : id)}
+                    onClick={() => handleExpand(id)}
                     aria-label={
                       active
                         ? `Return ${def.title} to dock`
