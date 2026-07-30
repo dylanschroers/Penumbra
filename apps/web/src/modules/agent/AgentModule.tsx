@@ -52,12 +52,12 @@ function emptyHint(status: AgentStatus, provider: string): string {
   if (provider !== "server") return "Start the local model to begin.";
   const where = status.target?.label ?? "the server's Studio";
   if (status.state === "unauthorized") {
-    return `${where} is running but rejected the server's key — open the pill above to paste the current one.`;
+    return `${where} is running but rejected the server's key. Open the pill above to paste the current one.`;
   }
   if (status.state === "no_model") {
     return `${where} is up with no model loaded. Load one in Studio to begin.`;
   }
-  return `${where} is not answering — open the pill above to check where it is pointed.`;
+  return `${where} is not answering. Open the pill above to check where it is pointed.`;
 }
 
 export function AgentModule() {

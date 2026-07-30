@@ -25,7 +25,7 @@ const STATE_LABEL: Record<ComputeTarget["state"], string> = {
  *  the session ended rather than anything being misconfigured. */
 function stateHint(target: ComputeTarget): string {
   if (target.state === "unauthorized") {
-    return "Answering, but rejecting the key. Studio mints a new one on install and on every rotation — paste the current one.";
+    return "Answering, but rejecting the key. Studio mints a new one on install and on every rotation, so paste the current one.";
   }
   if (!target.configured) {
     return target.id === "colab"
@@ -34,7 +34,7 @@ function stateHint(target: ComputeTarget): string {
   }
   if (target.state === "stopped") {
     return target.persistence === "session"
-      ? "Not answering — a Colab session that has ended cannot be reached again; start a new one and paste its URL."
+      ? "Not answering. A Colab session that has ended cannot be reached again; start a new one and paste its URL."
       : "Not answering. Check that Studio is running at this address.";
   }
   return "";
@@ -103,7 +103,7 @@ function TargetCard({
       </header>
 
       <p className="ct__addr">
-        {target.configured ? target.baseURL : "—"}
+        {target.configured ? target.baseURL : "not set"}
         <span className="ct__meta">
           {target.persistence === "session"
             ? " · in memory only, re-entered each restart"
@@ -161,7 +161,7 @@ function TargetCard({
               ? "Weights are paging in; a large model takes a few minutes."
               : resident
                 ? `Serving ${resident.label}. Loading another replaces it.`
-                : "Nothing loaded — chat and benchmarks have nothing to answer with."}
+                : "Nothing loaded, so chat and benchmarks have nothing to answer with."}
           </p>
         </div>
       )}
@@ -178,7 +178,7 @@ function TargetCard({
           type="password"
           placeholder={
             target.hasKey
-              ? "Key set — type a new one to replace it"
+              ? "Key set. Type a new one to replace it"
               : "No key set"
           }
           value={apiKey}
@@ -253,7 +253,7 @@ export function ComputeTargets({ compute }: { compute: Compute }) {
                   knowing. */}
               {assigned !== effective && (
                 <span className="ct__fallback">
-                  unavailable — using{" "}
+                  unavailable, using{" "}
                   {state.targets.find((t) => t.id === effective)?.label ??
                     effective}
                 </span>

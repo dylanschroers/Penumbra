@@ -80,7 +80,7 @@
    floats over the canvas as the home button, so it's kept prominent. 160px *
    0.42 ≈ 67px; the stage's top padding is sized to clear it. */
 .shell--app .shell-logo {
-  top: 16px;
+  top: 10px;
   transform: translateX(-50%) scale(0.42);
 }
 
@@ -214,6 +214,62 @@
   .server-status__dot--pending {
     animation: none;
   }
+}
+
+/* ---- Desktop title bar --------------------------------------------------- */
+
+/* Replaces the native window chrome (decorations: false). The bar is Tauri's
+   drag region; the name is pointer-inert so drags land on the bar itself. */
+.titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 34px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+}
+
+.titlebar__name {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0 0.75rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.titlebar__controls {
+  display: flex;
+  height: 100%;
+}
+
+.titlebar__btn {
+  width: 46px;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.titlebar__btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.titlebar__btn--close:hover {
+  background: #e81123;
+  color: #fff;
 }
 
 /* ---- Server status (top-right) ----------------------------------------- */
@@ -663,6 +719,8 @@
    rail. Animating grid-template-columns between fr tracks is smooth in
    Chromium/WebView2/WKWebView; older WebKitGTK degrades to an instant swap. */
 .shell__stage {
+  /* The gap snapped windows keep from the desk edges and each other. */
+  --desk-gap: 0.75rem;
   position: relative;
   flex: 1;
   min-height: 0;
@@ -670,43 +728,85 @@
   grid-template-columns: 0fr 1fr;
   align-items: stretch;
   gap: 0;
-  /* Top: clear the floating logo (~75px tall incl. its 16px offset).
-     Bottom: leave room for the collapsed dock handle pinned at the bottom. */
-  padding: 5.75rem 1.25rem 3.5rem;
+  /* Top: clear the floating logo (~77px tall incl. its 10px offset).
+     Bottom: leave room for the collapsed dock handle pinned at the bottom,
+     with some breathing space above it. */
+  padding: 5.5rem 1.25rem 4.25rem;
   transition:
     grid-template-columns 0.42s cubic-bezier(0.4, 0, 0.2, 1),
     gap 0.42s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Drop target shown only while dragging a module out of the dock's add-list.
-   Fills the stage centre (clear of the floating logo) so the whole workspace
-   reads as "drop here to open". */
+/* Drop target shown only while dragging a module out of the dock: covers the
+   desk and reports which snap zone the pointer is over via the preview below. */
 .shell__dropzone {
   position: absolute;
-  inset: 5.75rem 1rem 1rem;
-  z-index: 30;
+  inset: 0;
+  z-index: 50;
+}
+
+/* Where the dragged window/card would land if released now — a translucent
+   pane over the target zone, Windows-snap style, with the desk's gaps. */
+.snap-preview {
+  position: absolute;
+  z-index: 60;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 2px dashed color-mix(in srgb, var(--primary) 45%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--primary) 55%, var(--border));
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: var(--muted);
-  transition:
-    background 0.15s ease,
-    border-color 0.15s ease,
-    color 0.15s ease;
+  pointer-events: none;
+  transition: inset 0.15s ease;
 }
 
-.shell__dropzone--over {
-  border-color: var(--primary);
-  background: color-mix(in srgb, var(--primary) 16%, transparent);
-  color: var(--text);
+.snap-preview--left {
+  inset: var(--desk-gap) calc(50% + var(--desk-gap) / 2) var(--desk-gap)
+    var(--desk-gap);
+}
+
+.snap-preview--right {
+  inset: var(--desk-gap) var(--desk-gap) var(--desk-gap)
+    calc(50% + var(--desk-gap) / 2);
+}
+
+.snap-preview--max {
+  inset: var(--desk-gap);
+}
+
+.snap-preview--center {
+  inset: 18% 24%;
+}
+
+/* Corner quarters, shared by the previews and the snapped windows below. */
+.snap-preview--top-left,
+.win--top-left {
+  inset: var(--desk-gap) calc(50% + var(--desk-gap) / 2)
+    calc(50% + var(--desk-gap) / 2) var(--desk-gap);
+}
+
+.snap-preview--top-right,
+.win--top-right {
+  inset: var(--desk-gap) var(--desk-gap) calc(50% + var(--desk-gap) / 2)
+    calc(50% + var(--desk-gap) / 2);
+}
+
+.snap-preview--bottom-left,
+.win--bottom-left {
+  inset: calc(50% + var(--desk-gap) / 2) calc(50% + var(--desk-gap) / 2)
+    var(--desk-gap) var(--desk-gap);
+}
+
+.snap-preview--bottom-right,
+.win--bottom-right {
+  inset: calc(50% + var(--desk-gap) / 2) var(--desk-gap) var(--desk-gap)
+    calc(50% + var(--desk-gap) / 2);
 }
 
 /* Inert to pointer/drag events so dragover/dragleave only fire on the zone
    itself (no child-boundary flicker). */
-.shell__dropzone-inner {
+.snap-preview__label {
   pointer-events: none;
   display: flex;
   align-items: center;
@@ -734,6 +834,55 @@
      eases below 1. Margins aren't animatable, so this replaces the old
      `margin-top: auto`, which snapped the card to the top on the way back. */
   justify-content: flex-end;
+  transition:
+    opacity 0.28s ease,
+    visibility 0.28s ease;
+}
+
+/* ---- Chat collapse (slim tab at the right edge) ------------------------- */
+
+/* The chat fades out; when a module is focused its column also eases to 0fr
+   (below) so the module takes the full stage width. The fixed tab rendered by
+   the shell brings it back. */
+.shell--chat-min .shell__assistant {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.shell--chat-min .shell__stage--focused {
+  grid-template-columns: 1fr 0fr;
+  gap: 0;
+}
+
+/* The chat toggle, in the fixed top-right cluster beside the server-status
+   dot: same round-button treatment, tinted while the chat is showing. */
+.shell__chat-toggle {
+  position: fixed;
+  top: 14px;
+  right: 54px;
+  z-index: 55;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 50%;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.shell__chat-toggle:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+
+.shell__chat-toggle--open {
+  color: var(--primary);
 }
 
 .assistant-card {
@@ -764,24 +913,28 @@
   flex: 1;
 }
 
-/* Focus pane. Clipped so the collapsed 0fr column shows nothing, and it fades
-   in/out alongside the width animation. */
-.shell__focus {
+/* ---- Desk (the windowed module area) ------------------------------------ */
+
+/* The desk. Clipped so the collapsed 0fr column shows nothing, and it fades
+   in/out alongside the width animation. Windows position within it. */
+.shell__desk {
+  position: relative;
   min-width: 0;
   min-height: 0;
-  display: flex;
   overflow: hidden;
   opacity: 0;
   transition: opacity 0.3s ease 0.06s;
 }
 
-.shell__stage--focused .shell__focus {
+.shell__stage--focused .shell__desk {
   opacity: 1;
 }
 
-.focus-card {
-  flex: 1;
-  min-width: 0;
+/* One module window. Snap zones are inset-based so they carry the desk's gaps
+   (Windows-snap style); a free window gets its rect inline (transform + size)
+   from the shell. Fades in on open and out via .win--closing. */
+.win {
+  position: absolute;
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -791,22 +944,89 @@
     0 1px 3px rgba(0, 0, 0, 0.4),
     0 12px 32px rgba(0, 0, 0, 0.22);
   overflow: hidden;
+  animation: win-open 0.18s ease both;
 }
 
-.focus-card__bar {
+.win--left {
+  inset: var(--desk-gap) calc(50% + var(--desk-gap) / 2) var(--desk-gap)
+    var(--desk-gap);
+}
+
+.win--right {
+  inset: var(--desk-gap) var(--desk-gap) var(--desk-gap)
+    calc(50% + var(--desk-gap) / 2);
+}
+
+.win--max {
+  inset: var(--desk-gap);
+}
+
+.win--center {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(720px, calc(100% - 2 * var(--desk-gap)));
+  height: min(78%, 640px);
+}
+
+.win--free {
+  left: 0;
+  top: 0;
+}
+
+/* Small tools don't get a big default window: a centred window holding one
+   sizes to its content. Keyed off the module's own root class so the registry
+   stays geometry-free (the shell sizes modules from CSS). */
+.win--center:has(.color-picker) {
+  width: min(420px, calc(100% - 2 * var(--desk-gap)));
+  height: auto;
+  max-height: calc(100% - 2 * var(--desk-gap));
+}
+
+.win--closing {
+  animation: win-close 0.2s ease both;
+  pointer-events: none;
+}
+
+@keyframes win-open {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes win-close {
+  to {
+    opacity: 0;
+  }
+}
+
+/* The bar is the drag handle. touch-action: none so pointer capture gets the
+   moves instead of the platform treating them as a scroll gesture. */
+.win__bar {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.5rem 0.5rem 0.5rem 0.9rem;
+  padding: 0.45rem 0.5rem 0.45rem 0.9rem;
   border-bottom: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
 }
 
-.focus-card__title {
+.win__bar:active {
+  cursor: grabbing;
+}
+
+.win__title {
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.focus-card__body {
+.win__body {
   flex: 1;
   min-height: 0;
   padding: 1rem;
@@ -879,7 +1099,7 @@
    — which showed up as an open tray full of empty cards. See the note beside
    `hovered` in ModuleDock. */
 .dock--open .dock__tray {
-  max-height: 15rem;
+  max-height: 17rem;
   padding: 0.85rem 1rem;
   opacity: 1;
   transform: translateY(0);
@@ -889,8 +1109,8 @@
    the module inside it; the module body scrolls within. */
 .dock-card {
   flex: 0 0 auto;
-  width: 260px;
-  height: 190px;
+  width: 290px;
+  height: 215px;
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -1058,4 +1278,32 @@
 
 .dock-add__item:hover {
   background: var(--bg);
+}
+
+/* ---- Desktop offsets (below the custom title bar) ----------------------- */
+
+/* Clear the bar: the fixed chrome pieces that used to hug the top edge drop
+   below it on desktop. Kept last so they win at equal or higher specificity. */
+.shell--desktop .server-status {
+  top: 42px;
+}
+
+.shell--desktop .shell__chat-toggle {
+  top: 42px;
+}
+
+.shell--desktop.shell--app .shell-logo {
+  top: 28px;
+}
+
+.shell--desktop .shell__stage {
+  padding-top: 6.75rem;
+}
+
+.shell--desktop .file-sidebar {
+  padding-top: 2.1rem;
+}
+
+.shell--desktop .file-sidebar--collapsed {
+  padding-top: 2.8rem;
 }

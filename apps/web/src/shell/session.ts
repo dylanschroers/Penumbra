@@ -1,24 +1,62 @@
-// What the shell reopens with: which modules are in the dock, and which one is
-// expanded in the centre.
+// What the shell reopens with: which modules are in the dock, and where each
+// open window sits on the desk.
 //
 // The grid canvas persisted its layout, and nothing replaced that when the grid
 // went — every reload came up with an empty dock and the user re-added the same
 // modules by hand.
 //
 // Both fields live under one key because they are read and written together and
-// two keys could drift apart: a focus restored onto a module that isn't open
-// would leave the centre showing something the dock never mounted.
+// two keys could drift apart: a window restored for a module that isn't open
+// would leave the desk showing something the dock never mounted.
 
 import { STORAGE_NAMESPACE } from "@penumbra/shared";
 
 export const SESSION_KEY = `${STORAGE_NAMESPACE}.shell.session.v1`;
 
-export interface ShellSession {
-  open: string[];
-  focused: string | null;
+/** Where a snapped window sits on the desk: a half, a corner quarter,
+ *  maximized, or centred. */
+export type SnapZone =
+  | "left"
+  | "right"
+  | "max"
+  | "center"
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right";
+
+const ZONES: readonly string[] = [
+  "left",
+  "right",
+  "max",
+  "center",
+  "top-left",
+  "top-right",
+  "bottom-left",
+  "bottom-right",
+];
+
+/** One open window: a snap zone, or free-floating at a remembered rect
+ *  (px, relative to the desk). The rect fields are unused while snapped. */
+export interface WindowPlacement {
+  id: string;
+  zone: SnapZone | null;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
-const EMPTY: ShellSession = { open: [], focused: null };
+export interface ShellSession {
+  open: string[];
+  windows: WindowPlacement[];
+}
+
+const EMPTY: ShellSession = { open: [], windows: [] };
+
+function isFinite_(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
 
 /**
  * Read the stored session, keeping only what still makes sense.
@@ -36,14 +74,62 @@ export function loadSession(allowedIds: readonly string[]): ShellSession {
           (id: unknown) => typeof id === "string" && allowedIds.includes(id),
         )
       : [];
-    // Focus has to name something in the open set — including after the filter
-    // above, so a focused module that was dropped from the registry doesn't
-    // survive as a focus onto nothing.
-    const focused =
-      typeof parsed?.focused === "string" && open.includes(parsed.focused)
-        ? parsed.focused
-        : null;
-    return { open, focused };
+
+    // A window has to name something in the open set — including after the
+    // filter above, so a window whose module was dropped from the registry
+    // doesn't survive as a pane over nothing.
+    const windows: WindowPlacement[] = [];
+    const raw: unknown[] = Array.isArray(parsed?.windows) ? parsed.windows : [];
+    for (const entry of raw) {
+      const rec = entry as Partial<WindowPlacement> | null;
+      const id = rec?.id;
+      if (typeof id !== "string" || !open.includes(id)) continue;
+      if (windows.some((w) => w.id === id)) continue;
+      const zone =
+        typeof rec?.zone === "string" && ZONES.includes(rec.zone)
+          ? (rec.zone as SnapZone)
+          : null;
+      if (zone !== null) {
+        windows.push({ id, zone, x: 0, y: 0, w: 0, h: 0 });
+      } else if (
+        isFinite_(rec?.x) &&
+        isFinite_(rec?.y) &&
+        isFinite_(rec?.w) &&
+        isFinite_(rec?.h) &&
+        rec.w > 0 &&
+        rec.h > 0
+      ) {
+        windows.push({
+          id,
+          zone: null,
+          x: rec.x,
+          y: rec.y,
+          w: rec.w,
+          h: rec.h,
+        });
+      } else {
+        // A free placement without a usable rect falls back to centred.
+        windows.push({ id, zone: "center", x: 0, y: 0, w: 0, h: 0 });
+      }
+    }
+
+    // Legacy record: v1 stored a single `focused` id. Reopen it centred.
+    if (
+      windows.length === 0 &&
+      typeof parsed?.focused === "string" &&
+      open.includes(parsed.focused)
+    ) {
+      windows.push({
+        id: parsed.focused,
+        zone: "center",
+        x: 0,
+        y: 0,
+        w: 0,
+        h: 0,
+      });
+    }
+
+    return { open, windows };
   } catch {
     // Unavailable (SSR/tests) or corrupt — start empty, as the shell did before
     // it persisted anything.

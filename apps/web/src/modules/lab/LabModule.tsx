@@ -148,7 +148,7 @@ function ScoreRow({ result }: { result: BenchmarkResult }) {
         {mismatch && (
           <span
             className="lab__score-warn"
-            title={`Requested "${result.model}" — the target had "${served}" loaded, and these scores describe that.`}
+            title={`Requested "${result.model}", but the target had "${served}" loaded, and these scores describe that.`}
           >
             ⚠ requested {result.model}
           </span>
@@ -364,7 +364,7 @@ function ExportForm({
         <>
           <input
             aria-label="Hub repository"
-            placeholder="Repository — username/model-name"
+            placeholder="Repository: username/model-name"
             value={repoId}
             onChange={(e) => setRepoId(e.target.value)}
           />
@@ -388,7 +388,7 @@ function ExportForm({
               so beats a checkbox that quietly does nothing; the adapter and
               merged exports do honour it, so this note goes away with them. */}
           <p className="lab__library-note">
-            Note: Studio's GGUF export ignores this — the repo takes your
+            Note: Studio's GGUF export ignores this; the repo takes your
             HuggingFace default visibility. Create it as private on the Hub
             first if that matters.
           </p>
@@ -823,7 +823,7 @@ export function LabModule() {
               selected={baseModel}
               onSelect={setBaseModel}
               itemKey={(m) => m.path}
-              unavailableHint="Open the desktop app to browse models on this device — the web preview can't read your filesystem."
+              unavailableHint="Open the desktop app to browse models on this device; the web preview can't read your filesystem."
               emptyHint="No models here. Pick a folder holding .gguf files or HuggingFace model directories (a folder with a config.json)."
               renderItem={(m) => (
                 <>
@@ -849,7 +849,7 @@ export function LabModule() {
               selected={dataset}
               onSelect={setDataset}
               itemKey={(d) => d.path}
-              unavailableHint="Open the desktop app to browse datasets on this device — the web preview can't read your filesystem."
+              unavailableHint="Open the desktop app to browse datasets on this device; the web preview can't read your filesystem."
               emptyHint="No datasets here. Pick a folder holding .jsonl, .json, .csv, or .parquet files."
               renderItem={(d) => (
                 <>
@@ -871,7 +871,7 @@ export function LabModule() {
             <form className="lab__form" onSubmit={onFinetune}>
               <input
                 aria-label="Base model"
-                placeholder="Base model — pick from the library, or a HuggingFace id"
+                placeholder="Base model: pick from the library, or a HuggingFace id"
                 value={baseModel}
                 onChange={(e) => setBaseModel(e.target.value)}
               />
@@ -884,7 +884,7 @@ export function LabModule() {
               )}
               <input
                 aria-label="Dataset"
-                placeholder="Dataset — HF id, or ./path for a local file"
+                placeholder="Dataset: HF id, or ./path for a local file"
                 value={dataset}
                 onChange={(e) => setDataset(e.target.value)}
               />

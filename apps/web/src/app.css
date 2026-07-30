@@ -279,12 +279,17 @@ body {
   line-height: 1.5;
 }
 
-/* Color picker module */
+/* Color picker module. --cp-color (set inline by the component) is the current
+   color, so the glow, focus rings and hovers all tint to the picked hue. */
 .color-picker {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.85rem;
+  gap: 1rem;
+  width: 100%;
+  max-width: 300px;
+  margin: 0 auto;
+  padding: 0.25rem 0;
 }
 
 .color-picker__row {
@@ -296,43 +301,70 @@ body {
 
 .color-picker__swatch {
   flex: none;
-  width: 2rem;
-  height: 2rem;
+  width: 2.4rem;
+  height: 2.4rem;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: none;
+  border-radius: 12px;
   cursor: pointer;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+    0 2px 8px rgba(0, 0, 0, 0.35);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.25s ease;
+}
+
+.color-picker__swatch:hover {
+  transform: scale(1.06);
+}
+
+.color-picker__swatch:active {
+  transform: scale(0.95);
 }
 
 .color-picker__hex {
   flex: 1;
   min-width: 0;
-  padding: 0.45rem 0.6rem;
+  padding: 0.5rem 0.65rem;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  border-radius: 10px;
+  background: var(--bg);
   color: var(--text);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 0.9rem;
+  font-size: 0.92rem;
+  letter-spacing: 0.03em;
+  text-align: center;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .color-picker__hex:focus {
-  outline: 2px solid var(--primary);
-  outline-offset: 1px;
+  outline: none;
+  border-color: var(--cp-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cp-color) 25%, transparent);
 }
 
-/* Square icon button, sized to match the swatch so the row reads as one strip.
-   Overrides the wide default .btn padding. */
+/* Square icon button. Height matches the swatch and the fields either side so
+   the row reads as one strip; the corner radius follows its neighbours (the hex
+   box and the copy button) rather than the swatch's rounder 12px. Overrides the
+   wide default .btn padding. */
 .color-picker__dropper {
   flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 2rem;
-  height: 2rem;
+  width: 2.4rem;
+  height: 2.4rem;
   padding: 0;
+  border-radius: 10px;
   font-size: 0.95rem;
   line-height: 1;
+}
+
+.color-picker__dropper:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--cp-color) 60%, var(--border));
 }
 
 /* While the dropper is open the webview loses focus to the OS magnifier, so the
@@ -368,11 +400,55 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-.color-picker__copied {
+.color-picker__copy {
   flex: none;
-  min-width: 3.5rem;
-  font-size: 0.8rem;
+  min-width: 4.6rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
   color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.color-picker__copy:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--cp-color) 60%, var(--border));
+}
+
+/* rgb()/hsl() readouts, click to copy. */
+.color-picker__meta {
+  display: flex;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.color-picker__chip {
+  flex: 1;
+  min-width: 0;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.color-picker__chip:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--cp-color) 45%, var(--border));
 }
 
 /* Weather module */
@@ -657,9 +733,9 @@ body {
   border: none;
   background: transparent;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.85rem;
   line-height: 1;
-  padding: 0.25rem 0.6rem;
+  padding: 0.4rem 0.85rem;
   border-radius: 999px;
   cursor: pointer;
   transition:
@@ -682,8 +758,8 @@ body {
 }
 
 .agent__pill {
-  font-size: 0.72rem;
-  padding: 0.15rem 0.5rem;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.75rem;
   border-radius: 999px;
   border: 1px solid var(--border);
   color: var(--muted);
@@ -818,12 +894,12 @@ body {
 .agent__input {
   flex: 1;
   min-width: 0;
-  padding: 0.45rem 0.6rem;
+  padding: 0.6rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
-  font-size: 0.9rem;
+  font-size: 0.95rem;
 }
 
 .agent__input:focus {
@@ -1431,4 +1507,70 @@ body {
   display: block;
   font-size: 0.68rem;
   color: #b45309;
+}
+
+/* ---- Model Lab: native controls pick up the app's styling --------------- */
+
+/* The lab's plain buttons (Choose folder, Rescan, the submit) render as OS
+   defaults otherwise. Scoped to unclassed buttons so the styled ones (tabs,
+   list items, pills) keep their own look. */
+.lab button:not([class]) {
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.lab button:not([class]):hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+}
+
+.lab button:not([class]):disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* The fine-tune submit stands out as the section's primary action. */
+.lab form button[type="submit"]:not([class]) {
+  background: var(--primary);
+  color: var(--primary-text);
+  border-color: transparent;
+  padding: 0.55rem 1rem;
+  font-size: 0.88rem;
+}
+
+.lab form button[type="submit"]:not([class]):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--primary) 88%, #fff);
+}
+
+.lab input:not([type="checkbox"]),
+.lab select {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.lab input:not([type="checkbox"]):focus,
+.lab select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.lab input[type="checkbox"] {
+  accent-color: var(--primary);
+}
+
+/* Number fields (Max steps) stay compact; text fields fill their row. */
+.lab__form input[type="text"],
+.lab__form input:not([type]) {
+  width: 100%;
 }
