@@ -95,7 +95,7 @@ export function TasksExpanded() {
       {loading ? (
         <p className="notice">Loading…</p>
       ) : tasks.length === 0 ? (
-        <p className="notice">No tasks yet — add one above.</p>
+        <p className="notice">No tasks yet. Add one above.</p>
       ) : (
         <ul className="task-list">
           {tasks.map((task) => (

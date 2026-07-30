@@ -264,7 +264,7 @@ function validate(schema: DatasetSchema, records: unknown[]): PreviewIssue[] {
       issues.push({
         level: "warn",
         message:
-          "Couldn't recognise a known schema — Studio will try to auto-detect. Check the records below look right.",
+          "Couldn't recognise a known schema; Studio will try to auto-detect. Check the records below look right.",
       });
   }
   return issues;
@@ -291,7 +291,7 @@ export function analyzeHead(
         {
           level: "warn",
           message:
-            "Preview isn't available for .parquet yet — Studio still trains it.",
+            "Preview isn't available for .parquet yet; Studio still trains it.",
         },
       ],
     };
@@ -318,7 +318,7 @@ export function analyzeHead(
     issues.unshift({
       level: "warn",
       message:
-        "This .json is one large array — a preview would need the whole file.",
+        "This .json is one large array; a preview would need the whole file.",
     });
   }
   // Only flag dissent for a schema that was actually recognised.
