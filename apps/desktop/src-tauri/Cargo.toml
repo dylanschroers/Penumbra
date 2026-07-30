@@ -21,6 +21,18 @@ tauri-plugin-dialog = "2"
 rusqlite = { version = "0.34", features = ["bundled"] }
 serde_json = "1"
 
+# Screen color sampling for the color picker (src/dropper.rs): read a desktop
+# pixel with GDI, and watch for the pick click with a low-level mouse hook. The
+# version matches what tauri already resolves on Windows, so this adds a
+# dependency edge rather than a second copy of the crate.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 # PR_SET_PDEATHSIG for the llama-server sidecar: the kernel kills the child when
 # the app dies, so a crash or SIGKILL can't leave it orphaned on :8080
 # (src/lib.rs). Linux-only; other platforms rely on the RunEvent::Exit handler.

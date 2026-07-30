@@ -321,6 +321,53 @@ body {
   outline-offset: 1px;
 }
 
+/* Square icon button, sized to match the swatch so the row reads as one strip.
+   Overrides the wide default .btn padding. */
+.color-picker__dropper {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+/* While the dropper is open the webview loses focus to the OS magnifier, so the
+   pressed state is the only cue that the app is still waiting for a pick. */
+.color-picker__dropper[aria-pressed="true"] {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+/* Dropper status line. Deliberately not .notice: that carries 1.5rem of block
+   padding for full-panel empty states, which would jolt the card's height every
+   time the dropper opens. Always rendered, with the height reserved, so
+   appearing and clearing the text shifts nothing below it. */
+.color-picker__status {
+  margin: 0;
+  min-height: 1.1rem;
+  font-size: 0.8rem;
+  line-height: 1.1rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.color-picker__status--error {
+  color: var(--danger);
+}
+
+/* The live hex under the cursor. Tabular figures so the six digits don't jitter
+   the line as the value changes at ~25Hz. */
+.color-picker__preview {
+  margin-right: 0.4rem;
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
 .color-picker__copied {
   flex: none;
   min-width: 3.5rem;
