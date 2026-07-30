@@ -140,13 +140,23 @@ export function AppShell() {
   } | null>(null);
   // The snap zone the dragged window would land in if released now.
   const [snapHint, setSnapHint] = useState<SnapZone | null>(null);
+  // Whether a window is mid-drag by its bar. State, not just the ref above, so
+  // the save effect below re-runs when it clears.
+  const [barDragging, setBarDragging] = useState(false);
 
   // Write the workspace back on every change. Not gated on `launched`: the set
   // survives a return to the launcher in React already, and persisting it there
   // too keeps the stored record equal to the live one at all times.
+  //
+  // Held off while a window is being dragged, though: a drag rewrites `windows`
+  // on every pointermove, and localStorage.setItem is a synchronous, disk-backed
+  // write — one per move event, each preceded by a full JSON.stringify. Only
+  // where the window lands is worth storing, and `barDragging` is a dependency
+  // so clearing it on release triggers exactly that one write.
   useEffect(() => {
+    if (barDragging) return;
     saveSession({ open: openModuleIds, windows });
-  }, [openModuleIds, windows]);
+  }, [openModuleIds, windows, barDragging]);
 
   // Free windows are positioned in desk pixels, so a desk that shrinks (the
   // chat opening, the app window resizing) can strand them past the edge where
@@ -403,6 +413,7 @@ export function AppShell() {
       grabY: e.clientY - rect.top,
       deskRect,
     };
+    setBarDragging(true);
 
     const onMove = (ev: globalThis.PointerEvent) => {
       const drag = winDrag.current;
@@ -440,6 +451,9 @@ export function AppShell() {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
+      // Before the early return: a cancelled drag still has to re-enable the
+      // save, or the workspace stops persisting for the rest of the session.
+      setBarDragging(false);
       const drag = winDrag.current;
       if (!drag) return;
       winDrag.current = null;
