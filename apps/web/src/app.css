@@ -970,6 +970,14 @@ body {
   border-bottom-color: var(--primary);
 }
 
+/* Greyed rather than hidden: a tab that vanished would read as a missing
+   feature, where a dead one plus the notice above it reads as a missing
+   server. */
+.lab__tab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .lab__form {
   display: flex;
   flex-direction: column;

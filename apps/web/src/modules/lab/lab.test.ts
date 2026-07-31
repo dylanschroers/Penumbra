@@ -1,6 +1,31 @@
 import { looksLocalPath } from "@penumbra/shared";
 import { describe, expect, it } from "vitest";
-import { formatWhen, toDatasetSource } from "./LabModule";
+import {
+  formatWhen,
+  OFFLINE_TAB,
+  SERVER_TABS,
+  TABS,
+  toDatasetSource,
+} from "./LabModule";
+
+// A new tab is classified by omission: leaving it out of SERVER_TABS silently
+// declares it works with no server, and the failure is a tab that stays clickable
+// and then shows nothing but a fetch error.
+describe("tab gating", () => {
+  it("classifies every tab as server-reliant or not", () => {
+    const offline = TABS.filter((t) => !SERVER_TABS.has(t));
+    expect(offline).toEqual(["datasets"]);
+  });
+
+  it("falls back to a tab that survives a dead server", () => {
+    expect(TABS).toContain(OFFLINE_TAB);
+    expect(SERVER_TABS.has(OFFLINE_TAB)).toBe(false);
+  });
+
+  it("leaves something usable when the server is gone", () => {
+    expect(TABS.some((t) => !SERVER_TABS.has(t))).toBe(true);
+  });
+});
 
 // Getting this wrong sends a filesystem path to Studio as a HuggingFace repo id
 // (or vice versa), and the training job fails minutes later with an opaque

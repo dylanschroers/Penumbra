@@ -51,6 +51,11 @@ export function useLab() {
   const [scores, setScores] = useState<BenchmarkResult[]>([]);
   const [available, setAvailable] = useState<AvailableModels | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Whether the server answered the last poll. Null until the first one
+   *  returns — kept apart from `false` so the UI can hold off on saying
+   *  "disconnected" during the round trip it takes to find out, rather than
+   *  flashing it on every mount. */
+  const [connected, setConnected] = useState<boolean | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -70,9 +75,11 @@ export function useLab() {
       setScores(sc);
       setAvailable(av);
       setError(null);
+      setConnected(true);
     } catch (err) {
       setStatus(null);
       setError(err instanceof Error ? err.message : String(err));
+      setConnected(false);
     }
   }, []);
 
@@ -106,6 +113,7 @@ export function useLab() {
     scores,
     available,
     error,
+    connected,
     running: jobs.some((j) => j.state === "running"),
     finetune: (req: FinetuneRequest) => act("/lab/finetune", req),
     // The Hub fields are optional and, when given, are the only way the artifact
