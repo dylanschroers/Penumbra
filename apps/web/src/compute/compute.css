@@ -52,7 +52,7 @@
 }
 
 /* A filled dot for a target that can answer, hollow for one that cannot — the
-   same three states the pills use. */
+   same states the pills use. */
 .ct__dot {
   width: 0.5rem;
   height: 0.5rem;
@@ -66,7 +66,10 @@
   border-color: var(--primary);
 }
 
-.ct__dot--unauthorized {
+/* Amber for the two "answering, but not usable" states: something is there, and
+   what it needs is a correction rather than a restart. */
+.ct__dot--unauthorized,
+.ct__dot--not_studio {
   background: #fbbf24;
   border-color: #f59e0b;
 }
@@ -102,9 +105,9 @@
   gap: 0.35rem;
 }
 
-/* The names are long and the row is narrow; let the select take the slack and
+/* The names are long and the row is narrow; let the field take the slack and
    shrink below its content rather than pushing the panel wide. */
-.ct__models-row select {
+.ct__models-row input {
   flex: 1;
   min-width: 0;
 }

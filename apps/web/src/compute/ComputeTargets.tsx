@@ -18,6 +18,7 @@ import "./compute.css";
 const STATE_LABEL: Record<ComputeTarget["state"], string> = {
   ready: "ready",
   unauthorized: "key rejected",
+  not_studio: "not Studio's API",
   stopped: "not answering",
 };
 
@@ -26,6 +27,14 @@ const STATE_LABEL: Record<ComputeTarget["state"], string> = {
 function stateHint(target: ComputeTarget): string {
   if (target.state === "unauthorized") {
     return "Answering, but rejecting the key. Studio mints a new one on install and on every rotation, so paste the current one.";
+  }
+  // The one that used to read as "ready with nothing loaded": something answers,
+  // so the address is not wrong in the obvious way, but it is not Studio's API
+  // talking and every later call fails on a body that is not JSON.
+  if (target.state === "not_studio") {
+    return target.id === "colab"
+      ? "Something answers here, but not Studio's API. A Colab notebook's own link (colab.googleusercontent.com, from google.colab.kernel.proxyPort) is authenticated by your browser session and returns a sign-in page to anything else, so it cannot be used from the server. Expose port 8888 with a tunnel — cloudflared or ngrok — and paste that URL instead. Set a Studio key too: a public tunnel with no key is an open GPU."
+      : "Something answers here, but not Studio's API. Check the port: Studio's web UI and its API share one, so a UI-only port, a reverse proxy, or a sign-in page in front all look like this.";
   }
   if (!target.configured) {
     return target.id === "colab"
@@ -51,25 +60,39 @@ function TargetCard({
   const [apiKey, setApiKey] = useState("");
   const [pick, setPick] = useState("");
 
-  const models = compute.models[target.id];
-  const resident = models?.find((m) => m.loaded);
+  const inventory = compute.inventory[target.id];
+  const models = inventory?.models;
   const busy = compute.loading === target.id;
+
+  // What is loaded comes from the poll, not the inventory: the inventory is a
+  // disk scan fetched once, while this arrives with every reachability probe.
+  // That is the difference between seeing a model appear seconds after someone
+  // loads it in Studio's own UI on the other machine, and not seeing it until
+  // the panel is re-opened. The inventory row, when there is one, only supplies
+  // the nicer label.
+  const served = target.servedModel;
+  const resident = served
+    ? (models?.find((m) => m.id === served) ?? {
+        id: served,
+        label: served,
+      })
+    : null;
 
   // Fetched when the card can actually serve it, and not on the poll: this
   // reaches the target's disk to enumerate models, which is far heavier than
   // the reachability probe the poll already does.
   useEffect(() => {
-    if (target.state === "ready" && models === undefined) {
-      void compute.loadModels(target.id);
+    if (target.state === "ready" && inventory === undefined) {
+      void compute.loadInventory(target.id);
     }
-  }, [target.state, target.id, models, compute]);
+  }, [target.state, target.id, inventory, compute]);
 
   // Follow the backend rather than holding a stale choice: a model loaded from
   // elsewhere, or evicted, would otherwise leave this box naming something that
   // is no longer what answers.
   useEffect(() => {
-    if (resident) setPick(resident.id);
-  }, [resident]);
+    if (served) setPick(served);
+  }, [served]);
 
   function onSave(event: FormEvent) {
     event.preventDefault();
@@ -124,31 +147,44 @@ function TargetCard({
             Loaded model
           </label>
           <div className="ct__models-row">
-            <select
+            {/* Free text with the inventory as suggestions, rather than a list
+                you cannot escape. A fresh Colab has nothing on disk yet, so a
+                list-only control can never load the *first* model there — and
+                Studio resolves an id it doesn't recognize as a HuggingFace repo
+                and fetches it, which is the only way a model gets onto a machine
+                that has never seen one. */}
+            <input
               id={`load-${target.id}`}
+              list={`ct-models-${target.id}`}
               value={pick}
-              disabled={busy || !models?.length}
+              disabled={busy}
+              placeholder={
+                models?.length
+                  ? "Pick one, or type a HuggingFace id"
+                  : "HuggingFace id, e.g. unsloth/Qwen3-4B"
+              }
               onChange={(e) => setPick(e.target.value)}
-            >
-              {models === undefined && <option value="">Reading…</option>}
-              {models?.length === 0 && (
-                <option value="">No models on this target</option>
-              )}
+            />
+            <datalist id={`ct-models-${target.id}`}>
               {models?.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.loaded ? "● " : ""}
-                  {m.label} · {m.format}
-                  {m.sizeBytes > 0
-                    ? ` · ${(m.sizeBytes / 1e9).toFixed(1)} GB`
-                    : ""}
-                </option>
+                <option
+                  key={m.id}
+                  value={m.id}
+                  // Marked against the polled model, not the row's own flag,
+                  // so the list and the note below cannot say different things.
+                  label={`${m.id === served ? "● " : ""}${m.label} · ${m.format}${
+                    m.sizeBytes > 0
+                      ? ` · ${(m.sizeBytes / 1e9).toFixed(1)} GB`
+                      : ""
+                  }`}
+                />
               ))}
-            </select>
+            </datalist>
             <button
               type="button"
-              disabled={busy || !pick || pick === resident?.id}
-              onClick={() => void compute.loadModel(target.id, pick)}
-              title="Load this model here, replacing whatever is loaded now"
+              disabled={busy || !pick.trim() || pick === resident?.id}
+              onClick={() => void compute.loadModel(target.id, pick.trim())}
+              title="Load this model here, downloading it first if this machine doesn't have it, and replacing whatever is loaded now"
             >
               {busy ? "Loading…" : "Load"}
             </button>
@@ -158,11 +194,20 @@ function TargetCard({
               part-way through. */}
           <p className="ct__models-note">
             {busy
-              ? "Weights are paging in; a large model takes a few minutes."
+              ? "Weights are paging in; a large model takes a few minutes, and a first download longer."
               : resident
                 ? `Serving ${resident.label}. Loading another replaces it.`
                 : "Nothing loaded, so chat and benchmarks have nothing to answer with."}
           </p>
+          {/* An empty list and a list that failed to load look identical from
+              here, and send you to completely different places. */}
+          {inventory?.inventoryError && (
+            <p className="ct__hint">
+              Its model inventory did not answer, so only what is loaded is
+              suggested above; loading by id still works. (
+              {inventory.inventoryError})
+            </p>
+          )}
         </div>
       )}
 

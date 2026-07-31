@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { StudioClient } from "../lab/studio";
+import { type StudioClient, StudioHttpError } from "../lab/studio";
 import { registerComputeRoutes } from "./routes";
 import { createTargetStore, type TargetStore } from "./targets";
 
@@ -45,7 +45,10 @@ describe("model loading", () => {
       targets,
       makeClient: () =>
         ({
-          probe: async () => "ready",
+          // The probe carries the model with the state: they come from one
+          // reading of /v1/models, so a fake that split them could not drift
+          // the way the real client cannot.
+          probe: async () => ({ state: "ready", served: "resident-model" }),
           loadedModel: async () => "resident-model",
           listLocalModels: async () => [],
           ggufVariants: async () => ({
@@ -53,12 +56,28 @@ describe("model loading", () => {
             defaultVariant: "Q4_K_M",
           }),
           loadModel: async () => {},
+          loadInFlight: async () => false,
           ...over,
         }) as unknown as StudioClient,
+      // A lost response is waited out by polling; these tests are not going to
+      // sit through three seconds of it.
+      loadPollMs: 1,
+      loadSettleMs: 500,
     });
     await app.ready();
     return app;
   }
+
+  // The poll is the only call repeated while a panel sits open, so what is
+  // loaded rides on it. Without that, a model loaded in Studio's own UI on
+  // another machine stays invisible until someone re-opens the panel.
+  it("reports the resident model with the target's state", async () => {
+    const app = await withStudio({});
+    const body = (await app.inject({ url: "/compute/targets" })).json();
+    expect(
+      body.targets.find((t: { id: string }) => t.id === "local"),
+    ).toMatchObject({ state: "ready", servedModel: "resident-model" });
+  });
 
   it("lists a target's models and marks the resident one", async () => {
     const app = await withStudio({
@@ -95,6 +114,46 @@ describe("model loading", () => {
       id: "resident-model",
       loaded: true,
     });
+  });
+
+  // A Colab Studio has nothing on disk until something is downloaded, and the
+  // model it is serving may have come from a checkpoint dir or straight from
+  // HuggingFace. Offering only inventory rows hid the one model that could
+  // answer, on the target where that is the normal case.
+  it("offers the resident model even when the inventory does not list it", async () => {
+    const app = await withStudio({ listLocalModels: async () => [] });
+
+    const body = (
+      await app.inject({ url: "/compute/targets/local/models" })
+    ).json();
+    expect(body.models).toEqual([
+      {
+        id: "resident-model",
+        label: "resident-model",
+        format: "unknown",
+        sizeBytes: 0,
+        requiresVariant: false,
+        loaded: true,
+      },
+    ]);
+    expect(body.inventoryError).toBeNull();
+  });
+
+  // An empty list and a list that failed to load send you to different places,
+  // so the panel is told which happened rather than left to guess.
+  it("reports why an inventory is empty when the call failed", async () => {
+    const app = await withStudio({
+      listLocalModels: async () => {
+        throw new Error("studio /api/hub/local responded 500");
+      },
+    });
+
+    const body = (
+      await app.inject({ url: "/compute/targets/local/models" })
+    ).json();
+    expect(body.inventoryError).toContain("500");
+    // Still usable: what is loaded is still what a benchmark would measure.
+    expect(body.models).toMatchObject([{ id: "resident-model", loaded: true }]);
   });
 
   it("loads a model and reports what the backend ended up serving", async () => {
@@ -139,7 +198,10 @@ describe("model loading", () => {
   it("reports why a load failed", async () => {
     const app = await withStudio({
       loadModel: async () => {
-        throw new Error("studio /api/inference/load responded 500: OOM");
+        throw new StudioHttpError(
+          500,
+          "studio /api/inference/load responded 500: OOM",
+        );
       },
     });
     const res = await app.inject({
@@ -150,6 +212,56 @@ describe("model loading", () => {
     expect(res.statusCode).toBe(502);
     expect(res.json()).toMatchObject({ error: "load_failed" });
     expect(res.json().message).toContain("OOM");
+  });
+
+  // The Colab case. A load holds the connection while weights page in and the
+  // tunnel cuts at ~100s, so the response is lost while the load carries on —
+  // reporting that as a failure would send you to reload a model that is
+  // already there.
+  it("waits out a lost response and reports what ended up loaded", async () => {
+    let served = "resident-model";
+    const app = await withStudio({
+      loadModel: async () => {
+        // What a cut tunnel looks like from here: a gateway status, not
+        // Studio's own answer.
+        throw new StudioHttpError(
+          524,
+          "studio /api/inference/load responded 524",
+        );
+      },
+      loadedModel: async () => served,
+      // Still paging weights in for one poll, then done.
+      loadInFlight: async () => {
+        served = "new-model";
+        return true;
+      },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/load",
+      payload: { model: "new-model" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ loaded: "new-model" });
+  });
+
+  // The same drop, with nothing to show for it: Studio settles with the model
+  // it already had, so the original error is the honest answer.
+  it("gives up on a lost response that never loads anything", async () => {
+    const app = await withStudio({
+      loadModel: async () => {
+        throw new StudioHttpError(504, "gateway timeout");
+      },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/load",
+      payload: { model: "never-arrives" },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().message).toContain("gateway timeout");
   });
 
   it("refuses a target with no address", async () => {

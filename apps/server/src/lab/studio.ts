@@ -88,7 +88,7 @@ export function toAvailableModels(
   models: StudioLocalModel[],
   served: string | null,
 ): AvailableModel[] {
-  return models.map((m) => {
+  const mapped = models.map((m) => {
     const id = m.load_id ?? m.id ?? "";
     return {
       id,
@@ -101,6 +101,73 @@ export function toAvailableModels(
       loaded: !!served && (id === served || m.id === served),
     };
   });
+
+  // A target can serve a model its inventory never mentions, and Colab is where
+  // that is normal rather than exotic: /api/hub/local scans disk (models dir, HF
+  // cache, LM Studio, Ollama) while /v1/models reports the resident backend's
+  // own identifier, so a model loaded from a checkpoint dir, under an id the
+  // scan spells differently, or through an inventory call that failed outright,
+  // is listed nowhere. Without this the served model — the only one a benchmark
+  // can actually measure — is the one option the picker does not offer, and the
+  // form then disables itself against a Studio with a model sitting loaded on
+  // the GPU.
+  if (served && !mapped.some((m) => m.loaded)) {
+    mapped.push({
+      id: served,
+      label: served,
+      // Unknown rather than guessed: this row comes from /v1/models, which says
+      // what is answering and nothing about the file behind it.
+      format: "unknown",
+      sizeBytes: 0,
+      requiresVariant: false,
+      loaded: true,
+    });
+  }
+  return mapped;
+}
+
+/**
+ * What a target can serve and what it is serving, as the pickers need it.
+ *
+ * Shared by the two routes that offer models — the benchmark form's, resolved by
+ * role, and the compute panel's, resolved by target — so neither can disagree
+ * with the other about a model's name or which one is resident.
+ *
+ * Either call is allowed to fail: a picker that lost its list is recoverable, an
+ * error that blanks the panel is not. But a failure is *reported* rather than
+ * swallowed, because "this target has nothing on it" and "the call asking it
+ * failed" look identical as an empty list and need completely different fixes.
+ * That is doubly true of the resident model: swallowing that one turns "we could
+ * not ask what is loaded" into "nothing is loaded", which is a lie the benchmark
+ * form then repeats.
+ */
+export async function readInventory(client: StudioClient): Promise<{
+  models: AvailableModel[];
+  inventoryError: string | null;
+}> {
+  const attempt = async <T>(
+    work: Promise<T>,
+    fallback: T,
+  ): Promise<[T, string | null]> =>
+    work.then(
+      (value) => [value, null] as [T, string | null],
+      (err: unknown) => [
+        fallback,
+        err instanceof Error ? err.message : String(err),
+      ],
+    );
+
+  const [[models, listError], [served, servedError]] = await Promise.all([
+    attempt<StudioLocalModel[]>(client.listLocalModels(), []),
+    attempt<string | null>(client.loadedModel(), null),
+  ]);
+
+  return {
+    models: toAvailableModels(models, served),
+    // The resident lookup first: it is the one whose failure is invisible in the
+    // list, and the one that decides whether a benchmark can run at all.
+    inventoryError: servedError ?? listError,
+  };
 }
 
 /** Where to publish an export, so it outlives the machine that produced it.
@@ -148,12 +215,42 @@ export type StudioProgress = SseFrame<Record<string, unknown>>;
 
 /**
  * Studio's readiness as the lab reports it:
- * - `ready` — answering and authorized.
+ * - `ready` — answering, authorized, and answering as *Studio*.
  * - `unauthorized` — up, but the key is missing or wrong (a 401/403). This is a
  *   *different* fix from "not running", so it is not collapsed into `stopped`.
+ * - `not_studio` — something answered 200 that is not Studio's API: a sign-in
+ *   page, a proxy's own response, a web UI on the port. Kept apart from `ready`
+ *   because it is the failure that lies — every later call fails on a body that
+ *   is not JSON, and "no model is loaded" is what that looks like from the
+ *   inside.
  * - `stopped` — unreachable, or answering with some other error.
  */
-export type StudioReachability = "ready" | "unauthorized" | "stopped";
+export type StudioReachability =
+  | "ready"
+  | "unauthorized"
+  | "not_studio"
+  | "stopped";
+
+/** The readiness probe's budget. Generous next to a localhost round trip
+ *  because the target may be a tunnel to another continent, and a Colab that
+ *  takes two seconds to answer is up, not down. */
+const PROBE_TIMEOUT_MS = 4000;
+
+/**
+ * What one probe learned.
+ *
+ * The model rides along because it costs nothing: readiness is decided by
+ * reading `/v1/models`, and that listing *is* the answer to "what is loaded".
+ * Reporting them together is what lets a panel that polls for reachability show
+ * a model appear the moment it is loaded on the other machine, rather than
+ * needing a second, heavier call nobody thought to repeat.
+ */
+export interface StudioProbe {
+  state: StudioReachability;
+  /** What it is serving right now, or null when it is serving nothing or was
+   *  in no state to be asked. */
+  served: string | null;
+}
 
 export class StudioClient {
   readonly baseURL: string;
@@ -192,7 +289,8 @@ export class StudioClient {
       // detail names the offending field; without it the caller sees only
       // "responded 422" and has to reproduce the call by hand to learn why.
       const detail = await res.text().catch(() => "");
-      throw new Error(
+      throw new StudioHttpError(
+        res.status,
         `studio ${path} responded ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`,
       );
     }
@@ -204,24 +302,50 @@ export class StudioClient {
    * "not running", because a 401 sends you looking in the wrong place
    * otherwise — the reason this returns three states rather than a boolean.
    */
-  async probe(): Promise<StudioReachability> {
+  async probe(): Promise<StudioProbe> {
+    const nothing = (state: StudioReachability): StudioProbe => ({
+      state,
+      served: null,
+    });
     try {
       const res = await fetch(`${this.baseURL}/v1/models`, {
         headers: this.headers,
-        signal: AbortSignal.timeout(1500),
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       });
-      if (res.ok) return "ready";
-      if (res.status === 401 || res.status === 403) return "unauthorized";
-      return "stopped";
+      if (res.status === 401 || res.status === 403) {
+        return nothing("unauthorized");
+      }
+      if (!res.ok) return nothing("stopped");
+
+      // A 200 is not proof this is Studio. The address is often a proxy or a
+      // tunnel, and those answer for themselves: a Google sign-in page (Colab's
+      // kernel proxy authenticates with the browser's session, so a server
+      // reaching it is redirected), a tunnel's own interstitial, or the Studio
+      // *web UI* on a port where the API is not. Every one of those is a 200
+      // with an HTML body, and calling it ready is the failure that lies —
+      // `loadedModel` then parses HTML, fails, and reports what looks exactly
+      // like a Studio with nothing loaded.
+      //
+      // The listing's own contract is the test: `data` is an array, empty when
+      // nothing is resident. Studio itself 404s an unknown /v1 path rather than
+      // falling through to its SPA, so anything else here came from in front.
+      const body = (await res.json().catch(() => null)) as {
+        data?: ModelCatalogEntry[];
+      } | null;
+      if (!Array.isArray(body?.data)) return nothing("not_studio");
+      // Read through the shared rule rather than by hand: an entry can be a
+      // model sitting on disk, and reporting one as served would put a name in
+      // the panel that no completion would ever come from.
+      return { state: "ready", served: pickLoadedModel(body.data) ?? null };
     } catch {
-      return "stopped";
+      return nothing("stopped");
     }
   }
 
   /** True when Studio is answering and authorized. Kept for callers that only
-   *  need a yes/no; `probe()` carries the reason. */
+   *  need a yes/no; `probe()` carries the reason and the model. */
   async reachable(): Promise<boolean> {
-    return (await this.probe()) === "ready";
+    return (await this.probe()).state === "ready";
   }
 
   /**
@@ -317,6 +441,31 @@ export class StudioClient {
       },
       AbortSignal.timeout(15 * 60_000),
     );
+  }
+
+  /**
+   * Whether a load is still working inside Studio.
+   *
+   * Two endpoints because the two backends report differently: a transformers
+   * load appears in `/api/inference/status`'s `loading` list, while a GGUF load
+   * shows up only as a `/api/inference/load-progress` phase (status reports the
+   * llama backend as not-loaded and the *other* backend's empty loading set).
+   * Either one working is enough to say "still going".
+   *
+   * Never throws: this answers a question about a connection that has already
+   * gone wrong once, and an unreachable Studio is simply not loading anything
+   * we can see.
+   */
+  async loadInFlight(): Promise<boolean> {
+    const probe = <T>(path: string): Promise<T | null> =>
+      this.json<T>(path, {}, AbortSignal.timeout(10_000)).catch(() => null);
+
+    const [status, progress] = await Promise.all([
+      probe<{ loading?: string[] }>("/api/inference/status"),
+      probe<{ phase?: string | null }>("/api/inference/load-progress"),
+    ]);
+    const phase = progress?.phase ?? null;
+    return (status?.loading?.length ?? 0) > 0 || (!!phase && phase !== "ready");
   }
 
   /**
@@ -430,6 +579,23 @@ export class StudioClient {
 
   async exportStatus(): Promise<ExportStatus> {
     return this.json("/api/export/status");
+  }
+}
+
+/**
+ * A non-2xx from Studio, carrying the status alongside the message.
+ *
+ * The status is the difference between "Studio read the request and refused it"
+ * and "something between here and Studio gave up" — a distinction the load path
+ * acts on, because only the second may still be running on the other side.
+ */
+export class StudioHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "StudioHttpError";
   }
 }
 

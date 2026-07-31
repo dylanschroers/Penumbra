@@ -33,10 +33,15 @@ export interface LabStatus {
   suites: SuiteDefinition[];
 }
 
-/** What the benchmark target can serve, and which of it is resident. */
+/** What the benchmark target can serve, and which of it is resident. The
+ *  resident model is always listed, inventory or no inventory: it is the only
+ *  one a benchmark can actually score. */
 export interface AvailableModels {
   target: string;
   models: AvailableModel[];
+  /** Why the list holds no more than that, when the target's own inventory
+   *  refused to answer. Null when it answered. */
+  inventoryError: string | null;
 }
 
 export function useLab() {

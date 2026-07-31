@@ -78,11 +78,31 @@ live runs where the two disagreed. These are the facts the design leans on.
    flag; llama-server omits the flag and lists only what is resident. Reading
    `data[0].id` reports `ready` off a model sitting on disk, and the next
    completion then fails. `getStatus()` prefers a `loaded: true` entry and falls
-   back to `data[0]` only when no entry carries the flag.
-8. **Never send `enable_tools` or `mcp_enabled`.** Those ask Studio to run *its
-   own* tool loop against its MCP registry; it passes client-supplied tools
-   through only while both are absent. Setting either silently takes the turn
-   away from Penumbra's tools. A test pins their absence from the request body.
+   back to `data[0]` only when no entry carries the flag. Newer Studio builds
+   emit no flag at all — `_openai_model_objects` lists one entry per *loaded*
+   backend and nothing else — which the same rule reads correctly, so both
+   shapes are handled and neither needs detecting.
+8. **`/v1/models` and the inventory answer different questions, and only the
+   first is authoritative.** `/api/hub/local` scans disk (models dir, HF cache,
+   LM Studio, Ollama) while `/v1/models` reports the resident backend's own
+   identifier. A model loaded from a checkpoint dir, or under an id the scan
+   spells differently, is served but unlisted — routine on Colab, where the disk
+   starts empty. Anything resident is therefore always offered as a choice, even
+   with no inventory row behind it, and an inventory that *fails* says so
+   (`inventoryError`) rather than passing as a target with nothing on it.
+9. **A load holds its connection while weights page in.** `/api/inference/load`
+   answers only when the model is resident, which through a Colab tunnel means
+   the response is usually lost to the same ~100s cut export hits. A gateway
+   status or a dead socket is therefore not a verdict: `/api/inference/status`
+   (`loading`, for a transformers load) and `/api/inference/load-progress`
+   (`phase`, for a GGUF one) are asked instead, and the load is failed only once
+   Studio is idle with nothing new resident. Studio's own answer — a 4xx on a
+   bad id, a 500 on an OOM — is a verdict and is reported straight through.
+10. **Never send `enable_tools` or `mcp_enabled`.** Those ask Studio to run
+    *its own* tool loop against its MCP registry; it passes client-supplied
+    tools through only while both are absent. Setting either silently takes the
+    turn away from Penumbra's tools. A test pins their absence from the request
+    body.
 
 ## Hardware ceiling
 
@@ -142,6 +162,15 @@ training runs for minutes to hours, so nothing blocks a request on completion.
 The job row is the source of truth rather than the connection: the client may be
 gone, and must still be able to read what happened when it returns.
 
+**Progress is a number, not a line of output.** A benchmark's position is
+already in what it prints — lm-eval's tqdm frames, the personal suite's own case
+count — so `lab/progress.ts` reads it into `{progress, detail}` and the route
+writes that down unchanged. Piping raw chunks into `detail` instead, which is
+what this replaced, left `progress` null forever: the UI could not draw a bar
+even in principle, and a two-hour run was indistinguishable from a hang. The
+estimate is written as a duration and never a clock time, because the line is
+composed on the server and read wherever the app is open.
+
 Two failure modes are worth knowing because both once produced silently wrong
 results:
 
@@ -167,10 +196,26 @@ Every target is a full Studio — the key is unscoped (fact 1) — so they do no
 differ in what they *can* do. They differ in whether their configuration
 survives a restart.
 
+**Colab's own link is not an address this server can use.** The notebook prints
+a `colab.googleusercontent.com` URL from `google.colab.kernel.proxyPort(8888)`,
+which is authenticated by the browser session that opened the notebook; anything
+else reaching it gets Google's sign-in page. That page is a **200**, which is
+why the probe checks that `/v1/models` answers with a listing rather than
+trusting the status: without that check the target reads `ready` while every
+call behind it fails on HTML, and the app reports a Studio with nothing loaded.
+The state for it is `not_studio`, and the fix is an address that reaches port
+8888 directly — a cloudflared or ngrok tunnel — with a Studio key set, since a
+public tunnel to a keyless Studio is an open GPU.
+
 Targets are configured at `/compute/*`, not under `/lab/*`, because chat uses
 them too: the Studio a conversation runs against is the same one the Lab trains
-and benchmarks on. `GET /compute/targets` reports both, never a bearer. Roles
-are assigned there:
+and benchmarks on. `GET /compute/targets` reports both, never a bearer.
+
+It also reports **what each target is serving**, because that costs nothing:
+readiness is decided by reading `/v1/models`, and that listing is the answer.
+Since this is the one call a panel repeats, a model loaded from Studio's own UI
+on the other machine appears here within a poll, with no action in the app.
+Roles are assigned there too:
 
 - **chat** and **benchmark** each name a target. An assignment can outlive the
   target it names — Colab's config dies with the process — so the response
@@ -188,3 +233,18 @@ are assigned there:
 One GPU holds one model, so chat and benchmarking on the same target contend: a
 benchmark evicts the model the assistant is using. Pointing them at different
 targets is the only real fix, which is why the assignments are shown together.
+
+### Loading a model onto a target
+
+`POST /compute/targets/:id/load` makes a model resident, and the panel's field
+takes any id rather than only an inventory row. That is not a convenience: a
+fresh Colab has an empty disk, so a list-only control could never load the
+*first* model there, while Studio resolves an id it does not recognize as a
+HuggingFace repo and fetches it. The same field is how a Colab gets a model at
+all — nothing else in the app puts one there, and uploading weights from a
+laptop to a machine that can pull them from the Hub at Colab's bandwidth would
+be the slow way round.
+
+The load is a replacement, on a machine whose response may not survive the trip
+(fact 9), and what it ends up serving is read back from Studio rather than
+echoed from the request.

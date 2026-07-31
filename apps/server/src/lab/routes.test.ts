@@ -1041,9 +1041,12 @@ describe("GET /lab/models", () => {
     });
   });
 
-  // The form has to stay usable when the inventory cannot be read: an empty
-  // picker is recoverable, an error that blanks the Lab is not.
-  it("answers empty rather than failing when the target will not list", async () => {
+  // The form has to stay usable when the inventory cannot be read: a short
+  // picker is recoverable, an error that blanks the Lab is not. What is loaded
+  // still comes from /v1/models, so the run the form exists for is still
+  // offered — and the reason the rest is missing is reported rather than
+  // swallowed.
+  it("keeps the loaded model, and says why, when the target will not list", async () => {
     const app = await build(
       fakeStudio({
         listLocalModels: async () => {
@@ -1053,7 +1056,21 @@ describe("GET /lab/models", () => {
     );
     const res = await app.inject({ url: "/lab/models" });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ target: "local", models: [] });
+    expect(res.json()).toMatchObject({
+      target: "local",
+      models: [{ id: "loaded-model", loaded: true }],
+    });
+    expect(res.json().inventoryError).toContain("500");
+  });
+
+  // The case that blocked benchmarking on Colab: a reachable target with a
+  // model loaded, whose disk inventory lists nothing. The picker was empty, the
+  // form disabled itself, and the GPU sat there with a model on it.
+  it("offers a resident model the inventory never mentions", async () => {
+    const app = await build(fakeStudio({ listLocalModels: async () => [] }));
+    const body = (await app.inject({ url: "/lab/models" })).json();
+    expect(body.models).toMatchObject([{ id: "loaded-model", loaded: true }]);
+    expect(body.inventoryError).toBeNull();
   });
 
   it("marks nothing loaded when the target has nothing resident", async () => {

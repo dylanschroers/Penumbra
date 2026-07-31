@@ -19,10 +19,10 @@ import { openSseStream } from "../http/sse";
 import { lmEvalAvailable, runBenchmark } from "./benchmark";
 import type { LabStore } from "./jobs";
 import {
+  readInventory,
   StudioClient,
   type StudioRun,
   TrainingBusyError,
-  toAvailableModels,
 } from "./studio";
 import {
   computeNeed,
@@ -334,20 +334,18 @@ export function registerLabRoutes(
    *
    * `loaded` is the point of the endpoint as much as the list is. Studio serves
    * whatever is resident regardless of the id sent, so the entry marked loaded
-   * is the one a benchmark would really measure.
+   * is the one a benchmark would really measure — and it is offered even when
+   * the inventory does not list it, since otherwise the form hides the only
+   * model this target can score.
    */
   app.get("/lab/models", { preHandler }, async () => {
     const id = targets.effective("benchmark");
     const client = clientFor(id);
-    if (!client) return { target: id, models: [] };
+    if (!client) return { target: id, models: [], inventoryError: null };
 
-    const [models, served] = await Promise.all([
-      client.listLocalModels().catch(() => []),
-      client.loadedModel().catch(() => null),
-    ]);
-    // Same mapping the compute panel's list goes through, so the two views of
-    // one inventory cannot disagree about a model's name or which is resident.
-    return { target: id, models: toAvailableModels(models, served) };
+    // Same read the compute panel's list goes through, so the two views of one
+    // inventory cannot disagree about a model's name or which is resident.
+    return { target: id, ...(await readInventory(client)) };
   });
 
   app.get<{ Params: { id: string } }>(
@@ -728,7 +726,11 @@ export function registerLabRoutes(
           baseURL: inferenceURL ?? via.baseURL,
           apiKey: via.apiKey,
           signal: controller.signal,
-          onProgress: (line) => report({ detail: line.slice(0, 200) }),
+          // Relayed as given. The suite knows where it is; this route only
+          // writes it down. `progress` is null on a line that says nothing
+          // about position, and the store's COALESCE keeps the last real value
+          // rather than blanking a bar that was right.
+          onProgress: (update) => report(update),
         });
         store.recordScores(result);
       },

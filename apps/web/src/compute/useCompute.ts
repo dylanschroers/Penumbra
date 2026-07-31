@@ -20,6 +20,14 @@ import { api } from "../api";
  *  probe, and each probe costs a request to a possibly-unreachable host. */
 const POLL_MS = 5000;
 
+/** A target's models, plus why the list is short when it is. An inventory that
+ *  will not answer is not the same as a target with nothing on it, and the
+ *  panel says which. */
+export interface TargetInventory {
+  models: AvailableModel[];
+  inventoryError: string | null;
+}
+
 export interface Compute {
   state: ComputeState | null;
   error: string | null;
@@ -31,10 +39,10 @@ export interface Compute {
   clearTarget: (id: TargetId) => Promise<void>;
   assign: (role: ComputeRole, target: TargetId) => Promise<void>;
   /** What each target can serve, keyed by target id. Empty until fetched. */
-  models: Partial<Record<TargetId, AvailableModel[]>>;
+  inventory: Partial<Record<TargetId, TargetInventory>>;
   /** Fetch a target's inventory. Called when its card opens, not on the poll:
    *  it reaches the target's disk and is far heavier than a reachability probe. */
-  loadModels: (id: TargetId) => Promise<void>;
+  loadInventory: (id: TargetId) => Promise<void>;
   /** Make a model resident there. Evicts whatever was loaded. */
   loadModel: (id: TargetId, model: string) => Promise<void>;
   /** The target with a load in flight, if any. */
@@ -49,8 +57,8 @@ export interface Compute {
 export function useCompute(enabled = true): Compute {
   const [state, setState] = useState<ComputeState | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [models, setModels] = useState<
-    Partial<Record<TargetId, AvailableModel[]>>
+  const [inventory, setInventory] = useState<
+    Partial<Record<TargetId, TargetInventory>>
   >({});
   const [loading, setLoading] = useState<TargetId | null>(null);
 
@@ -87,17 +95,22 @@ export function useCompute(enabled = true): Compute {
     [refresh],
   );
 
-  const loadModels = useCallback(async (id: TargetId) => {
+  const loadInventory = useCallback(async (id: TargetId) => {
     try {
-      const body = await api<{ models: AvailableModel[] }>(
-        `/compute/targets/${id}/models`,
-      );
-      setModels((prev) => ({ ...prev, [id]: body.models }));
-    } catch {
-      // An inventory that will not answer leaves the picker empty; the card's
-      // own state already says why, and an error banner here would blame the
-      // wrong thing.
-      setModels((prev) => ({ ...prev, [id]: [] }));
+      const body = await api<TargetInventory>(`/compute/targets/${id}/models`);
+      setInventory((prev) => ({ ...prev, [id]: body }));
+    } catch (err) {
+      // A request that never landed leaves the picker empty. The card's own
+      // state usually says why, but the message is kept: a target reporting
+      // "ready" whose inventory call fails is exactly the case where the state
+      // alone explains nothing.
+      setInventory((prev) => ({
+        ...prev,
+        [id]: {
+          models: [],
+          inventoryError: err instanceof Error ? err.message : String(err),
+        },
+      }));
     }
   }, []);
 
@@ -112,22 +125,22 @@ export function useCompute(enabled = true): Compute {
         setError(null);
         // Re-read both: the pill's model and the list's "loaded" marker are the
         // same fact, and refreshing one without the other shows them disagreeing.
-        await Promise.all([refresh(), loadModels(id)]);
+        await Promise.all([refresh(), loadInventory(id)]);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setLoading(null);
       }
     },
-    [refresh, loadModels],
+    [refresh, loadInventory],
   );
 
   return {
     state,
     error,
     refresh,
-    models,
-    loadModels,
+    inventory,
+    loadInventory,
     loadModel,
     loading,
     // Send only what changed: an omitted field keeps its current value, while
