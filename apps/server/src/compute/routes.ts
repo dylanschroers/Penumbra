@@ -7,7 +7,7 @@ import {
 } from "@penumbra/shared";
 import type { FastifyInstance } from "fastify";
 import { requireAuth } from "../http/auth";
-import { StudioClient, toAvailableModels } from "../lab/studio";
+import { readInventory, StudioClient, StudioHttpError } from "../lab/studio";
 import {
   ROLES,
   type TargetCredentials,
@@ -22,12 +22,77 @@ import {
 // Same gate as the agent and lab routes: this configures where a model runs and
 // costs GPU, so it is an actuator, not data.
 
+/** How long a load may keep working after its response was lost. Matches the
+ *  timeout StudioClient.loadModel gives the request itself: past that, whatever
+ *  is happening over there is no longer this request's business. */
+const LOAD_SETTLE_MS = 15 * 60_000;
+
+/** Between settle polls. Long enough to be free, short enough that a load that
+ *  finished right after the drop is not left sitting. */
+const LOAD_POLL_MS = 3000;
+
+/**
+ * Whether a failed load may still be running on the other side.
+ *
+ * Studio answering for itself — a 4xx on a bad id, a 500 on an OOM — is a
+ * verdict, and waiting on it would stall for nothing. A gateway status or no
+ * response at all is the *connection* giving up, which says nothing about the
+ * load: that is the Cloudflare 524 the export path documents, hit here by any
+ * load slow enough to matter.
+ */
+function mayStillBeLoading(err: unknown): boolean {
+  if (!(err instanceof StudioHttpError)) return true;
+  return (
+    err.status === 502 ||
+    err.status === 503 ||
+    err.status === 504 ||
+    err.status >= 520
+  );
+}
+
+/**
+ * Wait out a load whose response never came back.
+ *
+ * Weights page in for minutes while `/api/inference/load` holds the connection
+ * open, while the load carries on inside Studio regardless of what happens to
+ * the connection. So ask Studio what it is doing, and give up only once it is
+ * doing nothing *and* nothing new is resident.
+ *
+ * Returns the model that ended up serving, or null if none did.
+ */
+async function settleLoad(
+  client: StudioClient,
+  baseline: string | null,
+  pollMs: number,
+  timeoutMs: number,
+): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
+  // A load that has not registered yet looks exactly like one that never
+  // started, so a single quiet poll is not an answer. Three is.
+  let quiet = 0;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, pollMs));
+    const served = await client.loadedModel().catch(() => null);
+    if (served && served !== baseline) return served;
+    if (await client.loadInFlight()) {
+      quiet = 0;
+      continue;
+    }
+    if (++quiet >= 3) return null;
+  }
+  return null;
+}
+
 export interface ComputeRouteOptions {
   targets: TargetStore;
   token?: string;
   /** Builds the Studio client for a target. Injected so tests can drive these
    *  routes without a live Studio, the same seam the lab routes use. */
   makeClient?: (id: TargetId, creds: TargetCredentials) => StudioClient;
+  /** How a load whose response was lost is waited out. Overridden only by tests,
+   *  which have no patience for real polling. */
+  loadPollMs?: number;
+  loadSettleMs?: number;
 }
 
 export function registerComputeRoutes(
@@ -36,6 +101,8 @@ export function registerComputeRoutes(
     targets,
     token = process.env.PENUMBRA_AGENT_TOKEN,
     makeClient = (_id, creds) => new StudioClient(creds),
+    loadPollMs = LOAD_POLL_MS,
+    loadSettleMs = LOAD_SETTLE_MS,
   }: ComputeRouteOptions,
 ): void {
   const preHandler = requireAuth(token);
@@ -55,20 +122,25 @@ export function registerComputeRoutes(
       // Probed in parallel: an unreachable target should cost one timeout, not
       // one per target in series.
       const listed = targets.list();
-      const states = await Promise.all(
+      // An unconfigured target has no address to probe, and "stopped" with
+      // nothing serving is the honest answer for one that does not exist yet.
+      const idle = { state: "stopped" as const, served: null };
+      const probes = await Promise.all(
         listed.map((t) =>
-          // An unconfigured target has no address to probe, and "stopped" is the
-          // honest answer for one that does not exist yet.
           t.configured
-            ? (clientFor(t.id)?.probe() ?? Promise.resolve("stopped" as const))
-            : Promise.resolve("stopped" as const),
+            ? (clientFor(t.id)?.probe() ?? Promise.resolve(idle))
+            : Promise.resolve(idle),
         ),
       );
 
       return {
         targets: listed.map((t, i) => ({
           ...t,
-          state: states[i] ?? "stopped",
+          state: probes[i]?.state ?? "stopped",
+          // Free, because readiness is decided by reading the very listing that
+          // names it. This is what makes a model loaded on Colab show up here
+          // on the next poll instead of waiting for someone to re-open a panel.
+          servedModel: probes[i]?.served ?? null,
         })),
         assignments: Object.fromEntries(
           ROLES.map((r) => [r, targets.assignment(r)]),
@@ -90,7 +162,9 @@ export function registerComputeRoutes(
    *
    * A target that is unconfigured or unreachable answers with an empty list
    * rather than an error, so the card stays usable and keeps reporting its own
-   * state as the reason.
+   * state as the reason. An inventory that fails on a target that *is* answering
+   * reports why in `inventoryError`, which is a different problem and a
+   * different fix.
    */
   app.get<{ Params: { id: string } }>(
     "/compute/targets/:id/models",
@@ -99,13 +173,9 @@ export function registerComputeRoutes(
       const id = targetId.safeParse(req.params.id);
       if (!id.success) return reply.code(404).send({ error: "unknown_target" });
       const client = clientFor(id.data);
-      if (!client) return { models: [] };
+      if (!client) return { models: [], inventoryError: null };
 
-      const [models, served] = await Promise.all([
-        client.listLocalModels().catch(() => []),
-        client.loadedModel().catch(() => null),
-      ]);
-      return { models: toAvailableModels(models, served) };
+      return readInventory(client);
     },
   );
 
@@ -138,6 +208,11 @@ export function registerComputeRoutes(
         });
       }
 
+      // What was serving before, so a load whose response is lost can be told
+      // apart from one that never happened — the same baseline trick export
+      // takes against Studio's op counter.
+      const before = await client.loadedModel().catch(() => null);
+
       try {
         // Studio will not guess between a GGUF repo's quantizations, so when
         // the caller did not name one, its own default is resolved first. A
@@ -152,12 +227,18 @@ export function registerComputeRoutes(
         }
         await client.loadModel(parsed.data.model, variant);
       } catch (err) {
-        // Surfaced rather than swallowed: "it did not load" with no reason
-        // sends you to Studio's logs to find out what this call already knows.
-        return reply.code(502).send({
-          error: "load_failed",
-          message: err instanceof Error ? err.message : String(err),
-        });
+        const settled = mayStillBeLoading(err)
+          ? await settleLoad(client, before, loadPollMs, loadSettleMs)
+          : null;
+        if (!settled) {
+          // Surfaced rather than swallowed: "it did not load" with no reason
+          // sends you to Studio's logs for what this call already knows.
+          return reply.code(502).send({
+            error: "load_failed",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+        return { loaded: settled };
       }
 
       // Reported back from the backend, not echoed from the request: Studio is

@@ -17,10 +17,20 @@ export const targetId = z.enum(["local", "colab"]);
  *  chosen per run in `finetuneRequest.provider`, not set once here. */
 export const computeRole = z.enum(["chat", "benchmark"]);
 
-/** Studio readiness, matching StudioReachability on the server. "unauthorized"
- *  (up, wrong key) stays distinct from "stopped" because the two send you to
- *  different places. */
-export const targetState = z.enum(["ready", "unauthorized", "stopped"]);
+/**
+ * Studio readiness, matching StudioReachability on the server.
+ *
+ * Four states rather than a boolean because each sends you somewhere different:
+ * "unauthorized" (up, wrong key) is a key to paste, "not_studio" (a 200 that is
+ * not Studio's API — a sign-in page, a proxy, a UI-only port) is an address to
+ * change, and "stopped" is a machine to start.
+ */
+export const targetState = z.enum([
+  "ready",
+  "unauthorized",
+  "not_studio",
+  "stopped",
+]);
 
 export const computeTarget = z.object({
   id: targetId,
@@ -35,6 +45,16 @@ export const computeTarget = z.object({
   /** False while no address has been given. */
   configured: z.boolean(),
   state: targetState,
+  /**
+   * What this target is serving right now, or null for nothing.
+   *
+   * Reported with the state because it is read from the same `/v1/models` call
+   * that decides the state, so it costs no extra request and cannot disagree
+   * with it. It is also the only value here that changes without anyone
+   * touching the app: a model loaded from Studio's own UI on another machine
+   * appears on the next poll.
+   */
+  servedModel: z.string().nullable().default(null),
 });
 
 export const computeState = z.object({

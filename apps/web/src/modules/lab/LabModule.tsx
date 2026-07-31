@@ -6,6 +6,7 @@ import {
   type LabRun,
   looksLocalPath,
   STORAGE_NAMESPACE,
+  type TaskScore,
 } from "@penumbra/shared";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { ComputeTargets } from "../../compute/ComputeTargets";
@@ -116,6 +117,19 @@ function JobLine({
     <li className={`lab__job lab__job--${job.state}`}>
       <span className="lab__job-kind">{job.kind}</span>
       <span className="lab__job-state">{job.state}</span>
+      {/* The bar is for the glance, the number for the answer. A run that takes
+          two hours is read mostly by whether the bar moved since last time. */}
+      {pct !== null && job.state === "running" && (
+        <span
+          className="lab__job-bar"
+          role="progressbar"
+          aria-valuenow={pct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <span className="lab__job-fill" style={{ width: `${pct}%` }} />
+        </span>
+      )}
       {pct !== null && <span className="lab__job-pct">{pct}%</span>}
       <When at={job.updatedAt} className="lab__job-when" />
       <span className="lab__job-detail">{job.error ?? job.detail ?? ""}</span>
@@ -133,6 +147,46 @@ function JobLine({
   );
 }
 
+/**
+ * lm-eval task ids carry a `leaderboard_` prefix that costs a third of the
+ * label width and says nothing the suite name does not. The full id stays in
+ * the title, so nothing is lost by trimming it here.
+ */
+function shortTask(task: string): string {
+  return task.replace(/^leaderboard_/, "");
+}
+
+/**
+ * lm-eval metrics arrive as `metric,filter` (`exact_match,strict-match`). When
+ * a task reports several numbers it is usually the filter that separates them,
+ * so that wins when there is one; `none` means the task was not filtered and
+ * the metric name is what distinguishes the rows.
+ */
+function shortMetric(metric: string): string {
+  const [name, filter] = metric.split(",");
+  if (filter && filter !== "none") return filter;
+  return name ?? metric;
+}
+
+/** Scores in arrival order, one entry per task holding all of its metrics.
+ *  Without this a task reporting four numbers reads as four identical rows,
+ *  since the metric that tells them apart was never shown. */
+function groupScores(scores: TaskScore[]): { task: string; of: TaskScore[] }[] {
+  const groups: { task: string; of: TaskScore[] }[] = [];
+  for (const score of scores) {
+    const group = groups.find((g) => g.task === score.task);
+    if (group) group.of.push(score);
+    else groups.push({ task: score.task, of: [score] });
+  }
+  return groups;
+}
+
+function formatScore(score: TaskScore): string {
+  return score.metric === "avg_ms"
+    ? `${Math.round(score.value)}ms`
+    : score.value.toFixed(3);
+}
+
 /** One benchmark run. Values are rates unless the metric says otherwise. */
 function ScoreRow({ result }: { result: BenchmarkResult }) {
   // What answered is the model the scores describe; what was typed is only a
@@ -141,41 +195,54 @@ function ScoreRow({ result }: { result: BenchmarkResult }) {
   const served = result.servedModel;
   const mismatch = served !== null && served !== result.model;
   return (
-    <tr>
-      <td>{new Date(result.at).toLocaleString()}</td>
-      <td>
-        {served ?? result.model}
-        {mismatch && (
-          <span
-            className="lab__score-warn"
-            title={`Requested "${result.model}", but the target had "${served}" loaded, and these scores describe that.`}
-          >
-            ⚠ requested {result.model}
-          </span>
-        )}
-      </td>
-      <td>{result.target}</td>
-      <td>
+    <li className="lab__score-card">
+      {/* Everything that identifies the run on one line: which family, what
+          answered, which suite, which machine, and how few samples. */}
+      <div className="lab__score-head">
         <span className={`lab__kind lab__kind--${result.suiteKind}`}>
           {result.suiteKind}
-        </span>{" "}
-        {result.suite}
-      </td>
-      {/* Always shown: a 20-sample score is not a leaderboard number. */}
-      <td>n={result.samplesPerTask}</td>
-      <td>
-        {result.scores.map((s) => (
-          <div key={`${s.task}:${s.metric}`} className="lab__score">
-            <span>{s.task}</span>
-            <span>
-              {s.metric === "avg_ms"
-                ? `${Math.round(s.value)}ms`
-                : s.value.toFixed(3)}
+        </span>
+        <span className="lab__score-model">{served ?? result.model}</span>
+        <span className="lab__score-meta">{result.suite}</span>
+        <span className="lab__score-meta">· {result.target}</span>
+        {/* Always shown: a 20-sample score is not a leaderboard number. */}
+        <span className="lab__score-meta">· n={result.samplesPerTask}</span>
+        {/* An age, as the runs and jobs lists show it — which run is the
+            latest is the question, and the exact stamp is a hover away. */}
+        <When at={result.at} className="lab__score-when" />
+      </div>
+      {mismatch && (
+        <p
+          className="lab__score-warn"
+          title={`Requested "${result.model}", but the target had "${served}" loaded, and these scores describe that.`}
+        >
+          ⚠ requested {result.model}
+        </p>
+      )}
+      <div className="lab__score-grid">
+        {groupScores(result.scores).map((group) => (
+          <div key={group.task} className="lab__score">
+            <span className="lab__score-task" title={group.task}>
+              {shortTask(group.task)}
+            </span>
+            <span className="lab__score-values">
+              {group.of.map((s) => (
+                <span key={s.metric} className="lab__score-value">
+                  {/* The metric label earns its space only where a task
+                      reports more than one number. */}
+                  {group.of.length > 1 && (
+                    <span className="lab__score-metric" title={s.metric}>
+                      {shortMetric(s.metric)}
+                    </span>
+                  )}
+                  {formatScore(s)}
+                </span>
+              ))}
             </span>
           </div>
         ))}
-      </td>
-    </tr>
+      </div>
+    </li>
   );
 }
 
@@ -651,8 +718,20 @@ export function LabModule() {
    * is another job still running, which is invisible from the form itself, and
    * the second is a suite whose harness is not installed on the server.
    */
-  const benchBlocked = !benchModels.length
-    ? "No models to benchmark. The target must be reachable with a model on it."
+  //
+  // Keyed on what is *loaded*, not on how long the list is: the server refuses a
+  // benchmark against a target with nothing resident (a score has to come from
+  // some model, and Studio answers with whatever it has rather than what the
+  // request names), and a target can serve a model its inventory never listed.
+  // Checking the list length instead used to block a Colab that had a model
+  // loaded and ready, because its disk inventory came back empty.
+  //
+  // The target is named, because "the benchmark target" is not always the one
+  // you were just looking at: benchmarks run on whatever the role resolves to,
+  // which is local until it is assigned otherwise, and a model loaded on Colab
+  // is invisible from here while it stays that way.
+  const benchBlocked = !benchLoaded
+    ? `Nothing is loaded on ${lab.available?.target ?? "the benchmark target"}, so there is nothing to score. Load a model there from the compute panel above, or point Benchmarks at the target that has one.`
     : !benchModel.trim()
       ? "Pick a model to benchmark."
       : lab.running
@@ -1032,65 +1111,83 @@ export function LabModule() {
         <div className="lab__benchmarks">
           <Section id="benchmark-form" title="Run a benchmark" state={sections}>
             <form className="lab__form" onSubmit={onBenchmark}>
-              {/* A list rather than a text field. Studio ignores the `model` it
+              {/* Four short controls, so they share one line. Stacked, they
+                  were a column of full-width selects under a submit as wide as
+                  the panel. */}
+              <div className="lab__bench-controls">
+                {/* A list rather than a text field. Studio ignores the `model` it
                   is sent and answers with whatever is resident, so a typo here
                   never failed — it returned a full score attributed to another
                   model. The options come from the target that would actually
                   run it. */}
-              <select
-                aria-label="Model to benchmark"
-                value={benchModel}
-                onChange={(e) => setBenchModel(e.target.value)}
-              >
-                {benchModels.length === 0 && (
-                  <option value="">No models visible on this target</option>
-                )}
-                {benchModels.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.loaded ? "● " : ""}
-                    {m.label} · {m.format}
-                    {/* Ollama rows carry no size: Studio's scanner links the
+                <select
+                  aria-label="Model to benchmark"
+                  value={benchModel}
+                  onChange={(e) => setBenchModel(e.target.value)}
+                >
+                  {benchModels.length === 0 && (
+                    <option value="">Nothing loaded on this target</option>
+                  )}
+                  {benchModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.loaded ? "● " : ""}
+                      {m.label} · {m.format}
+                      {/* Ollama rows carry no size: Studio's scanner links the
                         blob but never stats it, so 0 means "not reported"
                         rather than "empty", and "0.0 GB" would read as a
                         broken model. */}
-                    {m.sizeBytes > 0
-                      ? ` · ${(m.sizeBytes / 1e9).toFixed(1)} GB`
-                      : " · size not reported"}
-                  </option>
-                ))}
-              </select>
-              <select
-                aria-label="Suite"
-                value={suite}
-                onChange={(e) => setSuite(e.target.value)}
-              >
-                {suites.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-              <label className="lab__field">
-                Samples per task
-                <input
-                  type="number"
-                  min={1}
-                  value={samples}
-                  onChange={(e) => setSamples(Number(e.target.value))}
-                />
-              </label>
-              {/* The title carries the reason: a disabled control that does not
+                      {m.sizeBytes > 0
+                        ? ` · ${(m.sizeBytes / 1e9).toFixed(1)} GB`
+                        : " · size not reported"}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="Suite"
+                  value={suite}
+                  onChange={(e) => setSuite(e.target.value)}
+                >
+                  {suites.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+                <label className="lab__field" title="Samples per task">
+                  n=
+                  <input
+                    type="number"
+                    min={1}
+                    aria-label="Samples per task"
+                    value={samples}
+                    onChange={(e) => setSamples(Number(e.target.value))}
+                  />
+                </label>
+                {/* The title carries the reason: a disabled control that does not
                   say why leaves you guessing at a cause the form cannot show,
                   most often a job still running from a previous attempt. */}
-              <button
-                type="submit"
-                disabled={benchBlocked !== null}
-                title={benchBlocked ?? "Run this suite against the model above"}
-              >
-                {lmEvalMissing ? "lm-eval not installed" : "Run benchmark"}
-              </button>
+                <button
+                  type="submit"
+                  disabled={benchBlocked !== null}
+                  title={
+                    benchBlocked ?? "Run this suite against the selected model"
+                  }
+                >
+                  {lmEvalMissing ? "lm-eval not installed" : "Run benchmark"}
+                </button>
+              </div>
               {benchBlocked && (
                 <p className="lab__library-note">{benchBlocked}</p>
+              )}
+              {/* A short list and a list that failed to load look the same from
+                  here. The loaded model is offered either way, so this explains
+                  the missing rest rather than blocking anything. */}
+              {lab.available?.inventoryError && (
+                <p className="lab__library-note">
+                  {lab.available.target}'s model inventory did not answer, so
+                  only what is loaded is listed. ({lab.available.inventoryError}
+                  )
+                </p>
               )}
               {/* Choosing here does not load anything: the target serves what
                   it already has. Saying so beats letting a run come back
@@ -1113,28 +1210,16 @@ export function LabModule() {
             meta={`${lab.scores.length} recorded`}
             state={sections}
           >
-            <table className="lab__scores">
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>Model</th>
-                  <th>Ran on</th>
-                  <th>Suite</th>
-                  <th>Samples</th>
-                  <th>Scores</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lab.scores.map((r) => (
-                  // The target is part of the identity: the same name on two
-                  // machines is two different measurements.
-                  <ScoreRow
-                    key={`${r.at}-${r.suite}-${r.model}-${r.target}`}
-                    result={r}
-                  />
-                ))}
-              </tbody>
-            </table>
+            <ul className="lab__score-list">
+              {lab.scores.map((r) => (
+                // The target is part of the identity: the same name on two
+                // machines is two different measurements.
+                <ScoreRow
+                  key={`${r.at}-${r.suite}-${r.model}-${r.target}`}
+                  result={r}
+                />
+              ))}
+            </ul>
           </Section>
         </div>
       )}

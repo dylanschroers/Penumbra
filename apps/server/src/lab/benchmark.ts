@@ -15,6 +15,7 @@ import {
   taskTools,
   toToolSpec,
 } from "@penumbra/shared";
+import { caseProgress, type RunProgress, readOutputChunk } from "./progress";
 
 // Runs both benchmark families and reduces them to one BenchmarkResult, which
 // is what lets a single table hold both and a single view compare them
@@ -41,8 +42,16 @@ export interface BenchmarkOptions {
   baseURL: string;
   apiKey?: string;
   signal?: AbortSignal;
-  /** Progress lines, for the job's SSE relay. */
-  onProgress?: (line: string) => void;
+  /**
+   * Where the run has got to, for the job record.
+   *
+   * Structured rather than a line of text: a job row can only draw a bar if
+   * something hands it a number, and the number is already in the output both
+   * suites produce. Interpreting it here keeps the route a relay — it writes
+   * what it is given and does not need to know what lm_eval's stdout looks
+   * like.
+   */
+  onProgress?: (update: RunProgress) => void;
 }
 
 export async function runBenchmark(
@@ -142,7 +151,7 @@ async function runPersonalSuite(opts: BenchmarkOptions): Promise<TaskScore[]> {
   for (const [i, c] of cases.entries()) {
     opts.signal?.throwIfAborted();
     scored.push(scoreCase(c, await ask(c.text, opts, tools)));
-    opts.onProgress?.(`case ${i + 1}/${cases.length}: ${c.text}`);
+    opts.onProgress?.(caseProgress(i + 1, cases.length, c.text));
   }
 
   const s = summarize(scored);
@@ -282,14 +291,22 @@ async function runGeneralSuite(opts: BenchmarkOptions): Promise<TaskScore[]> {
     const onAbort = () => child.kill("SIGTERM");
     opts.signal?.addEventListener("abort", onAbort, { once: true });
 
+    // lm_eval writes its progress bars to stderr and its tables to stdout, and
+    // a chunk from either can be several frames or half of one — so both go
+    // through the same reader, which reports only what is worth showing.
+    const relay = (chunk: string) => {
+      const update = readOutputChunk(chunk);
+      if (update) opts.onProgress?.(update);
+    };
+
     let stderrTail = "";
-    child.stdout.on("data", (d: Buffer) =>
-      opts.onProgress?.(d.toString().trimEnd()),
-    );
+    child.stdout.on("data", (d: Buffer) => relay(d.toString()));
     child.stderr.on("data", (d: Buffer) => {
       const line = d.toString();
+      // Kept whole and unparsed: this is what a failed run's message is built
+      // from, and a bar frame trimmed for display would lose the traceback.
       stderrTail = `${stderrTail}${line}`.slice(-2000);
-      opts.onProgress?.(line.trimEnd());
+      relay(line);
     });
     child.on("error", (err) =>
       reject(new Error(`lm_eval failed to start: ${err.message}`)),

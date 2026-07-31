@@ -107,12 +107,14 @@ describe("personal suite", () => {
     ).toBe(1);
   });
 
+  // Position as a number, not only as a sentence: a job row can draw a bar from
+  // the first and can only print the second.
   it("reports progress per case", async () => {
     model = startFakeModel(() => ({
       choices: [{ message: { content: "hi" } }],
     }));
     const baseURL = await model.listen();
-    const lines: string[] = [];
+    const updates: { progress: number | null; detail: string }[] = [];
 
     await runBenchmark({
       model: "fake",
@@ -121,10 +123,11 @@ describe("personal suite", () => {
       suite: personalSuite,
       samplesPerTask: 3,
       baseURL,
-      onProgress: (l) => lines.push(l),
+      onProgress: (u) => updates.push(u),
     });
-    expect(lines).toHaveLength(3);
-    expect(lines[0]).toContain("case 1/3");
+    expect(updates).toHaveLength(3);
+    expect(updates[0]?.detail).toContain("case 1/3");
+    expect(updates.map((u) => u.progress)).toEqual([1 / 3, 2 / 3, 1]);
   });
 
   // A rejected request scored as "declined to call a tool" would silently
