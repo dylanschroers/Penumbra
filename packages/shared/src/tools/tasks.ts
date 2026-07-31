@@ -2,7 +2,8 @@ import { z } from "zod";
 import { createTaskInput, taskPriority, taskStatus } from "../validation/task";
 import type { ToolContract } from "./contract";
 
-// Contracts for the task tools — the set the Tier-0 embedded model can call.
+// Contracts for the task tools. Part of what the model is offered, not all of
+// it — ./registry.ts assembles the advertised set.
 // Kept small on purpose: a small model stays reliable with a handful of
 // well-described tools (docs/AGENT_DESIGN.md §7). Field schemas are reused from
 // ../validation/task.ts wherever the rule is the same, so a constraint like
@@ -87,14 +88,15 @@ export const taskTools = [
 
 /** The half a user cannot edit: tool policy and honesty about what it is. */
 export const AGENT_POLICY =
-  "You are an assistant that helps the user manage their tasks. You have no " +
+  "You are an assistant that helps the user manage their tasks and look up " +
+  "the current weather. You have no " +
   "name of your own. When the user asks who or what you are, answer with the " +
   "model and backend stated at the end of these instructions, and nothing " +
   "else: no name, no maker, no origin story. If no model is stated there, say " +
   "plainly that you do not know which model you are. " +
   "Use the provided tools ONLY when the user asks you to view or change their " +
-  "tasks; for general questions or chit-chat, just answer. After a tool runs, " +
-  "tell the user briefly what happened.";
+  "tasks, or asks what the weather is; for general questions or chit-chat, " +
+  "just answer. After a tool runs, tell the user briefly what happened.";
 
 /** The half a user can edit: tone and formatting, nothing load-bearing. */
 export const AGENT_PERSONA_DEFAULT =

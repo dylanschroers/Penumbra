@@ -238,9 +238,15 @@ Current posture, honestly stated:
 
 - All owned data lives on your devices; the sync server sees only what it
   reconciles, and you run it yourself.
-- Tier-0 inference is fully local — prompts never leave the machine. Choosing
+- Tier-0 *inference* is fully local — prompts never leave the machine. Choosing
   the **Server** provider sends the conversation to your own server instead;
-  no third party is involved either way.
+  no third party sees the conversation either way.
+- **One tool reaches a third party.** `get_weather` sends the place name the
+  model extracted — not the conversation — to Open-Meteo, on both tiers. It is
+  the only outbound call any tool makes, it carries no credential because
+  Open-Meteo needs none, and it is skipped entirely unless the model calls the
+  tool. A machine with no network still answers; the tool reports that it could
+  not reach the service.
 - **Sync v0 has no auth** and reflects any CORS origin: run it on localhost or
   a trusted LAN only (SYNC.md → v0 limitations).
 - **The actuator routes do have a gate.** `/agent/*` and `/lab/*` run models
