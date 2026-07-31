@@ -1,6 +1,11 @@
-import { AGENT_PERSONA_DEFAULT, STORAGE_NAMESPACE } from "@penumbra/shared";
+import {
+  AGENT_PERSONA_DEFAULT,
+  AGENT_PERSONA_MAX,
+  AGENT_POLICY,
+  STORAGE_NAMESPACE,
+} from "@penumbra/shared";
 import { beforeEach, describe, expect, it } from "vitest";
-import { cachedPersona } from "./prompt";
+import { cachedPersona, localPrompt } from "./prompt";
 
 // Tier 0's promise is "offline, always available", so the persona it runs with
 // has to be readable synchronously and without a server. The mirror in
@@ -32,5 +37,42 @@ describe("cachedPersona", () => {
   it("adopts a value left under the pre-namespace key", () => {
     localStorage.setItem("penumbra.agent.persona", "legacy");
     expect(cachedPersona()).toBe("legacy");
+  });
+});
+
+// What the panel renders when no server has answered. The point is that it is
+// the real prompt rather than a placeholder: the same persona the engine reads,
+// and the policy constant the turn is actually composed from.
+describe("localPrompt", () => {
+  it("assembles the whole prompt with no server", () => {
+    expect(localPrompt()).toEqual({
+      persona: AGENT_PERSONA_DEFAULT,
+      fallback: AGENT_PERSONA_DEFAULT,
+      policy: AGENT_POLICY,
+      source: "default",
+      maxLength: AGENT_PERSONA_MAX,
+    });
+  });
+
+  it("reports the mirrored persona as an override", () => {
+    localStorage.setItem(KEY, "Answer in one sentence.");
+    expect(localPrompt()).toMatchObject({
+      persona: "Answer in one sentence.",
+      source: "settings",
+    });
+  });
+
+  // Presence of the key decides, not equality with the default: a user who set
+  // the persona to the default text still chose it, and "Reset to default" is
+  // enabled off `source`.
+  it("counts a persona set to the default text as an override", () => {
+    localStorage.setItem(KEY, AGENT_PERSONA_DEFAULT);
+    expect(localPrompt().source).toBe("settings");
+  });
+
+  it("agrees with cachedPersona on a deliberately empty persona", () => {
+    localStorage.setItem(KEY, "");
+    expect(localPrompt()).toMatchObject({ persona: "", source: "settings" });
+    expect(cachedPersona()).toBe("");
   });
 });

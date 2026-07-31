@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import {
   fetchPrompt,
+  localPrompt,
   type PromptState,
   resetPersona,
   savePersona,
@@ -19,12 +20,25 @@ import {
 // what broke task creation. It is fixed because everything load-bearing lives
 // there: the tool policy, and the honesty rules that stop a small model
 // inventing a name and a vendor for itself.
+//
+// It renders without a server. The panel used to fetch before showing anything,
+// which meant the tier that runs offline had a prompt nobody offline could read
+// — and every field it needs is already in the bundle or in localStorage
+// (../../agent/prompt → localPrompt). The fetch still happens, and still wins
+// when it answers; only *editing* requires the server, which owns the value.
 
 export function PromptPanel() {
-  const [state, setState] = useState<PromptState | null>(null);
-  const [draft, setDraft] = useState("");
+  // Seeded from the client's own copy rather than starting empty, so the prompt
+  // is readable with no server at all — see localPrompt(). The fetch below
+  // upgrades it to the server's view when one answers.
+  const [state, setState] = useState<PromptState>(localPrompt);
+  const [draft, setDraft] = useState(() => localPrompt().persona);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** No server reached yet. Editing is disabled meanwhile: the server owns the
+   *  stored persona, and writing one here would put the two tiers on different
+   *  prompts — the divergence this module exists to avoid. */
+  const [offline, setOffline] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -33,8 +47,9 @@ export function PromptPanel() {
         if (!live) return;
         setState(next);
         setDraft(next.persona);
+        setOffline(false);
       })
-      .catch((err: Error) => live && setError(err.message));
+      .catch(() => live && setOffline(true));
     return () => {
       live = false;
     };
@@ -45,6 +60,7 @@ export function PromptPanel() {
     setState(next);
     setDraft(next.persona);
     setError(null);
+    setOffline(false);
   };
 
   async function submit(event: FormEvent) {
@@ -69,11 +85,6 @@ export function PromptPanel() {
       setBusy(false);
     }
   }
-
-  if (error && !state) {
-    return <p className="notice">Could not load the prompt: {error}</p>;
-  }
-  if (!state) return <p className="notice">Loading the prompt…</p>;
 
   const over = draft.length > state.maxLength;
   const dirty = draft !== state.persona;
@@ -100,6 +111,7 @@ export function PromptPanel() {
           rows={6}
           value={draft}
           spellCheck={false}
+          readOnly={offline}
           onChange={(e) => setDraft(e.target.value)}
         />
         <div className="prompt__meta">
@@ -115,24 +127,38 @@ export function PromptPanel() {
       {error && <p className="prompt__error">{error}</p>}
 
       <div className="prompt__actions">
-        <button type="submit" disabled={busy || over || !dirty}>
+        <button type="submit" disabled={busy || over || !dirty || offline}>
           {busy ? "Saving…" : "Save"}
         </button>
         <button
           type="button"
           onClick={reset}
-          disabled={busy || state.source === "default"}
+          disabled={busy || state.source === "default" || offline}
           title="Go back to the prompt this version of Penumbra ships with"
         >
           Reset to default
         </button>
       </div>
 
-      <p className="prompt__hint">
-        Applies to the next message on both the local and server models.
-        Benchmarks always run the shipped default, so a change here cannot move
-        their scores.
-      </p>
+      {/* Said plainly rather than shown as a failure: this *is* the prompt the
+          local model will use, so the panel has not fallen back to something
+          approximate. Only the ability to change it is missing, and the staleness
+          is the one caveat worth naming. */}
+      {offline ? (
+        <p className="prompt__hint">
+          The server is not reachable, so this is the prompt stored on this
+          device — what the local model will use on its next message. Editing
+          needs the server, which owns the saved persona. If it was changed from
+          another device since this one last connected, that change is not shown
+          here yet.
+        </p>
+      ) : (
+        <p className="prompt__hint">
+          Applies to the next message on both the local and server models.
+          Benchmarks always run the shipped default, so a change here cannot
+          move their scores.
+        </p>
+      )}
     </form>
   );
 }

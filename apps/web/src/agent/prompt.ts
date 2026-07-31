@@ -1,5 +1,7 @@
 import {
   AGENT_PERSONA_DEFAULT,
+  AGENT_PERSONA_MAX,
+  AGENT_POLICY,
   migrateStorageKey,
   STORAGE_NAMESPACE,
 } from "@penumbra/shared";
@@ -30,16 +32,48 @@ export interface PromptState {
   maxLength: number;
 }
 
-/** The persona to run with right now. Synchronous by design — see above. */
-export function cachedPersona(): string {
+/** The mirrored persona, or null when the server has never been reached. Null is
+ *  distinct from an empty string, which is a persona deliberately cleared to
+ *  mean "no style guidance". */
+function storedPersona(): string | null {
   migrateStorageKey(LEGACY_PERSONA_KEY, PERSONA_KEY);
   try {
-    // Null means "never fetched", which is different from an empty persona
-    // deliberately stored to mean "no style guidance".
-    return localStorage.getItem(PERSONA_KEY) ?? AGENT_PERSONA_DEFAULT;
+    return localStorage.getItem(PERSONA_KEY);
   } catch {
-    return AGENT_PERSONA_DEFAULT;
+    return null;
   }
+}
+
+/** The persona to run with right now. Synchronous by design — see above. */
+export function cachedPersona(): string {
+  return storedPersona() ?? AGENT_PERSONA_DEFAULT;
+}
+
+/**
+ * The whole prompt, assembled from what the client already holds.
+ *
+ * Every field of PromptState exists locally: the policy and the bounds are
+ * constants compiled into the bundle, and the persona is the mirror the engine
+ * itself reads. So this is not a degraded stand-in for the server's answer — for
+ * the embedded model it is the *more* truthful one, being exactly what
+ * composeSystem() will be handed on the next turn (../engine/index.ts).
+ *
+ * It is still worth asking the server when one is reachable: the mirror is
+ * last-known, and an edit made from another device while this client was offline
+ * has not arrived here yet.
+ */
+export function localPrompt(): PromptState {
+  const stored = storedPersona();
+  return {
+    persona: stored ?? AGENT_PERSONA_DEFAULT,
+    fallback: AGENT_PERSONA_DEFAULT,
+    policy: AGENT_POLICY,
+    // Read from the key's presence rather than by comparing against the
+    // default, so a persona deliberately set to the default text still reports
+    // as an override.
+    source: stored === null ? "default" : "settings",
+    maxLength: AGENT_PERSONA_MAX,
+  };
 }
 
 function remember(persona: string): void {
