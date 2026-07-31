@@ -335,13 +335,9 @@ describe("GET /compute/targets", () => {
       baseURL: "http://env:8888",
       source: "env",
       hasKey: true,
-      persistence: "persisted",
       configured: true,
     });
-    expect(colab(body)).toMatchObject({
-      persistence: "session",
-      configured: false,
-    });
+    expect(colab(body)).toMatchObject({ configured: false });
   });
 
   it("never sends a key back", async () => {

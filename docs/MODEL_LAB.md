@@ -187,14 +187,22 @@ results:
 
 ## Compute targets
 
-Two Studios are known: **local**, whose address and bearer are persisted (the
-environment is the deployment default, and a value set through the API outranks
-it), and **Colab**, a second Studio reached through a tunnel and held in memory
-only, so its bearer never touches disk and must be re-entered after a restart.
+Two Studios are known: **local**, whose address and bearer come from the
+environment as a deployment default with a value set through the API outranking
+it, and **Colab**, a second Studio reached through a tunnel. Both are persisted.
 
 Every target is a full Studio — the key is unscoped (fact 1) — so they do not
-differ in what they *can* do. They differ in whether their configuration
-survives a restart.
+differ in what they *can* do. They differ in that local always has an address to
+fall back on and Colab has one only once a tunnel has been pasted in.
+
+A Colab address routinely outlives the session it points at, since a notebook is
+gone long before the server restarts. Keeping it anyway is the lesser evil: the
+alternative was re-pasting a URL the user had already given us on every boot, and
+a stale address is visible — the panel probes it and reports "not answering" —
+in a way an erased one is not. The consequence to know about is that a role
+assigned to Colab now stays pointed at a dead tunnel instead of silently
+reverting to local, because `effective()` only knows what is *configured*, not
+what is reachable. Training is unaffected: `auto` probes before it chooses.
 
 **Colab's own link is not an address this server can use.** The notebook prints
 a `colab.googleusercontent.com` URL from `google.colab.kernel.proxyPort(8888)`,
@@ -218,9 +226,9 @@ on the other machine appears here within a poll, with no action in the app.
 Roles are assigned there too:
 
 - **chat** and **benchmark** each name a target. An assignment can outlive the
-  target it names — Colab's config dies with the process — so the response
-  carries both what was asked for and what it currently resolves to, and the UI
-  says when the two differ rather than misreporting where answers came from.
+  target it names — a Colab endpoint can be removed — so the response carries
+  both what was asked for and what it currently resolves to, and the UI says when
+  the two differ rather than misreporting where answers came from.
 - **training** is *not* an assignment. It is chosen per run in
   `finetuneRequest.provider`, where `auto` prefers local and falls back to a
   reachable Colab. That is the right granularity: where one job goes, not where
