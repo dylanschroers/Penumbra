@@ -47,7 +47,28 @@ const PREVIEW_BYTES = 64 * 1024;
 // — a model can gain reasoning ability while getting worse at calling
 // create_task (docs/MODEL_LAB.md → Suites).
 
-type Tab = "finetune" | "runs" | "benchmarks";
+type Tab = "datasets" | "finetune" | "runs" | "benchmarks";
+
+export const TABS: Tab[] = ["datasets", "finetune", "runs", "benchmarks"];
+
+/**
+ * The tabs that cannot do anything without the Penumbra server.
+ *
+ * Datasets is the exception, and the reason the tab exists: choosing a folder,
+ * listing it, and parsing the head of a file are the desktop app reading its own
+ * disk (./scan.ts, ./datasetPreview.ts). None of it goes through /lab/*, so
+ * there is no reason for it to go dark when training does. Uploading a dataset
+ * *is* server work, but that happens as part of starting a run, on Fine-tune.
+ */
+export const SERVER_TABS: ReadonlySet<Tab> = new Set<Tab>([
+  "finetune",
+  "runs",
+  "benchmarks",
+]);
+
+/** The tab to fall back to when the server is gone. Named rather than inlined
+ *  so the test can assert it is one that actually works offline. */
+export const OFFLINE_TAB: Tab = "datasets";
 
 /**
  * Decide whether a dataset string names a HuggingFace repo or a file on the
@@ -678,6 +699,9 @@ export function LabModule() {
   );
   const sections = useSections();
   const [tab, setTab] = useState<Tab>("finetune");
+  // Only once the poll has actually failed, not while the first one is in
+  // flight — otherwise every mount would blink the tabs off and back on.
+  const offline = lab.connected === false;
   const [baseModel, setBaseModel] = useState("");
   const [dataset, setDataset] = useState("");
   // Studio's format_type. Preselected from the dataset preview's detection, but
@@ -695,6 +719,13 @@ export function LabModule() {
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   /** Run id whose export form is open, if any. */
   const [exporting, setExporting] = useState<string | null>(null);
+
+  // Leave a tab that has just gone dead rather than showing a disabled one as
+  // active: Datasets is the only thing still worth looking at, and landing on it
+  // is more useful than an empty Runs list that cannot explain itself.
+  useEffect(() => {
+    if (offline && SERVER_TABS.has(tab)) setTab(OFFLINE_TAB);
+  }, [offline, tab]);
 
   // Escape closes the compute popover, matching the backdrop click.
   useEffect(() => {
@@ -875,48 +906,43 @@ export function LabModule() {
       </div>
 
       <nav className="lab__tabs">
-        {(["finetune", "runs", "benchmarks"] as Tab[]).map((t) => (
-          <button
-            key={t}
-            type="button"
-            className={tab === t ? "lab__tab lab__tab--active" : "lab__tab"}
-            onClick={() => setTab(t)}
-          >
-            {t}
-          </button>
-        ))}
+        {TABS.map((t) => {
+          const disabled = offline && SERVER_TABS.has(t);
+          return (
+            <button
+              key={t}
+              type="button"
+              className={tab === t ? "lab__tab lab__tab--active" : "lab__tab"}
+              disabled={disabled}
+              title={
+                disabled
+                  ? "Needs the Penumbra server — training, runs, and benchmarks all happen there."
+                  : undefined
+              }
+              onClick={() => setTab(t)}
+            >
+              {t}
+            </button>
+          );
+        })}
       </nav>
 
-      {lab.error && <p className="lab__error">⚠️ {lab.error}</p>}
+      {/* Why three tabs are dead, said once here rather than repeated as an
+          error inside each. */}
+      {offline ? (
+        <p className="lab__error">⚠️ No Penumbra server: {lab.error}</p>
+      ) : (
+        lab.error && <p className="lab__error">⚠️ {lab.error}</p>
+      )}
 
-      {tab === "finetune" && (
+      {/* Choosing a dataset and reading its head are local work, so this tab
+          stands alone rather than being the first two sections of Fine-tune.
+          The point of the split is that it survives a dead server — and the
+          checks here are worth having on their own: a shape the trainer cannot
+          read, or preference data the SFT path cannot train at all, otherwise
+          surfaces minutes into a run as an opaque error from Studio. */}
+      {tab === "datasets" && (
         <div className="lab__finetune">
-          <Section
-            id="model-library"
-            title="Model library"
-            meta={libraryMeta(modelLibrary)}
-            state={sections}
-          >
-            <LibraryPanel
-              library={modelLibrary}
-              selected={baseModel}
-              onSelect={setBaseModel}
-              itemKey={(m) => m.path}
-              unavailableHint="Open the desktop app to browse models on this device; the web preview can't read your filesystem."
-              emptyHint="No models here. Pick a folder holding .gguf files or HuggingFace model directories (a folder with a config.json)."
-              renderItem={(m) => (
-                <>
-                  <span className={`lab__lib-badge lab__lib-badge--${m.kind}`}>
-                    {m.kind}
-                  </span>
-                  <span className="lab__lib-name">{m.name}</span>
-                  {m.size !== null && (
-                    <span className="lab__lib-size">{formatSize(m.size)}</span>
-                  )}
-                </>
-              )}
-            />
-          </Section>
           <Section
             id="dataset-library"
             title="Dataset library"
@@ -946,6 +972,46 @@ export function LabModule() {
             onDetectFormat={setFormat}
             sections={sections}
           />
+          {/* The selection is what carries across: the Fine-tune tab's Dataset
+              field reads the same value, so picking here fills it in there. */}
+          <p className="lab__library-note">
+            {dataset
+              ? offline
+                ? `Selected: ${dataset}. Starting a run with it needs the server.`
+                : `Selected: ${dataset}. The Fine-tune tab is already pointed at it.`
+              : "Pick a dataset to check its shape before training on it."}
+          </p>
+        </div>
+      )}
+
+      {tab === "finetune" && (
+        <div className="lab__finetune">
+          <Section
+            id="model-library"
+            title="Model library"
+            meta={libraryMeta(modelLibrary)}
+            state={sections}
+          >
+            <LibraryPanel
+              library={modelLibrary}
+              selected={baseModel}
+              onSelect={setBaseModel}
+              itemKey={(m) => m.path}
+              unavailableHint="Open the desktop app to browse models on this device; the web preview can't read your filesystem."
+              emptyHint="No models here. Pick a folder holding .gguf files or HuggingFace model directories (a folder with a config.json)."
+              renderItem={(m) => (
+                <>
+                  <span className={`lab__lib-badge lab__lib-badge--${m.kind}`}>
+                    {m.kind}
+                  </span>
+                  <span className="lab__lib-name">{m.name}</span>
+                  {m.size !== null && (
+                    <span className="lab__lib-size">{formatSize(m.size)}</span>
+                  )}
+                </>
+              )}
+            />
+          </Section>
           <Section id="finetune-form" title="Fine-tune" state={sections}>
             <form className="lab__form" onSubmit={onFinetune}>
               <input
