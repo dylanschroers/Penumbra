@@ -6,7 +6,8 @@ import { createTargetStore } from "./targets";
 // Studio credential store this replaces — getting those wrong means either the
 // UI silently does nothing (env winning) or a deployment can't set a default.
 // And the split between what a target is *assigned* and what it *resolves to*,
-// which is what keeps a dead Colab from taking chat down with it.
+// which is what keeps a Colab that was never set up, or has been removed, from
+// taking chat down with it.
 let db: Database.Database;
 beforeEach(() => {
   db = new Database(":memory:");
@@ -78,10 +79,15 @@ describe("local target", () => {
 describe("colab target", () => {
   it("starts unconfigured", () => {
     const colab = createTargetStore(db, env).list()[1];
-    expect(colab).toMatchObject({
-      id: "colab",
-      configured: false,
-      persistence: "session",
+    expect(colab).toMatchObject({ id: "colab", configured: false });
+  });
+
+  // Colab reads no environment, so an unconfigured one must not inherit the
+  // local Studio's address from it and look reachable.
+  it("takes nothing from the environment", () => {
+    expect(createTargetStore(db, env).credentials("colab")).toEqual({
+      baseURL: "",
+      apiKey: undefined,
     });
   });
 
@@ -103,21 +109,41 @@ describe("colab target", () => {
     expect(targets.list()[1]).toMatchObject({ configured: false });
   });
 
-  // The bearer never touches disk, so the tunnel has to be re-entered each boot.
-  it("does not survive a restart", () => {
+  // The point of persisting it: a restart used to mean re-pasting the tunnel.
+  it("survives a restart, key and all", () => {
     createTargetStore(db, env).set("colab", {
       baseURL: "https://x.trycloudflare.com",
+      apiKey: "k",
     });
-    expect(createTargetStore(db, env).list()[1]).toMatchObject({
-      configured: false,
+    expect(createTargetStore(db, env).credentials("colab")).toEqual({
+      baseURL: "https://x.trycloudflare.com",
+      apiKey: "k",
     });
   });
 
-  it("forgets it on clear", () => {
+  it("keeps the address when only the key is rotated", () => {
     const targets = createTargetStore(db, env);
     targets.set("colab", { baseURL: "https://x.trycloudflare.com" });
+    targets.set("colab", { apiKey: "later" });
+    expect(targets.credentials("colab")).toEqual({
+      baseURL: "https://x.trycloudflare.com",
+      apiKey: "later",
+    });
+  });
+
+  // Now the only way a Colab address goes away, which is why it has to clear
+  // the stored key too rather than leaving one behind for the next address.
+  it("forgets it on clear, across a restart", () => {
+    const targets = createTargetStore(db, env);
+    targets.set("colab", {
+      baseURL: "https://x.trycloudflare.com",
+      apiKey: "k",
+    });
     targets.clear("colab");
-    expect(targets.list()[1]).toMatchObject({ configured: false });
+    expect(createTargetStore(db, env).list()[1]).toMatchObject({
+      configured: false,
+      hasKey: false,
+    });
   });
 });
 
@@ -155,8 +181,8 @@ describe("assignments", () => {
     expect(targets.assignment("benchmark")).toBe("colab");
   });
 
-  // The case the split exists for: Colab's config dies with the process, so a
-  // restart would otherwise leave chat pointed at nothing, permanently.
+  // The case the split exists for: a role can be assigned to Colab before any
+  // tunnel has been given, and chat has to answer from somewhere meanwhile.
   it("resolves to local when the assigned target has no address", () => {
     const targets = createTargetStore(db, env);
     targets.assign("chat", "colab");

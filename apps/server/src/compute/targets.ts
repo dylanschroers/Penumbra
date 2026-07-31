@@ -12,7 +12,9 @@ import { DEFAULT_STUDIO_URL } from "../lab/studio";
 // Every target is a full Unsloth Studio. The `sk-unsloth-*` key is unscoped and
 // works on /api/train/*, /api/export/*, and /v1/* alike (docs/MODEL_LAB.md →
 // What Studio guarantees, fact 1), so targets do not differ in what they *can*
-// do. They differ in whether their configuration survives a restart.
+// do. Both are persisted; they differ in that local has a deployment default to
+// fall back on, so it always has an address, while Colab has one only once a
+// tunnel has been pasted in.
 //
 // There is deliberately no change listener. Callers resolve a target at the
 // moment they use it, and a StudioClient or an engine is a URL, a key, and some
@@ -26,6 +28,12 @@ import { DEFAULT_STUDIO_URL } from "../lab/studio";
  *  no gain (packages/shared/src/identity → the same rule for localStorage). */
 const KEY_LOCAL_URL = "studio.baseURL";
 const KEY_LOCAL_API = "studio.apiKey";
+/** Colab's, stored the same way. A tunnel URL usually dies before the next boot
+ *  does, but re-pasting an address the user already gave us is a worse default
+ *  than keeping a stale one they can see and correct — the panel reports the
+ *  target as "not answering" either way. */
+const KEY_COLAB_URL = "colab.baseURL";
+const KEY_COLAB_API = "colab.apiKey";
 const assignKey = (role: Role): string => `assign.${role}`;
 
 export type TargetId = "local" | "colab";
@@ -56,11 +64,8 @@ export interface ComputeTarget {
   baseURL: string;
   /** Reported in place of the key, which is never read back. */
   hasKey: boolean;
-  /** Whether the configuration survives a server restart. Colab's does not, by
-   *  design: its bearer never touches disk, so it is re-entered each boot. */
-  persistence: "persisted" | "session";
-  /** Which of the environment and the stored settings is in force. Only
-   *  meaningful for a persisted target. */
+  /** Which of the environment and the stored settings is in force. Only local
+   *  reads an environment, so Colab is always "settings" once configured. */
   source: "env" | "settings";
   /** False while no address has been given. Colab starts this way. */
   configured: boolean;
@@ -72,7 +77,7 @@ export interface TargetStore {
   /** Set one or both fields. The other keeps whatever it resolves to now. */
   set(id: TargetId, input: { baseURL?: string; apiKey?: string }): void;
   /** Forget this target: back to the environment for local, unconfigured for
-   *  Colab. */
+   *  Colab. The only way a Colab address goes away, now that a restart is not. */
   clear(id: TargetId): void;
 
   /** What the user asked for, whether or not it can be honored. */
@@ -81,11 +86,11 @@ export interface TargetStore {
    * What the role actually resolves to — the assignment, unless it names a
    * target with no address, in which case local.
    *
-   * The fallback exists because Colab's config dies with the process: without
-   * it, a server restart would leave chat permanently pointed at nothing. It is
-   * reported alongside `assignment` rather than hidden, so a panel can show that
-   * the two have diverged instead of quietly lying about where answers come
-   * from.
+   * The fallback covers a target that was never configured or has since been
+   * removed — not one that is merely down, which this cannot see without a
+   * probe. A dead Colab tunnel still resolves to Colab and fails there, which is
+   * the honest answer: the panel shows it as "not answering" rather than quietly
+   * rerouting a conversation you asked to run somewhere else.
    */
   effective(role: Role): TargetId;
   /** Credentials for `effective(role)`. */
@@ -115,10 +120,6 @@ CREATE TABLE IF NOT EXISTS lab_settings (
   const read = (key: string): string | undefined =>
     (readSetting.get(key) as { value: string } | undefined)?.value;
 
-  // Colab lives only in memory: the bearer reaches a tunnel the user pasted in,
-  // and writing it down would outlive the session it belongs to.
-  let colab: TargetCredentials | null = null;
-
   function localCredentials(): TargetCredentials {
     const storedKey = read(KEY_LOCAL_API);
     return {
@@ -133,28 +134,37 @@ CREATE TABLE IF NOT EXISTS lab_settings (
     };
   }
 
+  // No environment fallback here on purpose: local's exists so a deployment can
+  // ship a default address, and there is no deploying a tunnel that is minted
+  // fresh by whoever runs the notebook.
+  function colabCredentials(): TargetCredentials {
+    return {
+      baseURL: read(KEY_COLAB_URL) ?? "",
+      apiKey: read(KEY_COLAB_API) || undefined,
+    };
+  }
+
   function credentials(id: TargetId): TargetCredentials {
     // An unconfigured Colab resolves to an empty address rather than throwing:
     // callers check `configured`, and a client built on "" simply fails to
     // reach anything, which is the same answer by a slower route.
-    return id === "local" ? localCredentials() : (colab ?? { baseURL: "" });
+    return id === "local" ? localCredentials() : colabCredentials();
   }
 
   const isConfigured = (id: TargetId): boolean =>
-    id === "local" || colab !== null;
+    id === "local" || colabCredentials().baseURL !== "";
 
   function describe(id: TargetId): ComputeTarget {
     const creds = credentials(id);
     const stored =
       id === "local"
         ? read(KEY_LOCAL_URL) !== undefined || read(KEY_LOCAL_API) !== undefined
-        : colab !== null;
+        : isConfigured("colab");
     return {
       id,
       label: id === "local" ? "Local Studio" : "Colab",
       baseURL: creds.baseURL,
       hasKey: creds.apiKey !== undefined,
-      persistence: id === "local" ? "persisted" : "session",
       source: stored ? "settings" : "env",
       configured: isConfigured(id),
     };
@@ -176,10 +186,13 @@ CREATE TABLE IF NOT EXISTS lab_settings (
     credentials,
     set(id, input) {
       if (id === "colab") {
-        const baseURL = input.baseURL ?? colab?.baseURL;
+        const baseURL = input.baseURL ?? read(KEY_COLAB_URL);
         // Nothing to point at: a key alone does not make a target.
         if (!baseURL) return;
-        colab = { baseURL, apiKey: input.apiKey ?? colab?.apiKey };
+        writeSetting.run({ key: KEY_COLAB_URL, value: baseURL });
+        if (input.apiKey !== undefined) {
+          writeSetting.run({ key: KEY_COLAB_API, value: input.apiKey });
+        }
         return;
       }
       if (input.baseURL !== undefined) {
@@ -191,7 +204,8 @@ CREATE TABLE IF NOT EXISTS lab_settings (
     },
     clear(id) {
       if (id === "colab") {
-        colab = null;
+        dropSetting.run(KEY_COLAB_URL);
+        dropSetting.run(KEY_COLAB_API);
         return;
       }
       dropSetting.run(KEY_LOCAL_URL);

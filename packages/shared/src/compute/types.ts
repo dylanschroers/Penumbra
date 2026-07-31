@@ -38,9 +38,8 @@ export const computeTarget = z.object({
   baseURL: z.string(),
   /** Whether a bearer is set — never which one. */
   hasKey: z.boolean(),
-  /** "session" means the configuration dies with the server process, which is
-   *  Colab's whole posture: its bearer never touches disk. */
-  persistence: z.enum(["persisted", "session"]),
+  /** Which of the environment and the stored settings is in force. Only local
+   *  reads an environment, so Colab is always "settings" once configured. */
   source: z.enum(["env", "settings"]),
   /** False while no address has been given. */
   configured: z.boolean(),

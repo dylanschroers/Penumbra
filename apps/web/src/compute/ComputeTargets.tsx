@@ -22,8 +22,8 @@ const STATE_LABEL: Record<ComputeTarget["state"], string> = {
   stopped: "not answering",
 };
 
-/** Colab's config dies with the process, so "not answering" there usually means
- *  the session ended rather than anything being misconfigured. */
+/** A Colab address outlives the session it points at, so "not answering" there
+ *  usually means the notebook stopped rather than anything being misconfigured. */
 function stateHint(target: ComputeTarget): string {
   if (target.state === "unauthorized") {
     return "Answering, but rejecting the key. Studio mints a new one on install and on every rotation, so paste the current one.";
@@ -42,8 +42,8 @@ function stateHint(target: ComputeTarget): string {
       : "No address set.";
   }
   if (target.state === "stopped") {
-    return target.persistence === "session"
-      ? "Not answering. A Colab session that has ended cannot be reached again; start a new one and paste its URL."
+    return target.id === "colab"
+      ? "Not answering. A Colab session that has ended cannot be reached again, and this address is remembered from the last one; start a new session and paste its URL over it."
       : "Not answering. Check that Studio is running at this address.";
   }
   return "";
@@ -127,13 +127,15 @@ function TargetCard({
 
       <p className="ct__addr">
         {target.configured ? target.baseURL : "not set"}
-        <span className="ct__meta">
-          {target.persistence === "session"
-            ? " · in memory only, re-entered each restart"
-            : target.source === "settings"
+        {/* Only once there is an address to say something about — an
+            unconfigured target has no provenance to report. */}
+        {target.configured && (
+          <span className="ct__meta">
+            {target.source === "settings"
               ? " · set here"
               : " · from the server environment"}
-        </span>
+          </span>
+        )}
       </p>
 
       {hint && <p className="ct__hint">{hint}</p>}

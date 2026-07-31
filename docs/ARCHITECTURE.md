@@ -249,9 +249,10 @@ Current posture, honestly stated:
   `PENUMBRA_AGENT_TOKEN` is set, loopback-only when it is not. There is
   deliberately no open mode — an unconfigured server cannot expose an actuator
   to the network by accident.
-- **Studio's key never leaves the server.** It is an unscoped admin credential;
-  no client-side code holds a Studio URL or key, and the Colab fallback's bearer
-  is held in server memory only, never written to disk or returned to a client.
+- **Studio's key never leaves the server.** It is unscoped across that Studio's
+  own surfaces — training, export, and inference alike — so no client-side code
+  holds a Studio URL or key. Both targets' bearers, the Colab fallback's
+  included, are stored server-side and never returned to a client.
 - **The desktop filesystem commands are unscoped.** `fs_list`, `fs_read_head`,
   `fs_read_chunk`, and `fs_move` accept any absolute path the user's account can
   reach; the folder picker seeds the UI, it does not confine the commands. Only
