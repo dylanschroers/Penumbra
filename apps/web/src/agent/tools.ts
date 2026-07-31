@@ -1,12 +1,14 @@
 import {
+  agentTools,
   completeTaskTool,
   createTaskTool,
   deleteTaskTool,
+  fetchWeather,
+  getWeatherTool,
   listTasksTool,
   type TaskRow,
   type ToolContract,
   type ToolSpec,
-  taskTools,
   toToolSpec,
 } from "@penumbra/shared";
 import type { z } from "zod";
@@ -24,7 +26,7 @@ export type { ToolSpec } from "@penumbra/shared";
 export { AGENT_SYSTEM } from "@penumbra/shared";
 
 /** The model-facing tool list, derived from the shared contracts. */
-export const toolSpecs: ToolSpec[] = taskTools.map(toToolSpec);
+export const toolSpecs: ToolSpec[] = agentTools.map(toToolSpec);
 
 interface BoundTool {
   contract: ToolContract;
@@ -101,6 +103,11 @@ const bindings: BoundTool[] = [
     await db.deleteTask(t.id);
     return `Deleted "${t.title}".`;
   }),
+
+  // The runner ships with the contract rather than being written here: it
+  // touches no client store, so there is nothing for this tier to supply that
+  // the server tier would supply differently (see tools/weather.ts).
+  bind(getWeatherTool, fetchWeather),
 ];
 
 const registry = new Map(bindings.map((b) => [b.contract.name, b]));

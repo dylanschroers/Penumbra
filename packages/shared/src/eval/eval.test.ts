@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SUITES } from "../lab";
-import { taskTools } from "../tools";
+import { agentTools } from "../tools";
 import { type EvalCase, evalCases } from "./cases";
 import { type CaseOutcome, scoreCase, summarize } from "./scoring";
 import { toJsonl, toTrainingExamples } from "./trainset";
@@ -19,7 +19,7 @@ const score = (c: EvalCase, o: Partial<CaseOutcome>) =>
 describe("cases", () => {
   // A typo'd tool name would silently score every run as a failure.
   it("only expects tools that actually exist", () => {
-    const names = new Set(taskTools.map((t) => t.name));
+    const names = new Set(agentTools.map((t) => t.name));
     for (const c of evalCases) {
       if (c.tool !== null) expect(names).toContain(c.tool);
     }

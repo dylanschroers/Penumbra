@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AGENT_SYSTEM,
+  agentTools,
   type BenchmarkResult,
   type CaseOutcome,
   evalCases,
@@ -12,7 +13,6 @@ import {
   summarize,
   type TargetId,
   type TaskScore,
-  taskTools,
   toToolSpec,
 } from "@penumbra/shared";
 import { caseProgress, type RunProgress, readOutputChunk } from "./progress";
@@ -142,7 +142,7 @@ async function ask(
 }
 
 async function runPersonalSuite(opts: BenchmarkOptions): Promise<TaskScore[]> {
-  const tools = taskTools.map(toToolSpec);
+  const tools = agentTools.map(toToolSpec);
   // samplesPerTask caps the run so a smoke check stays quick; the full set is
   // small enough that the cap is usually the whole thing.
   const cases = evalCases.slice(0, opts.samplesPerTask);
