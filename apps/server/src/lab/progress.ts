@@ -25,6 +25,24 @@ export interface RunProgress {
 const MAX_DETAIL = 200;
 
 /**
+ * Longest line TQDM_FRAME is allowed to scan.
+ *
+ * Not a tidiness rule — it is what stops a long line from stalling the server.
+ * The label group and the `\s*` after it both match whitespace, so the engine
+ * retries every way of splitting the two and the match goes quadratic in the
+ * line's length. Measured against lm_eval-shaped output: a 15 KB config dump on
+ * one line blocks for ~1.1s, and 2 KB of column padding for ~3.3s. Node runs
+ * this on the only thread it has, so that is chat, sync, and the lab UI frozen
+ * for the duration, in the middle of a benchmark.
+ *
+ * A real frame is around 66 characters, so 512 leaves roughly sevenfold
+ * headroom while refusing anything that could not be one. Capping the input
+ * beats rewriting the pattern: the pattern is readable and correct, and its
+ * only problem is being pointed at text it was never meant to see.
+ */
+const MAX_FRAME_LINE = 512;
+
+/**
  * One tqdm frame, as lm-eval writes them:
  *
  *     Requesting API:  18%|█▊        | 33/180 [13:25<1:54:32, 46.75s/it]
@@ -78,6 +96,9 @@ function formatRate(rate: string, unit: string): string {
  * to show for a given task.
  */
 export function parseTqdmFrame(line: string): RunProgress | null {
+  // Before the match, not after: see MAX_FRAME_LINE. A line this long is not a
+  // frame, and finding that out by scanning it is the expensive part.
+  if (line.length > MAX_FRAME_LINE) return null;
   const match = TQDM_FRAME.exec(line);
   if (!match?.groups) return null;
 
