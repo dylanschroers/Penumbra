@@ -19,6 +19,12 @@
 // PENUMBRA_AGENT_TOKEN set the bearer already stops the request; the allowlist
 // then just means a hostile page cannot read replies it could not authenticate
 // for anyway.
+//
+// A plain list is the whole policy — @fastify/cors compares an array of origins
+// by string equality, so there is nothing left for a predicate to decide. A
+// caller that sends no Origin at all (curl, a native fetch, another service) is
+// served either way and simply gets no allow-origin header back, that header
+// being something only a browser reads. ./auth is what stands in front of those.
 
 /** The app's own origins. */
 const BUILT_IN_ORIGINS = [
@@ -33,46 +39,19 @@ const BUILT_IN_ORIGINS = [
 ];
 
 /**
- * Extra origins, comma-separated, for serving the web build from somewhere else
- * — a LAN address, a reverse proxy, another port.
+ * Every origin allowed to read this server's responses: the app's own, plus
+ * whatever `raw` names — comma-separated, from PENUMBRA_ALLOWED_ORIGINS.
  *
- * This exists because the server is meant to be reachable from another machine:
- * that is the whole point of the runtime address field in the status pill. The
- * client's origin is then whatever host serves it, which no built-in list can
- * predict. Naming those origins is a deliberate act, which is exactly the
- * property `origin: true` gave away for free.
+ * The extras exist because the server is meant to be reachable from another
+ * machine: that is the whole point of the runtime address field in the status
+ * pill. The client's origin is then whatever host serves it, which no built-in
+ * list can predict. Naming those origins is a deliberate act, which is exactly
+ * the property `origin: true` gave away for free.
  */
-export function parseAllowedOrigins(raw: string | undefined): string[] {
-  return (raw ?? "")
+export function allowedOrigins(raw: string | undefined): string[] {
+  const extra = (raw ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-}
-
-/**
- * Whether a browser at `origin` may read this server's responses.
- *
- * `undefined` means the request carried no Origin header, which is every
- * non-browser caller — curl, a native fetch, another service. CORS exists to
- * govern what a *page* may read; it has nothing to say about these, and
- * rejecting them here would break the desktop app's own requests while stopping
- * no attack. Anything that reaches this point still has to satisfy ./auth.
- */
-export function isAllowedOrigin(
-  origin: string | undefined,
-  extra: readonly string[] = [],
-): boolean {
-  if (origin === undefined) return true;
-  return BUILT_IN_ORIGINS.includes(origin) || extra.includes(origin);
-}
-
-/** The `origin` option for @fastify/cors, closed over the configured extras. */
-export function corsOriginPolicy(allowedFromEnv: string | undefined) {
-  const extra = parseAllowedOrigins(allowedFromEnv);
-  return (
-    origin: string | undefined,
-    cb: (err: Error | null, allow: boolean) => void,
-  ): void => {
-    cb(null, isAllowedOrigin(origin, extra));
-  };
+  return [...BUILT_IN_ORIGINS, ...extra];
 }

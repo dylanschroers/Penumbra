@@ -155,10 +155,15 @@ what SQLite returns, not just `.optional()`.
 
 ## v0 limitations (read before exposing this beyond localhost/LAN)
 
-- **No auth.** The sync endpoints trust anyone who can reach them, and CORS
-  reflects any origin. Fine for `localhost` or a trusted LAN. Before this ever
-  faces the open internet, add a bearer token (cheap) or the Identity module
-  (device registration + per-device sync state, per ARCHITECTURE.md).
+- **No auth.** The sync endpoints trust anyone who can reach them. Fine for
+  `localhost` or a trusted LAN. Before this ever faces the open internet, add a
+  bearer token (cheap) or the Identity module (device registration + per-device
+  sync state, per ARCHITECTURE.md).
+- **CORS does not reflect any origin** — it used to, which was a hole rather
+  than a limitation, since a page the user merely visited could then drive the
+  actuator routes over loopback. It is now an allowlist of the app's own
+  origins plus `PENUMBRA_ALLOWED_ORIGINS` (`apps/server/src/http/cors.ts`).
+  Serving the web build from anywhere else means naming that origin there.
 - **Single user.** Every row carries `userId` (`"local"`), but nothing scopes
   requests to a caller yet. Multi-user is a query-scoping change, not a schema
   one.

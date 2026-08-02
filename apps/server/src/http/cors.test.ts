@@ -2,14 +2,17 @@ import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { requireAuth } from "./auth";
-import { corsOriginPolicy, isAllowedOrigin, parseAllowedOrigins } from "./cors";
+import { allowedOrigins } from "./cors";
 
 // The hole this closes, stated once: `origin: true` reflected whatever Origin a
 // caller sent, and ./auth exempts loopback when no token is set. A browser
 // dials localhost *from* 127.0.0.1, so any page the user happened to have open
-// could POST /agent/chat and read the reply. The unit tests below pin the
-// policy; the integration block proves it through the real plugin, because the
-// bug was never in a predicate — it was in what got handed to @fastify/cors.
+// could POST /agent/chat and read the reply.
+//
+// Everything below goes through the real plugin. The bug was never in a
+// predicate of ours — it was in what got handed to @fastify/cors — and now that
+// the policy *is* a list, the matching is the plugin's to do, so asserting on
+// the list alone would prove nothing about what the server answers.
 
 let app: FastifyInstance | undefined;
 afterEach(async () => {
@@ -17,70 +20,19 @@ afterEach(async () => {
   app = undefined;
 });
 
-describe("isAllowedOrigin", () => {
-  it("allows the desktop app on every platform's protocol", () => {
-    expect(isAllowedOrigin("tauri://localhost")).toBe(true);
-    expect(isAllowedOrigin("http://tauri.localhost")).toBe(true);
-  });
-
-  it("allows the Vite dev server on either loopback spelling", () => {
-    expect(isAllowedOrigin("http://localhost:5173")).toBe(true);
-    expect(isAllowedOrigin("http://127.0.0.1:5173")).toBe(true);
-  });
-
-  it("refuses an origin nobody configured", () => {
-    expect(isAllowedOrigin("https://evil.example")).toBe(false);
-  });
-
-  it("refuses a lookalike that merely starts the same", () => {
-    // Substring matching would pass both of these, and both are registrable.
-    expect(isAllowedOrigin("http://localhost:5173.evil.example")).toBe(false);
-    expect(isAllowedOrigin("http://tauri.localhost.evil.example")).toBe(false);
-  });
-
-  it("treats a missing Origin as not-a-browser rather than as hostile", () => {
-    // curl, a native fetch, another service. CORS governs what a page may read
-    // and has nothing to say about these; ./auth is still in front of them.
-    expect(isAllowedOrigin(undefined)).toBe(true);
-  });
-
-  it("allows an origin named in the environment", () => {
-    // The server is meant to be reachable from another machine, so the origin
-    // serving the web build cannot be predicted — only declared.
-    expect(
-      isAllowedOrigin("http://192.168.1.50:5173", ["http://192.168.1.50:5173"]),
-    ).toBe(true);
-    expect(
-      isAllowedOrigin("http://192.168.1.51:5173", ["http://192.168.1.50:5173"]),
-    ).toBe(false);
-  });
-});
-
-describe("parseAllowedOrigins", () => {
-  it("splits a comma-separated list and trims it", () => {
-    expect(parseAllowedOrigins(" a , b ,c ")).toEqual(["a", "b", "c"]);
-  });
-
-  it("reads unset or empty as no extra origins", () => {
-    expect(parseAllowedOrigins(undefined)).toEqual([]);
-    expect(parseAllowedOrigins("")).toEqual([]);
-    expect(parseAllowedOrigins(" , ,")).toEqual([]);
-  });
-});
+/** A server wired exactly as main.ts wires it, with no token set. */
+async function serve(allowedFromEnv?: string): Promise<FastifyInstance> {
+  const instance = Fastify();
+  await instance.register(cors, { origin: allowedOrigins(allowedFromEnv) });
+  instance.post(
+    "/agent/chat",
+    { preHandler: requireAuth(undefined) },
+    async () => ({ ok: true }),
+  );
+  return instance;
+}
 
 describe("through @fastify/cors, unauthenticated (the default posture)", () => {
-  /** A server wired exactly as main.ts wires it, with no token set. */
-  async function serve(allowedFromEnv?: string): Promise<FastifyInstance> {
-    const instance = Fastify();
-    await instance.register(cors, { origin: corsOriginPolicy(allowedFromEnv) });
-    instance.post(
-      "/agent/chat",
-      { preHandler: requireAuth(undefined) },
-      async () => ({ ok: true }),
-    );
-    return instance;
-  }
-
   it("does not let a hostile page read a reply", async () => {
     app = await serve();
 
@@ -103,24 +55,58 @@ describe("through @fastify/cors, unauthenticated (the default posture)", () => {
       headers: { origin: "https://evil.example" },
       payload: {},
     });
+    expect(post.statusCode).toBe(200);
     expect(post.headers["access-control-allow-origin"]).toBeUndefined();
   });
 
-  it("still lets the desktop app through", async () => {
+  it("refuses a lookalike that merely starts like an allowed origin", async () => {
+    // Both of these are registrable, and prefix matching would pass both. The
+    // list is only as good as the plugin's comparison, so pin that it is exact.
     app = await serve();
-    const res = await app.inject({
-      method: "POST",
-      url: "/agent/chat",
-      headers: { origin: "tauri://localhost" },
-      payload: {},
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.headers["access-control-allow-origin"]).toBe(
-      "tauri://localhost",
-    );
+    for (const origin of [
+      "http://localhost:5173.evil.example",
+      "http://tauri.localhost.evil.example",
+    ]) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/agent/chat",
+        headers: { origin },
+        payload: {},
+      });
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+    }
+  });
+
+  it("still lets the desktop app through, on either platform's protocol", async () => {
+    app = await serve();
+    for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/agent/chat",
+        headers: { origin },
+        payload: {},
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["access-control-allow-origin"]).toBe(origin);
+    }
+  });
+
+  it("still lets the Vite dev server through, on either loopback spelling", async () => {
+    app = await serve();
+    for (const origin of ["http://localhost:5173", "http://127.0.0.1:5173"]) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/agent/chat",
+        headers: { origin },
+        payload: {},
+      });
+      expect(res.headers["access-control-allow-origin"]).toBe(origin);
+    }
   });
 
   it("still serves a caller that sends no Origin at all", async () => {
+    // curl, a native fetch, another service. They get no allow-origin header
+    // and do not care: it is a header only a browser reads. ./auth gates them.
     app = await serve();
     const res = await app.inject({
       method: "POST",
@@ -128,18 +114,36 @@ describe("through @fastify/cors, unauthenticated (the default posture)", () => {
       payload: {},
     });
     expect(res.statusCode).toBe(200);
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
   });
 
-  it("honours an origin declared in the environment", async () => {
-    app = await serve("http://192.168.1.50:5173");
-    const res = await app.inject({
+  it("honours origins declared in the environment, and only those", async () => {
+    // The server is meant to be reachable from another machine, so the origin
+    // serving the web build cannot be predicted — only declared.
+    app = await serve(" http://192.168.1.50:5173 , http://proxy.lan ,");
+
+    for (const origin of ["http://192.168.1.50:5173", "http://proxy.lan"]) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/agent/chat",
+        headers: { origin },
+        payload: {},
+      });
+      expect(res.headers["access-control-allow-origin"]).toBe(origin);
+    }
+
+    const neighbour = await app.inject({
       method: "POST",
       url: "/agent/chat",
-      headers: { origin: "http://192.168.1.50:5173" },
+      headers: { origin: "http://192.168.1.51:5173" },
       payload: {},
     });
-    expect(res.headers["access-control-allow-origin"]).toBe(
-      "http://192.168.1.50:5173",
-    );
+    expect(neighbour.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("is just the built-ins when the variable is unset or empty", async () => {
+    expect(allowedOrigins(undefined)).toEqual(allowedOrigins(""));
+    expect(allowedOrigins(" , ,")).toEqual(allowedOrigins(undefined));
+    expect(allowedOrigins(undefined)).toContain("tauri://localhost");
   });
 });
