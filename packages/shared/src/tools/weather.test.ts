@@ -92,6 +92,18 @@ describe("fetchWeather", () => {
     );
   });
 
+  // The bug this pins: a service that answers and refuses is not a missing
+  // network, and saying so sends the user to check their wi-fi for nothing.
+  it("reports an HTTP failure as the service answering", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 429 } as Response),
+    );
+    expect(await fetchWeather({ location: "Berlin" })).toBe(
+      "Could not reach the weather service — it answered 429.",
+    );
+  });
+
   it("names a missing network rather than throwing", async () => {
     vi.stubGlobal(
       "fetch",
