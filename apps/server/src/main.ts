@@ -12,6 +12,7 @@ import { UnslothEngine } from "./agent/UnslothEngine";
 import { registerComputeRoutes } from "./compute/routes";
 import { createTargetStore } from "./compute/targets";
 import { sqlite } from "./db";
+import { corsOriginPolicy } from "./http/cors";
 import { createLabStore } from "./lab/jobs";
 import { registerLabRoutes } from "./lab/routes";
 import { createServerTaskStore } from "./store/tasks";
@@ -30,10 +31,12 @@ app.addContentTypeParser(
   (_req, body, done) => done(null, body),
 );
 
-// v0 has no auth (single user, LAN/localhost — see docs/SYNC.md), so reflect any
-// origin. Lock this down before the server ever faces the open internet. The
-// agent routes do not rely on this and carry their own gate (./agent/routes).
-await app.register(cors, { origin: true });
+// Only the app's own origins, plus whatever PENUMBRA_ALLOWED_ORIGINS names. See
+// ./http/cors: reflecting any origin let a page the user merely *visited* drive
+// /agent/* and /lab/* through the loopback exemption in ./http/auth.
+await app.register(cors, {
+  origin: corsOriginPolicy(process.env.PENUMBRA_ALLOWED_ORIGINS),
+});
 
 app.get("/health", async () => ({ status: "ok" }));
 
