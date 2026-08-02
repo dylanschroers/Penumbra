@@ -25,6 +25,33 @@ export interface RunProgress {
 const MAX_DETAIL = 200;
 
 /**
+ * Longest line TQDM_FRAME is allowed to scan.
+ *
+ * Not a tidiness rule — it is half of what stops long output from stalling the
+ * server. TQDM_FRAME is unanchored, so a line that is not a frame is retried
+ * from every position, and the lazy label re-expands at each: quadratic in the
+ * line's length however tight the pattern is. Node runs this on the only thread
+ * it has, so a stall here is chat, sync, and the lab UI frozen together, in the
+ * middle of a benchmark.
+ *
+ * The other half is the pattern itself (see TQDM_FRAME). Both are load-bearing,
+ * and each alone leaves a hole — measured on whitespace-padded lm_eval-shaped
+ * output, scanning as readOutputChunk does:
+ *
+ *                                 one 64 KB line   64 KB of 500-char lines
+ *     cap only, ambiguous pattern         0.2 ms                   7193 ms
+ *     pattern only, no cap                3643 ms                    28 ms
+ *     both (what this ships)              0.1 ms                     27 ms
+ *
+ * The cap bounds one line; the pattern bounds the per-line constant, which is
+ * what the cap cannot do when a chunk holds a hundred lines just under it.
+ *
+ * A real frame is around 66 characters, so 512 leaves roughly sevenfold
+ * headroom while refusing anything that could not be one.
+ */
+const MAX_FRAME_LINE = 512;
+
+/**
  * One tqdm frame, as lm-eval writes them:
  *
  *     Requesting API:  18%|█▊        | 33/180 [13:25<1:54:32, 46.75s/it]
@@ -32,9 +59,16 @@ const MAX_DETAIL = 200;
  * The trailing group is optional because the first frames carry no rate yet
  * (`[00:01<?, ?it/s]`), and the label is optional because not every bar has a
  * description.
+ *
+ * Do not put `\s*` back between the label and `\d+%`. The label already matches
+ * whitespace, so the two quantifiers overlap and the engine retries every way
+ * of splitting a run of spaces between them — 250x the cost on padded output,
+ * enough to stall the event loop for seconds (see MAX_FRAME_LINE). The label
+ * absorbs the spaces instead and the use site trims them, which is what it did
+ * with the trailing `:` anyway.
  */
 const TQDM_FRAME =
-  /(?<label>[^|\r\n]*?)\s*\d+%\|[^|]*\|\s*(?<done>\d+)\/(?<total>\d+)\s*\[(?<elapsed>[\d:]+)<(?<remain>[\d:?]+)(?:,\s*(?<rate>[\d.]+)(?<unit>s\/it|it\/s))?/;
+  /(?<label>[^|\r\n]*?)\d+%\|[^|]*\|\s*(?<done>\d+)\/(?<total>\d+)\s*\[(?<elapsed>[\d:]+)<(?<remain>[\d:?]+)(?:,\s*(?<rate>[\d.]+)(?<unit>s\/it|it\/s))?/;
 
 /** A bar's own characters. A chunk boundary can split a frame, and half a
  *  progress bar as the status line is worse than the line it replaced. */
@@ -78,6 +112,9 @@ function formatRate(rate: string, unit: string): string {
  * to show for a given task.
  */
 export function parseTqdmFrame(line: string): RunProgress | null {
+  // Before the match, not after: see MAX_FRAME_LINE. A line this long is not a
+  // frame, and finding that out by scanning it is the expensive part.
+  if (line.length > MAX_FRAME_LINE) return null;
   const match = TQDM_FRAME.exec(line);
   if (!match?.groups) return null;
 

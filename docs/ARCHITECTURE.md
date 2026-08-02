@@ -247,8 +247,15 @@ Current posture, honestly stated:
   Open-Meteo needs none, and it is skipped entirely unless the model calls the
   tool. A machine with no network still answers; the tool reports that it could
   not reach the service.
-- **Sync v0 has no auth** and reflects any CORS origin: run it on localhost or
-  a trusted LAN only (SYNC.md → v0 limitations).
+- **Sync v0 has no auth**: run it on localhost or a trusted LAN only (SYNC.md →
+  v0 limitations).
+- **CORS is an allowlist**, not a reflection (`apps/server/src/http/cors.ts`):
+  the app's own origins, plus whatever `PENUMBRA_ALLOWED_ORIGINS` names. This
+  matters more than it looks. Reflecting any origin — which is what this did
+  until it was fixed — combines with the loopback exemption below into a hole:
+  a browser dials `localhost` *from* `127.0.0.1`, so any page the user merely
+  visited could POST `/agent/chat` and read the reply. The gate below stops the
+  request only once a token is set, and unset is the default.
 - **The actuator routes do have a gate.** `/agent/*` and `/lab/*` run models
   with write and delete tools, spawn training jobs, and write files, so they sit
   behind `requireAuth` (`apps/server/src/http/auth.ts`): a bearer token when
