@@ -12,7 +12,7 @@ import { UnslothEngine } from "./agent/UnslothEngine";
 import { registerComputeRoutes } from "./compute/routes";
 import { createTargetStore } from "./compute/targets";
 import { sqlite } from "./db";
-import { corsOriginPolicy } from "./http/cors";
+import { allowedOrigins } from "./http/cors";
 import { createLabStore } from "./lab/jobs";
 import { registerLabRoutes } from "./lab/routes";
 import { createServerTaskStore } from "./store/tasks";
@@ -35,7 +35,7 @@ app.addContentTypeParser(
 // ./http/cors: reflecting any origin let a page the user merely *visited* drive
 // /agent/* and /lab/* through the loopback exemption in ./http/auth.
 await app.register(cors, {
-  origin: corsOriginPolicy(process.env.PENUMBRA_ALLOWED_ORIGINS),
+  origin: allowedOrigins(process.env.PENUMBRA_ALLOWED_ORIGINS),
 });
 
 app.get("/health", async () => ({ status: "ok" }));

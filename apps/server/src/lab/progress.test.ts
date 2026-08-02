@@ -116,17 +116,22 @@ describe("caseProgress", () => {
 });
 
 describe("long lines", () => {
-  // The regression: TQDM_FRAME's label group and the `\s*` after it both match
-  // whitespace, so the engine retries every split and the match goes quadratic.
-  // Unguarded, the 20k-space line below takes over a minute; lm_eval really does
-  // emit long single lines (config dumps, padded columns), and Node has one
-  // thread, so that is the whole server stalled mid-benchmark.
+  // The regression: matching a non-frame is quadratic in the line's length, and
+  // lm_eval really does emit long lines (config dumps, padded columns). Node has
+  // one thread, so that is the whole server stalled mid-benchmark. Two things
+  // hold it — the MAX_FRAME_LINE cap and the pattern's own shape — so there is a
+  // test per hole. The budgets are loose on purpose: each case is milliseconds
+  // when correct and seconds to minutes when not, so nothing here is a race
+  // against a slow CI box.
   it("refuses to scan a line far longer than any real frame", () => {
+    // 64 KB, a pipe read's worth on one line. Sized so that dropping the cap
+    // costs ~3.5s per assertion rather than the ~0.35s a 20k line costs, which
+    // is close enough to the budget below to leave the guard on a coin flip.
     const started = Date.now();
-    expect(parseTqdmFrame(`${" ".repeat(20_000)}x`)).toBeNull();
-    expect(parseTqdmFrame("x".repeat(20_000))).toBeNull();
+    expect(parseTqdmFrame(`${" ".repeat(64_000)}x`)).toBeNull();
+    expect(parseTqdmFrame("x".repeat(64_000))).toBeNull();
     expect(
-      parseTqdmFrame(JSON.stringify({ k: "v".repeat(20_000) })),
+      parseTqdmFrame(JSON.stringify({ k: "v".repeat(64_000) })),
     ).toBeNull();
     expect(Date.now() - started).toBeLessThan(1_000);
   });
@@ -145,5 +150,17 @@ describe("long lines", () => {
     // line — not the frame that shares the chunk with it.
     const chunk = `${"noise ".repeat(2_000)}\r  7%|#         | 1/15 [00:01<?, ?it/s]`;
     expect(readOutputChunk(chunk)?.progress).toBeCloseTo(1 / 15);
+  });
+
+  it("reads a whole chunk of padded lines that each clear the cap", () => {
+    // The cap alone does not cover this: every line here is under it, and
+    // readOutputChunk scans all of them. With the two quantifiers overlapping,
+    // one 64 KB read off the pipe cost ~7s of blocked event loop.
+    const chunk = Array(128)
+      .fill(`${" ".repeat(500)}x`)
+      .join("\n");
+    const started = Date.now();
+    expect(readOutputChunk(chunk)?.detail).toBe("x");
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 });
