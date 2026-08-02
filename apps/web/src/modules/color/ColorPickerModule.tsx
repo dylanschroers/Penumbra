@@ -15,8 +15,8 @@ import {
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import {
   colorAtCursor,
-  type DropperBackend,
-  dropperBackend,
+  type DropperSupport,
+  dropperSupport,
   pickScreenColor,
 } from "../../color/screenDropper";
 
@@ -69,28 +69,33 @@ export function ColorPickerModule() {
   const [picking, setPicking] = useState(false);
   const [dropperError, setDropperError] = useState<string | null>(null);
 
-  // Which backend is available is only knowable asynchronously (it asks the
+  // What the dropper can do is only knowable asynchronously (it asks the
   // desktop shell), so it starts null and the button stays disabled until the
   // probe lands.
-  const [backend, setBackend] = useState<DropperBackend | null>(null);
+  const [support, setSupport] = useState<DropperSupport | null>(null);
   useEffect(() => {
     let active = true;
-    dropperBackend().then(
-      (found) => active && setBackend(found),
-      () => active && setBackend("none"),
+    dropperSupport().then(
+      (found) => active && setSupport(found),
+      () => active && setSupport({ backend: "none", liveSample: false }),
     );
     return () => {
       active = false;
     };
   }, []);
 
-  // The color under the cursor while picking. The native dropper has no
-  // magnifier — that overlay was the thing making this lag — so this readout is
-  // what replaces it. Held separately from `hsva` so cancelling leaves the
-  // committed color untouched.
+  // The color under the cursor while picking. Where the backend has no
+  // magnifier of its own — that overlay was the thing making this lag — this
+  // readout is what replaces it. Held separately from `hsva` so cancelling
+  // leaves the committed color untouched.
+  //
+  // Gated on `liveSample`, not on the backend being native: a native backend
+  // that runs its own picker (the portal, NSColorSampler) has nothing to poll,
+  // and asking anyway would spin this interval against a command that only ever
+  // errors.
   const [preview, setPreview] = useState<string | null>(null);
   useEffect(() => {
-    if (!picking || backend !== "native") return;
+    if (!picking || !support?.liveSample) return;
     let active = true;
     const id = window.setInterval(async () => {
       try {
@@ -106,7 +111,7 @@ export function ColorPickerModule() {
       window.clearInterval(id);
       setPreview(null);
     };
-  }, [picking, backend]);
+  }, [picking, support?.liveSample]);
 
   // Persist the chosen color on every change.
   useEffect(() => {
@@ -127,7 +132,7 @@ export function ColorPickerModule() {
   // and `picking` keeps the button inert until then. A cancel yields null and
   // simply leaves the current color alone.
   async function pickFromScreen() {
-    if (picking || !backend || backend === "none") return;
+    if (picking || !support || support.backend === "none") return;
     setPicking(true);
     setDropperError(null);
     try {
@@ -193,10 +198,10 @@ export function ColorPickerModule() {
           type="button"
           className="btn color-picker__dropper"
           onClick={pickFromScreen}
-          disabled={!backend || backend === "none" || picking}
+          disabled={!support || support.backend === "none" || picking}
           aria-pressed={picking}
           title={
-            backend === "none"
+            support?.backend === "none"
               ? "Screen picking needs the desktop app or a Chromium browser"
               : "Pick a color from anywhere on screen"
           }

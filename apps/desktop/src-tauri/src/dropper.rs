@@ -10,9 +10,73 @@
 // applications' windows, not just ours, and the coordinate space is the virtual
 // screen spanning every monitor. That is what makes this usable outside the app.
 //
-// Windows-only. Everything else falls back to the EyeDropper path in the web
-// client (apps/web/src/color/screenDropper.ts), which is why the commands report
-// support rather than failing to exist.
+// Windows-only for now. Everything else falls back to the EyeDropper path in
+// the web client (apps/web/src/color/screenDropper.ts), which is why the
+// commands report support rather than failing to exist.
+//
+// Support is reported as two flags, not one, because the platforms differ in
+// *which half* they can do. Windows needs the whole interaction built by hand —
+// the mouse hook below is most of this file — and having built it, sampling the
+// cursor mid-pick is free. The intended Linux and macOS backends are the
+// opposite: the XDG desktop portal's `org.freedesktop.portal.Screenshot.
+// PickColor` and `NSColorSampler` each run the entire pick themselves, magnifier
+// and all, and hand back one color at the end. That is far less code, but it
+// leaves nothing to poll. So `pick` and `live_sample` are independent, and the
+// client hides its live readout rather than calling a command that cannot answer.
+
+use serde_json::{json, Value};
+
+/// Format an RGB triple as CSS `#rrggbb`.
+///
+/// The common currency between backends: every one of them ends here, so this is
+/// the single place the output format is decided.
+///
+/// Windows reaches it through `colorref_to_hex` and Linux calls it directly.
+/// On the platforms still waiting for a backend only the tests call it, which is
+/// the intended state rather than a warning worth carrying — it is tested
+/// everywhere precisely so it is already correct when NSColorSampler arrives.
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+fn rgb_to_hex(r: u8, g: u8, b: u8) -> String {
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+/// One 0.0–1.0 channel as a byte, for backends that report colors as floats
+/// (the XDG portal, and NSColorSampler when it lands).
+///
+/// Rounded rather than truncated: `1.0 * 255.0` is exactly 255, but any value a
+/// hair under it truncates a whole step low, so a pure white pick would come
+/// back as #fefefe. Clamped first because nothing obliges a portal to stay in
+/// range, and `as u8` saturates an out-of-range float silently.
+///
+/// Up here with `rgb_to_hex` for the same reason: it is pure arithmetic, its
+/// failure mode is an off-by-one nobody would notice by eye, and inside a
+/// platform-gated module its tests would compile nowhere else.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn channel_to_byte(v: f64) -> u8 {
+    (v.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+/// Format a Win32 COLORREF as CSS `#rrggbb`.
+///
+/// The one place this is easy to get silently wrong: COLORREF is `0x00bbggrr`,
+/// so the byte order is the reverse of the hex string. Reading it as RGB yields
+/// a plausible-looking color that is simply the wrong one.
+///
+/// Deliberately outside the Windows `imp` below, even though only Windows calls
+/// it. It is pure integer math with no Win32 in it, and while it lived inside a
+/// `#[cfg(windows)]` module its tests compiled nowhere else — `cargo test` on
+/// Linux reported "0 passed" while the byte order it guards went unchecked.
+///
+/// Only the Windows `imp` calls it, so off Windows the tests are its only
+/// caller — see `rgb_to_hex` above.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn colorref_to_hex(raw: u32) -> String {
+    rgb_to_hex(
+        (raw & 0xff) as u8,
+        ((raw >> 8) & 0xff) as u8,
+        ((raw >> 16) & 0xff) as u8,
+    )
+}
 
 #[cfg(windows)]
 mod imp {
@@ -63,17 +127,7 @@ mod imp {
         }
     }
 
-    /// Format a COLORREF as CSS `#rrggbb`.
-    ///
-    /// The one place this is easy to get silently wrong: COLORREF is `0x00bbggrr`,
-    /// so the byte order is the reverse of the hex string. Reading it as RGB
-    /// yields a plausible-looking color that is simply the wrong one.
-    fn colorref_to_hex(raw: u32) -> String {
-        let r = raw & 0xff;
-        let g = (raw >> 8) & 0xff;
-        let b = (raw >> 16) & 0xff;
-        format!("#{r:02x}{g:02x}{b:02x}")
-    }
+    use super::colorref_to_hex;
 
     /// Read one desktop pixel as `#rrggbb`.
     fn pixel_at(x: i32, y: i32) -> Result<String, String> {
@@ -194,73 +248,176 @@ mod imp {
         }
     }
 
-    pub const SUPPORTED: bool = true;
-
-    #[cfg(test)]
-    mod tests {
-        use super::colorref_to_hex;
-
-        #[test]
-        fn reads_colorref_as_bgr_not_rgb() {
-            // Pure blue is 0x00ff0000 in COLORREF. Read naively as RGB it would
-            // come out "#ff0000", i.e. red — the exact mistake being guarded.
-            assert_eq!(colorref_to_hex(0x00ff_0000), "#0000ff");
-            assert_eq!(colorref_to_hex(0x0000_00ff), "#ff0000");
-            assert_eq!(colorref_to_hex(0x0000_ff00), "#00ff00");
-        }
-
-        #[test]
-        fn pads_each_channel_to_two_digits() {
-            assert_eq!(colorref_to_hex(0x0000_0000), "#000000");
-            assert_eq!(colorref_to_hex(0x0001_0203), "#030201");
-        }
-
-        #[test]
-        fn ignores_the_high_byte() {
-            // GetPixel leaves it zero, but a COLORREF's top byte is not color
-            // data and must never reach the string.
-            assert_eq!(colorref_to_hex(0xff12_3456), "#563412");
-        }
+    /// `spawn_blocking` keeps the wait off both the UI thread and the async
+    /// runtime's workers — `pick_blocking` parks for as long as the user takes
+    /// to aim. The portal backend needs no such thing, which is why the async
+    /// boundary sits per-platform rather than in the command.
+    pub async fn pick() -> Result<Option<String>, String> {
+        tauri::async_runtime::spawn_blocking(pick_blocking)
+            .await
+            .map_err(|e| format!("Screen pick failed to start: {e}"))?
     }
+
+    pub const CAN_PICK: bool = true;
+    /// Free here: the hook already runs on its own thread, so the UI thread is
+    /// idle during a pick and one extra GetPixel per poll costs nothing.
+    pub const CAN_LIVE_SAMPLE: bool = true;
 }
 
-#[cfg(not(windows))]
+/// Linux: the XDG desktop portal picks the color for us.
+///
+/// `org.freedesktop.portal.Screenshot.PickColor` hands the whole interaction to
+/// the compositor — magnifier, click, Escape — and returns one color. That is
+/// why this module is twenty lines against Windows' two hundred: everything the
+/// mouse hook above exists to do, the portal already did.
+///
+/// It also works on X11, not just Wayland, because the portal is the frontend in
+/// both cases. What it cannot do is sample mid-pick: it owns the interaction and
+/// exposes nothing until the user commits, hence `CAN_LIVE_SAMPLE = false`.
+#[cfg(target_os = "linux")]
 mod imp {
-    const UNSUPPORTED: &str = "Native screen picking is only implemented on Windows.";
+    use ashpd::desktop::{Color, ResponseError};
+
+    use super::{channel_to_byte as channel, rgb_to_hex};
+
+    pub async fn pick() -> Result<Option<String>, String> {
+        match Color::pick().send().await.and_then(|req| req.response()) {
+            Ok(c) => Ok(Some(rgb_to_hex(
+                channel(c.red()),
+                channel(c.green()),
+                channel(c.blue()),
+            ))),
+            // Backing out is ordinary flow, the same as a right click on
+            // Windows — `None`, not an error.
+            Err(ashpd::Error::Response(ResponseError::Cancelled)) => Ok(None),
+            // Everything else is worth showing: no portal frontend installed, a
+            // backend without Screenshot v2, or a refused permission all land
+            // here and are all things the user can act on.
+            Err(e) => Err(format!("Screen pick failed: {e}")),
+        }
+    }
+
+    pub fn color_at_cursor() -> Result<String, String> {
+        Err("The desktop portal does not expose the color under the cursor.".into())
+    }
+
+    pub const CAN_PICK: bool = true;
+    pub const CAN_LIVE_SAMPLE: bool = false;
+}
+
+/// macOS and anything else: no native backend yet.
+///
+/// The macOS one is `NSColorSampler` (10.15+), which behaves like the portal —
+/// it runs its own magnifier and returns a single color — so it will land as
+/// `CAN_PICK` alone, the same shape as Linux.
+#[cfg(not(any(windows, target_os = "linux")))]
+mod imp {
+    const UNSUPPORTED: &str = "Native screen picking is not implemented on this platform yet.";
 
     pub fn color_at_cursor() -> Result<String, String> {
         Err(UNSUPPORTED.into())
     }
 
-    pub fn pick_blocking() -> Result<Option<String>, String> {
+    pub async fn pick() -> Result<Option<String>, String> {
         Err(UNSUPPORTED.into())
     }
 
-    pub const SUPPORTED: bool = false;
+    pub const CAN_PICK: bool = false;
+    pub const CAN_LIVE_SAMPLE: bool = false;
 }
 
-/// Whether the native dropper works here. The web client probes this once and
-/// falls back to the browser EyeDropper API when it is false.
+/// What the native dropper can do here.
+///
+/// Two independent flags — see the note at the top of this file. The web client
+/// probes this once: `pick` false sends it to the browser EyeDropper API, and
+/// `liveSample` false makes it drop the readout while keeping the pick.
+///
+/// Hand-built rather than a derived Serialize, matching db.rs and fs.rs: this
+/// crate carries `serde_json` but no serde derive, and one two-field object is
+/// not the thing to change that for.
 #[tauri::command]
-pub fn dropper_supported() -> bool {
-    imp::SUPPORTED
+pub fn dropper_capabilities() -> Value {
+    json!({ "pick": imp::CAN_PICK, "liveSample": imp::CAN_LIVE_SAMPLE })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{channel_to_byte, colorref_to_hex, rgb_to_hex};
+
+    // These run on every platform now. They used to sit inside the Windows-only
+    // module, where `cargo test` on Linux found them and reported "0 passed" —
+    // three green-looking tests that had never executed.
+
+    #[test]
+    fn reads_colorref_as_bgr_not_rgb() {
+        // Pure blue is 0x00ff0000 in COLORREF. Read naively as RGB it would
+        // come out "#ff0000", i.e. red — the exact mistake being guarded.
+        assert_eq!(colorref_to_hex(0x00ff_0000), "#0000ff");
+        assert_eq!(colorref_to_hex(0x0000_00ff), "#ff0000");
+        assert_eq!(colorref_to_hex(0x0000_ff00), "#00ff00");
+    }
+
+    #[test]
+    fn pads_each_channel_to_two_digits() {
+        assert_eq!(colorref_to_hex(0x0000_0000), "#000000");
+        assert_eq!(colorref_to_hex(0x0001_0203), "#030201");
+    }
+
+    #[test]
+    fn ignores_the_high_byte() {
+        // GetPixel leaves it zero, but a COLORREF's top byte is not color
+        // data and must never reach the string.
+        assert_eq!(colorref_to_hex(0xff12_3456), "#563412");
+    }
+
+    #[test]
+    fn formats_rgb_in_source_order() {
+        // The backend-neutral entry point: a portal or NSColorSampler hands over
+        // channels already in RGB, so this must *not* reverse them the way the
+        // COLORREF path does.
+        assert_eq!(rgb_to_hex(0xff, 0x00, 0x00), "#ff0000");
+        assert_eq!(rgb_to_hex(0x01, 0x02, 0x03), "#010203");
+    }
+
+    #[test]
+    fn scales_a_portal_channel_to_a_full_byte() {
+        // Truncating instead of rounding is the bug worth naming: it puts the
+        // top of the range a step low, so a pure white pick reads #fefefe and
+        // nobody notices until they compare two swatches.
+        assert_eq!(channel_to_byte(1.0), 255);
+        assert_eq!(channel_to_byte(0.999_999), 255);
+        assert_eq!(channel_to_byte(0.0), 0);
+        assert_eq!(channel_to_byte(0.5), 128);
+    }
+
+    #[test]
+    fn clamps_a_channel_the_portal_had_no_business_sending() {
+        // `as u8` saturates rather than wrapping, but only after the multiply —
+        // clamping first is what keeps a NaN-adjacent value from being read as
+        // a color at all.
+        assert_eq!(channel_to_byte(1.5), 255);
+        assert_eq!(channel_to_byte(-0.2), 0);
+    }
 }
 
 /// The color directly under the cursor, for the live readout while picking.
-/// Cheap enough to poll: one GDI read, no capture.
+///
+/// Only meaningful where `dropper_capabilities` reported `liveSample`; the
+/// client does not call it otherwise. On Windows it is one GDI read, no capture,
+/// and cheap enough to poll.
 #[tauri::command]
 pub fn dropper_color_at_cursor() -> Result<String, String> {
     imp::color_at_cursor()
 }
 
-/// Sample one pixel, chosen by the user's next click. `None` means they cancelled
-/// with Escape or a right click.
+/// Sample one pixel, chosen by the user's next click. `None` means they
+/// cancelled — Escape or a right click on Windows, the portal's own dismissal
+/// on Linux.
 ///
-/// `spawn_blocking` keeps the wait off both the UI thread and the async runtime's
-/// workers — it parks for as long as the user takes to aim.
+/// Each backend owns its own threading: Windows parks a blocking wait on a
+/// dedicated thread, while the portal is natively async. Putting that inside
+/// `imp` rather than here is what keeps this command one line on both.
 #[tauri::command]
 pub async fn dropper_pick() -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(imp::pick_blocking)
-        .await
-        .map_err(|e| format!("Screen pick failed to start: {e}"))?
+    imp::pick().await
 }
