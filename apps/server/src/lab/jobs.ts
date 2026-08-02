@@ -100,6 +100,8 @@ CREATE TABLE IF NOT EXISTS lab_scores (
   suite text NOT NULL,
   suite_kind text NOT NULL,
   model text NOT NULL,
+  served_model text,
+  target text NOT NULL DEFAULT 'local',
   samples_per_task integer NOT NULL,
   at text NOT NULL,
   duration_ms integer NOT NULL,
@@ -113,6 +115,11 @@ CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
   addColumn(db, "lab_runs", "provider", "text NOT NULL DEFAULT 'local'");
   addColumn(db, "lab_runs", "hub_repo", "text");
   addColumn(db, "lab_jobs", "run_id", "text");
+  // Scores written before these existed came from the only target there was,
+  // against whatever was loaded — unknowable now, hence null rather than a
+  // guess that would read as a measurement.
+  addColumn(db, "lab_scores", "target", "text NOT NULL DEFAULT 'local'");
+  addColumn(db, "lab_scores", "served_model", "text");
 
   const insertJob = db.prepare(
     `INSERT INTO lab_jobs (id, kind, state, progress, detail, error, run_id, created_at, updated_at)
@@ -156,14 +163,36 @@ CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
   );
 
   const insertScore = db.prepare(
-    `INSERT INTO lab_scores (id, suite, suite_kind, model, samples_per_task, at, duration_ms, task, metric, value)
-     VALUES (@id, @suite, @suiteKind, @model, @samplesPerTask, @at, @durationMs, @task, @metric, @value)`,
+    `INSERT INTO lab_scores (id, suite, suite_kind, model, served_model, target,
+                             samples_per_task, at, duration_ms, task, metric, value)
+     VALUES (@id, @suite, @suiteKind, @model, @servedModel, @target,
+             @samplesPerTask, @at, @durationMs, @task, @metric, @value)`,
   );
   const selectScores = db.prepare(
-    `SELECT suite, suite_kind AS suiteKind, model, samples_per_task AS samplesPerTask,
+    `SELECT suite, suite_kind AS suiteKind, model, served_model AS servedModel,
+            target, samples_per_task AS samplesPerTask,
             at, duration_ms AS durationMs, task, metric, value
      FROM lab_scores ORDER BY at DESC, rowid ASC`,
   );
+
+  // Nothing survives a restart except the rows. A job left "running" or
+  // "queued" was owned by a process that no longer exists, so it cannot make
+  // progress, cannot be cancelled, and will never settle on its own — it just
+  // sits there claiming to be in flight. That was enough to wedge the Lab: the
+  // form disables itself while a job is running, so one orphan blocked every
+  // later run, and Cancel could not clear it because the controller died with
+  // the process that held it.
+  //
+  // Failed rather than cancelled: nobody stopped this, it was interrupted, and
+  // the same rule the export path already follows applies — a run is not done
+  // unless completion was actually reported.
+  db.prepare(
+    `UPDATE lab_jobs
+        SET state = 'failed',
+            error = 'Interrupted: the server restarted while this was running.',
+            updated_at = @now
+      WHERE state IN ('running', 'queued')`,
+  ).run({ now: new Date().toISOString() });
 
   return {
     createJob(kind, runId) {
@@ -226,6 +255,8 @@ CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
             suite: r.suite,
             suiteKind: r.suiteKind,
             model: r.model,
+            servedModel: r.servedModel ?? null,
+            target: r.target,
             samplesPerTask: r.samplesPerTask,
             at: r.at,
             durationMs: r.durationMs,
@@ -244,7 +275,10 @@ CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
         Omit<BenchmarkResult, "scores">;
       const byRun = new Map<string, BenchmarkResult>();
       for (const row of selectScores.all() as Row[]) {
-        const key = `${row.at}|${row.suite}|${row.model}`;
+        // The target is part of the key: the same model name on two machines is
+        // two different measurements, and merging them would splice one run's
+        // metrics into another's.
+        const key = `${row.at}|${row.suite}|${row.model}|${row.target}`;
         const existing = byRun.get(key);
         const score = { task: row.task, metric: row.metric, value: row.value };
         if (existing) existing.scores.push(score);
@@ -253,6 +287,8 @@ CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
             suite: row.suite,
             suiteKind: row.suiteKind,
             model: row.model,
+            servedModel: row.servedModel ?? null,
+            target: row.target,
             samplesPerTask: row.samplesPerTask,
             at: row.at,
             durationMs: row.durationMs,

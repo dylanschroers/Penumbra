@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { SuiteDefinition } from "@penumbra/shared";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseLmEvalResults, runBenchmark } from "./benchmark";
+import { lmEvalEnv, parseLmEvalResults, runBenchmark } from "./benchmark";
 
 // The personal suite is driven against a real HTTP model server, so the request
 // shape and scoring are exercised end to end without a model. The general
@@ -65,6 +65,8 @@ describe("personal suite", () => {
 
     const result = await runBenchmark({
       model: "fake",
+      servedModel: "fake",
+      target: "local",
       suite: personalSuite,
       samplesPerTask: 8,
       baseURL,
@@ -91,6 +93,8 @@ describe("personal suite", () => {
 
     const result = await runBenchmark({
       model: "fake",
+      servedModel: "fake",
+      target: "local",
       suite: personalSuite,
       samplesPerTask: 2, // both create_task cases
       baseURL,
@@ -103,22 +107,27 @@ describe("personal suite", () => {
     ).toBe(1);
   });
 
+  // Position as a number, not only as a sentence: a job row can draw a bar from
+  // the first and can only print the second.
   it("reports progress per case", async () => {
     model = startFakeModel(() => ({
       choices: [{ message: { content: "hi" } }],
     }));
     const baseURL = await model.listen();
-    const lines: string[] = [];
+    const updates: { progress: number | null; detail: string }[] = [];
 
     await runBenchmark({
       model: "fake",
+      servedModel: "fake",
+      target: "local",
       suite: personalSuite,
       samplesPerTask: 3,
       baseURL,
-      onProgress: (l) => lines.push(l),
+      onProgress: (u) => updates.push(u),
     });
-    expect(lines).toHaveLength(3);
-    expect(lines[0]).toContain("case 1/3");
+    expect(updates).toHaveLength(3);
+    expect(updates[0]?.detail).toContain("case 1/3");
+    expect(updates.map((u) => u.progress)).toEqual([1 / 3, 2 / 3, 1]);
   });
 
   // A rejected request scored as "declined to call a tool" would silently
@@ -134,12 +143,31 @@ describe("personal suite", () => {
     await expect(
       runBenchmark({
         model: "fake",
+        servedModel: "fake",
+        target: "local",
         suite: personalSuite,
         samplesPerTask: 1,
         baseURL,
       }),
     ).rejects.toThrow("responded 500");
     server.close();
+  });
+});
+
+// A POSIX box never sees this, which is exactly why it is pinned: the failure
+// is invisible off Windows and cost a full run to find.
+describe("lmEvalEnv", () => {
+  it("forces UTF-8 so the child can print its own summary table", () => {
+    const env = lmEvalEnv();
+    expect(env.PYTHONIOENCODING).toBe("utf-8");
+    expect(env.PYTHONUTF8).toBe("1");
+  });
+
+  it("passes the bearer through, defaulting to a placeholder", () => {
+    expect(lmEvalEnv("sk-real").OPENAI_API_KEY).toBe("sk-real");
+    // lm_eval's OpenAI client refuses to start without one, and a local Studio
+    // may legitimately have no key.
+    expect(lmEvalEnv().OPENAI_API_KEY).toBe("dummy");
   });
 });
 

@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import { getAgentToken, getServerUrl, setAgentToken } from "../serverAddress";
 import {
-  getServerUrl,
   getSyncStatus,
   SYNC_STATUS_EVENT,
   type SyncStatus,
@@ -12,6 +12,13 @@ import {
 // opens a small menu to point the app at a server by address and connect — the
 // round the new address triggers flips the same status, which stays visible in
 // the menu so the result is seen. The menu closes on outside-click or Escape.
+//
+// The bearer is set here too, beside the address, because the dot cannot report
+// on it. Sync is ungated, so a round succeeds and the pill goes green whatever
+// the token is; /agent/*, /lab/* and /compute/* are behind requireAuth and fail
+// separately. Connected therefore means "the address is right", never "the whole
+// app can reach it" — which is why the two fields sit together rather than the
+// token hiding in a settings screen somewhere else.
 
 const STATUS_LABEL: Record<SyncStatus, string> = {
   pending: "Connecting…",
@@ -23,6 +30,10 @@ export function ServerStatus() {
   const [status, setStatus] = useState<SyncStatus>(getSyncStatus);
   const [open, setOpen] = useState(false);
   const [address, setAddress] = useState(() => getServerUrl());
+  // Shown rather than masked to a placeholder: unlike the Studio key, this one
+  // is already in the user's own browser and the commonest fix is spotting that
+  // it does not match what the server was started with.
+  const [token, setToken] = useState(() => getAgentToken() ?? "");
   const ref = useRef<HTMLDivElement>(null);
 
   // Live status: sync rounds dispatch SYNC_STATUS_EVENT as they settle.
@@ -55,6 +66,9 @@ export function ServerStatus() {
     event.preventDefault();
     const trimmed = address.trim();
     if (!trimmed) return;
+    // Bearer first, so the round the address change triggers — and every gated
+    // call after it — already carries the new one.
+    setAgentToken(token.trim());
     // setServerUrl persists + runs a round; the status updates via the event.
     void setServerUrl(trimmed);
   }
@@ -94,10 +108,28 @@ export function ServerStatus() {
               spellCheck={false}
               autoComplete="off"
             />
+            <input
+              className="server-status__input"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder="Access token (blank if the server is local)"
+              aria-label="Server access token"
+              spellCheck={false}
+              autoComplete="off"
+            />
             <button type="submit" className="btn btn--primary">
               Connect
             </button>
           </form>
+          {/* The failure this exists to explain: a server on another machine
+              with no PENUMBRA_AGENT_TOKEN serves loopback only, so the dot goes
+              green on sync while the Lab and chat are refused. */}
+          <p className="server-status__hint">
+            Needed for the assistant and the Model Lab when the server is on
+            another machine — it must match that server's PENUMBRA_AGENT_TOKEN.
+            Sync works without it, so the dot can be green while those are still
+            refused.
+          </p>
         </div>
       )}
     </div>

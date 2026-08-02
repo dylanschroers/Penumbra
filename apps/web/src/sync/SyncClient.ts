@@ -4,42 +4,17 @@
 // on startup, on an interval, when the network returns, and (debounced) right
 // after a local edit. See docs/SYNC.md.
 
-import {
-  migrateStorageKey,
-  normalizeBaseUrl,
-  type PullTasksResult,
-  STORAGE_NAMESPACE,
-} from "@penumbra/shared";
+import type { PullTasksResult } from "@penumbra/shared";
 import { getDb } from "../db/client";
+import { getServerUrl, setServerUrlValue } from "../serverAddress";
 
 // The server base URL is runtime-settable (see setServerUrl) so the user can
-// point the app at a server by IP from the UI; the choice is persisted and falls
-// back to VITE_SERVER_URL / localhost. Normalized because a scheme-less value
-// (e.g. "192.168.1.50:3000") would otherwise turn every request into a *relative*
-// path: the dev server answers it with its SPA fallback, so sync gets 200 OK full
-// of HTML and reports itself "disconnected" rather than misconfigured.
-const SERVER_URL_KEY = `${STORAGE_NAMESPACE}.sync.server-url.v1`;
-const LEGACY_SERVER_URL_KEY = "penumbra.serverUrl";
-const DEFAULT_SERVER_URL: string = normalizeBaseUrl(
-  import.meta.env.VITE_SERVER_URL ?? "http://localhost:3000",
-);
+// point the app at a server by IP from the UI. It lives in ../serverAddress
+// because sync is no longer the only thing that needs it — holding a private
+// copy here is what let the status pill report on one server while the Lab and
+// Tier-1 chat talked to another.
 
-function loadServerUrl(): string {
-  migrateStorageKey(LEGACY_SERVER_URL_KEY, SERVER_URL_KEY);
-  try {
-    const saved = localStorage.getItem(SERVER_URL_KEY);
-    return saved ? normalizeBaseUrl(saved) : DEFAULT_SERVER_URL;
-  } catch {
-    return DEFAULT_SERVER_URL;
-  }
-}
-
-let serverUrl: string = loadServerUrl();
-
-/** The server this client currently talks to. */
-export function getServerUrl(): string {
-  return serverUrl;
-}
+export { getServerUrl } from "../serverAddress";
 
 const INTERVAL_MS = 15_000;
 const DEBOUNCE_MS = 800;
@@ -81,7 +56,7 @@ async function pushOnce(): Promise<void> {
   const db = getDb();
   const { seqs, rows } = await db.collectOutbox();
   if (rows.length === 0) return;
-  const res = await fetch(`${serverUrl}/sync/tasks`, {
+  const res = await fetch(`${getServerUrl()}/sync/tasks`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ rows }),
@@ -96,7 +71,7 @@ async function pushOnce(): Promise<void> {
 async function pullOnce(): Promise<{ changed: boolean; serverId: string }> {
   const db = getDb();
   const cursor = await db.getCursor();
-  const res = await fetch(`${serverUrl}/sync/tasks?since=${cursor}`);
+  const res = await fetch(`${getServerUrl()}/sync/tasks?since=${cursor}`);
   if (!res.ok) throw new Error(`pull failed: ${res.status}`);
   const { rows, serverId } = (await res.json()) as PullTasksResult;
   const changed = rows.length > 0 && (await db.applyServerRows(rows)) > 0;
@@ -165,12 +140,9 @@ export async function flushSync(): Promise<void> {
  *  status to "pending", then run a fresh sync round whose success/failure updates
  *  the status (and the UI listening on SYNC_STATUS_EVENT). */
 export async function setServerUrl(url: string): Promise<void> {
-  serverUrl = normalizeBaseUrl(url);
-  try {
-    localStorage.setItem(SERVER_URL_KEY, serverUrl);
-  } catch {
-    // Non-fatal: the choice just won't persist across reloads.
-  }
+  // Moves the address for the whole app, not just sync — the Lab, the compute
+  // panel, and Tier-1 chat all read the same value on their next request.
+  setServerUrlValue(url);
   setStatus("pending");
   await flushSync();
 }

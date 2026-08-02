@@ -1,21 +1,29 @@
 import { join } from "node:path";
 import {
   benchmarkRequest,
-  colabProviderConfig,
   exportRequest,
   findSuite,
   finetuneRequest,
   type LabJob,
   looksLocalPath,
   SUITES,
-  studioCredentialsInput,
 } from "@penumbra/shared";
 import type { FastifyInstance } from "fastify";
+import type {
+  TargetCredentials,
+  TargetId,
+  TargetStore,
+} from "../compute/targets";
 import { requireAuth } from "../http/auth";
+import { openSseStream } from "../http/sse";
 import { lmEvalAvailable, runBenchmark } from "./benchmark";
-import type { CredentialStore } from "./credentials";
 import type { LabStore } from "./jobs";
-import { StudioClient, type StudioRun, TrainingBusyError } from "./studio";
+import {
+  readInventory,
+  StudioClient,
+  type StudioRun,
+  TrainingBusyError,
+} from "./studio";
 import {
   computeNeed,
   dirFileSizes,
@@ -49,46 +57,38 @@ const EXPORT_TIMEOUT_MS = 60 * 60 * 1000;
 
 export interface LabRouteOptions {
   store: LabStore;
-  studio?: StudioClient;
-  /** Runtime address + bearer for the local Studio. Given one, the client above
-   *  is rebuilt whenever they change, and `/lab/provider/local` can set them.
-   *  Omitted in tests, which inject a fake Studio directly. */
-  credentials?: CredentialStore;
-  /** Where benchmarked models are served from — Studio, by default. */
+  /** Where compute lives and which target each role uses. Addresses and keys
+   *  are read at the moment they are needed, so a rotated key or a retargeted
+   *  role takes effect on the next request with nothing to invalidate. */
+  targets: TargetStore;
+  /** Builds a Studio client for a target. Injectable so tests can supply fakes
+   *  without standing up a live Studio or tunnel. */
+  makeClient?: (id: TargetId, creds: TargetCredentials) => StudioClient;
+  /** Overrides where benchmarked models are served from. Unset means the target
+   *  assigned to the benchmark role. */
   inferenceURL?: string;
-  apiKey?: string;
   token?: string;
-  /** Builds the Colab fallback trainer from the config a user submits.
-   *  Injectable so tests can supply a fake without standing up a live tunnel. */
-  makeColab?: (config: { baseURL: string; apiKey?: string }) => StudioClient;
 }
 
 export function registerLabRoutes(
   app: FastifyInstance,
   {
     store,
-    studio: initialStudio = new StudioClient(),
-    credentials,
+    targets,
+    makeClient = (_id, creds) => new StudioClient(creds),
     inferenceURL,
-    apiKey = process.env.UNSLOTH_API_KEY,
     token = process.env.PENUMBRA_AGENT_TOKEN,
-    makeColab = (config) => new StudioClient(config),
   }: LabRouteOptions,
 ): void {
   const preHandler = requireAuth(token);
 
-  // Rebuilt in place when the credentials change, so a rotated key takes effect
-  // on the next request instead of the next restart.
-  let studio = initialStudio;
-  credentials?.onChange((next) => {
-    studio = new StudioClient(next);
-  });
-
-  // The optional Colab fallback: a second Studio, reached through a tunnel the
-  // user configures at runtime. Held in memory only — the bearer never touches
-  // disk and must be re-entered after a restart, the same posture the local
-  // Studio key keeps. `null` until configured.
-  let colab: StudioClient | null = null;
+  /** The Studio for a target, or null when it has no address yet. Built per
+   *  call rather than cached: a client is a URL and a header map, so there is
+   *  nothing to keep alive — and nothing that can go stale against the store. */
+  function clientFor(id: TargetId): StudioClient | null {
+    if (!targets.list().find((t) => t.id === id)?.configured) return null;
+    return makeClient(id, targets.credentials(id));
+  }
 
   /** Choose the Studio to train on. "auto" prefers local and falls back to a
    *  reachable Colab; an explicit provider is honored as asked. Returns the
@@ -99,7 +99,21 @@ export function registerLabRoutes(
     | { ok: true; client: StudioClient; via: "local" | "colab" }
     | { ok: false; error: string; message: string }
   > {
-    if (provider === "local") return { ok: true, client: studio, via: "local" };
+    const local = clientFor("local");
+    const colab = clientFor("colab");
+
+    if (provider === "local") {
+      // Local always has an address (an environment default at worst), so this
+      // branch cannot be unconfigured — but the type says it can.
+      if (!local) {
+        return {
+          ok: false,
+          error: "no_trainer",
+          message: "the local Studio has no address configured",
+        };
+      }
+      return { ok: true, client: local, via: "local" };
+    }
     if (provider === "colab") {
       if (!colab) {
         return {
@@ -111,8 +125,8 @@ export function registerLabRoutes(
       return { ok: true, client: colab, via: "colab" };
     }
     // auto: local first, then a reachable Colab.
-    if (await studio.reachable()) {
-      return { ok: true, client: studio, via: "local" };
+    if (local && (await local.reachable())) {
+      return { ok: true, client: local, via: "local" };
     }
     if (colab && (await colab.reachable())) {
       return { ok: true, client: colab, via: "colab" };
@@ -125,13 +139,25 @@ export function registerLabRoutes(
     };
   }
 
-  /** Run work in the background, keeping the job record current. The job row
-   *  is the source of truth: the client may be gone, and must still be able to
-   *  read what happened. */
+  /**
+   * Controllers for jobs that can still be stopped, keyed by job id.
+   *
+   * In memory rather than in the job row: a controller belongs to a running
+   * process in *this* server, so one that outlived a restart would name work
+   * nobody can reach. A job left running by a restart is already handled as a
+   * job whose progress simply stops.
+   */
+  const inFlight = new Map<string, AbortController>();
+
+  /** Run work in the background, keeping the job record current. The job row is
+   *  the source of truth: the client may be gone, and must still be able to read
+   *  what happened. A controller, when given, makes the job stoppable. */
   const runJob = (
     job: LabJob,
     work: (report: (patch: Partial<LabJob>) => void) => Promise<void>,
+    controller?: AbortController,
   ): void => {
+    if (controller) inFlight.set(job.id, controller);
     store.updateJob(job.id, { state: "running" });
     void work((patch) => store.updateJob(job.id, patch))
       .then(() => {
@@ -140,78 +166,77 @@ export function registerLabRoutes(
           store.updateJob(job.id, { state: "done", progress: 1 });
         }
       })
-      .catch((err) => store.failJob(job.id, err));
+      .catch((err) => {
+        // The work rejects either way, so the signal is what tells a deliberate
+        // stop from a break. Recorded as cancelled, with no scores written: a
+        // partial run is not a result, and half a suite recorded as a whole one
+        // is exactly the mislabeled row the rest of this file guards against.
+        if (controller?.signal.aborted) {
+          store.updateJob(job.id, {
+            state: "cancelled",
+            detail: "cancelled before it finished",
+          });
+          return;
+        }
+        store.failJob(job.id, err);
+      })
+      .finally(() => inFlight.delete(job.id));
   };
 
-  app.get("/lab/status", { preHandler }, async () => {
-    // Probe both providers in parallel; a missing Colab is simply "stopped".
-    const [studioState, lmEval, colabState] = await Promise.all([
-      studio.probe(),
-      lmEvalAvailable(),
-      colab ? colab.probe() : Promise.resolve("stopped" as const),
-    ]);
-    const creds = credentials?.current();
-    return {
-      // Tri-state: "unauthorized" (up, bad/missing key) is not "stopped".
-      studio: studioState,
-      lmEval: lmEval ? "installed" : "missing",
-      suites: SUITES,
-      // Enough to see what the local Studio is pointed at and whether a key is
-      // in play, without ever returning the key itself.
-      local: {
-        baseURL: studio.baseURL,
-        source: creds?.source ?? "env",
-        hasKey: creds ? creds.apiKey !== undefined : Boolean(apiKey),
-      },
-      // The URL is not secret and helps the user confirm what they pointed at;
-      // the bearer is never returned.
-      colab: {
-        configured: colab !== null,
-        baseURL: colab?.baseURL ?? null,
-        studio: colabState,
-      },
-    };
-  });
+  /**
+   * Stop a running job.
+   *
+   * Only the work that holds a controller can be stopped, which today is a
+   * benchmark: it owns its subprocess (or its own request loop) and killing it
+   * leaves nothing behind. Training is not cancellable here on purpose — the
+   * run belongs to Studio, so stopping it means telling Studio, and abandoning
+   * this side would leave a job row saying "cancelled" over a GPU still
+   * training.
+   */
+  app.post<{ Params: { id: string } }>(
+    "/lab/jobs/:id/cancel",
+    { preHandler },
+    async (req, reply) => {
+      const job = store.getJob(req.params.id);
+      if (!job) return reply.code(404).send({ error: "not_found" });
+      if (job.state !== "running" && job.state !== "queued") {
+        // Already finished: nothing to stop, and saying so beats reporting a
+        // success that did nothing.
+        return reply
+          .code(409)
+          .send({ error: "not_running", message: `job is ${job.state}` });
+      }
+      const controller = inFlight.get(job.id);
+      if (!controller) {
+        // Training holds no controller by design. Anything else claiming to run
+        // without one is an orphan whose process is gone — a restart mid-run,
+        // caught here rather than left to sit as a permanently "running" row
+        // that blocks the next run and refuses to be stopped.
+        if (job.kind === "benchmark") {
+          store.updateJob(job.id, {
+            state: "failed",
+            error: "Interrupted: the server restarted while this was running.",
+          });
+          return { ok: true, reconciled: true };
+        }
+        return reply.code(409).send({
+          error: "not_cancellable",
+          message: `a ${job.kind} job cannot be stopped from here`,
+        });
+      }
+      controller.abort();
+      // 202: the state flips when the work unwinds, not now.
+      return reply.code(202).send({ ok: true });
+    },
+  );
 
-  // Point the local Studio somewhere else, or hand it a rotated key. Unlike the
-  // Colab fallback this *is* persisted: it replaces editing .env, and a setting
-  // that vanished on restart would replace it with something worse. The value
-  // is written, never read back.
-  app.post("/lab/provider/local", { preHandler }, async (req, reply) => {
-    if (!credentials) {
-      return reply.code(409).send({ error: "settings_unavailable" });
-    }
-    const parsed = studioCredentialsInput.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
-    if (parsed.data.baseURL === undefined && parsed.data.apiKey === undefined) {
-      return reply.code(400).send({ error: "bad_request" });
-    }
-    const next = credentials.set(parsed.data);
-    return { ok: true, baseURL: next.baseURL, source: next.source };
-  });
-
-  // Forget the stored pair and go back to whatever the environment says.
-  app.delete("/lab/provider/local", { preHandler }, async (_req, reply) => {
-    if (!credentials) {
-      return reply.code(409).send({ error: "settings_unavailable" });
-    }
-    const next = credentials.clear();
-    return { ok: true, baseURL: next.baseURL, source: next.source };
-  });
-
-  // Configure (or replace) the Colab fallback. The key arrives once here and is
-  // held only in memory — see the `colab` declaration above.
-  app.post("/lab/provider/colab", { preHandler }, async (req, reply) => {
-    const parsed = colabProviderConfig.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
-    colab = makeColab(parsed.data);
-    return { ok: true, baseURL: colab.baseURL };
-  });
-
-  app.delete("/lab/provider/colab", { preHandler }, async () => {
-    colab = null;
-    return { ok: true };
-  });
+  // What the Lab needs that isn't compute: whether the general suite can run,
+  // and what suites exist. Target addresses, keys, and readiness moved to
+  // /compute/targets — chat needs them too, and they were never Lab-specific.
+  app.get("/lab/status", { preHandler }, async () => ({
+    lmEval: (await lmEvalAvailable()) ? "installed" : "missing",
+    suites: SUITES,
+  }));
 
   // --- Upload: bring a client-local model or dataset onto this host ---------
   //
@@ -298,6 +323,31 @@ export function registerLabRoutes(
   app.get("/lab/runs", { preHandler }, async () => store.listRuns());
   app.get("/lab/scores", { preHandler }, async () => store.listScores());
 
+  /**
+   * What the benchmark target can serve, for the picker.
+   *
+   * Read from the target a run would actually go to, not from "local": with
+   * benchmarking assigned to Colab, offering this host's models would name
+   * models that machine has never seen. An unreachable target answers with an
+   * empty list rather than an error — the form stays usable, and the pill
+   * already reports why nothing is there.
+   *
+   * `loaded` is the point of the endpoint as much as the list is. Studio serves
+   * whatever is resident regardless of the id sent, so the entry marked loaded
+   * is the one a benchmark would really measure — and it is offered even when
+   * the inventory does not list it, since otherwise the form hides the only
+   * model this target can score.
+   */
+  app.get("/lab/models", { preHandler }, async () => {
+    const id = targets.effective("benchmark");
+    const client = clientFor(id);
+    if (!client) return { target: id, models: [], inventoryError: null };
+
+    // Same read the compute panel's list goes through, so the two views of one
+    // inventory cannot disagree about a model's name or which is resident.
+    return { target: id, ...(await readInventory(client)) };
+  });
+
   app.get<{ Params: { id: string } }>(
     "/lab/jobs/:id",
     { preHandler },
@@ -316,11 +366,7 @@ export function registerLabRoutes(
       const job = store.getJob(req.params.id);
       if (!job) return reply.code(404).send({ error: "not_found" });
 
-      reply.raw.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
+      openSseStream(reply);
       let open = true;
       req.raw.on("close", () => {
         open = false;
@@ -512,7 +558,7 @@ export function registerLabRoutes(
     // the local Studio just fails on a path it cannot see. A Colab session is
     // ephemeral, so it may well be gone; say that plainly here rather than
     // failing deep inside a job with a network error.
-    const exporter = run.provider === "colab" ? colab : studio;
+    const exporter = clientFor(run.provider);
     if (!exporter) {
       return reply.code(409).send({
         error: "trainer_gone",
@@ -635,20 +681,61 @@ export function registerLabRoutes(
       });
     }
 
-    const job = store.createJob("benchmark");
-    runJob(job, async (report) => {
-      const result = await runBenchmark({
-        model: parsed.data.model,
-        suite,
-        samplesPerTask: parsed.data.samplesPerTask,
-        // Resolved per run, not at registration: the Studio being benchmarked
-        // is whichever one the current credentials point at.
-        baseURL: inferenceURL ?? studio.baseURL,
-        apiKey: credentials?.current().apiKey ?? apiKey,
-        onProgress: (line) => report({ detail: line.slice(0, 200) }),
+    // Resolved before the job exists, so a run with nowhere to go fails fast
+    // with a clear code instead of leaving a dead job row.
+    const targetId = targets.effective("benchmark");
+    const via = targets.credentials(targetId);
+
+    // What is *actually* loaded there. Studio ignores the `model` field of a
+    // request and serves whatever it has resident, so a benchmark naming one
+    // model while another is loaded produces a complete, plausible, wrong score
+    // with no error anywhere. Asking first is the only way to know.
+    const served = await clientFor(targetId)
+      ?.loadedModel()
+      .catch(() => null);
+    if (!served) {
+      return reply.code(409).send({
+        error: "no_model_loaded",
+        message: `${targetId} has no model loaded — a benchmark would score whatever answered, or nothing`,
       });
-      store.recordScores(result);
-    });
+    }
+
+    const job = store.createJob("benchmark");
+    // A benchmark is the one job worth stopping mid-flight: the wrong suite or
+    // the wrong sample count can otherwise tie up the GPU for an hour with a
+    // result nobody wants.
+    const controller = new AbortController();
+    runJob(
+      job,
+      async (report) => {
+        report({
+          detail:
+            served === parsed.data.model
+              ? `benchmarking ${served} on ${targetId}`
+              : `benchmarking ${served} on ${targetId} (requested ${parsed.data.model})`,
+        });
+        // The scores describe `served`, wherever it ran. Carried into the record
+        // rather than only into a job line, because the comparison these feed is
+        // the whole point of keeping them.
+        const result = await runBenchmark({
+          model: parsed.data.model,
+          servedModel: served,
+          target: targetId,
+          suite,
+          samplesPerTask: parsed.data.samplesPerTask,
+          baseURL: inferenceURL ?? via.baseURL,
+          apiKey: via.apiKey,
+          signal: controller.signal,
+          // Relayed as given. The suite knows where it is; this route only
+          // writes it down. `progress` is null on a line that says nothing
+          // about position, and the store's COALESCE keeps the last real value
+          // rather than blanking a bar that was right.
+          onProgress: (update) => report(update),
+        });
+        store.recordScores(result);
+      },
+      controller,
+    );
 
     return reply.code(202).send({ jobId: job.id });
   });

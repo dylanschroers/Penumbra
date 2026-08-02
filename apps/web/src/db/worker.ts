@@ -45,7 +45,7 @@ async function init(): Promise<(sql: string, bind?: unknown[]) => unknown[][]> {
     sqliteDb = new poolUtil.OpfsSAHPoolDb(`/${LOCAL_DB_FILE}`);
   } catch (err) {
     console.error(
-      "[penumbra] OPFS is unavailable — the local store cannot persist here:",
+      "[penumbra] OPFS is unavailable; the local store cannot persist here:",
       err,
     );
     throw err;

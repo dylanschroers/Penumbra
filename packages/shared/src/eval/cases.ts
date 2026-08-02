@@ -63,9 +63,26 @@ export const evalCases: EvalCase[] = [
   { text: "Delete the buy milk task", tool: "delete_task" },
   { text: "Remove 'file taxes' from my list", tool: "delete_task" },
   { text: "Get rid of the draft proposal task", tool: "delete_task" },
+  // get_weather. "What's the weather like today?" was a *negative* case until
+  // the tool existed, which is the shape of the risk here: the eval set is only
+  // a measurement of the tool set it was written against.
+  { text: "What's the weather like in Vancouver?", tool: "get_weather" },
+  { text: "Is it raining in London right now?", tool: "get_weather" },
+  { text: "How cold is it in Toronto?", tool: "get_weather" },
+  {
+    text: "Give me the current conditions for Paris, France",
+    tool: "get_weather",
+  },
+  { text: "What's the temperature in Tokyo?", tool: "get_weather" },
   // negative — should NOT call a tool
-  { text: "What's the weather like today?", tool: null },
   { text: "How do I stay more organized?", tool: null },
+  // Weather-shaped but not a lookup: the forecast is not something this tool
+  // answers, and reaching for it anyway is the failure mode a new tool causes.
+  { text: "Why is the sky blue?", tool: null },
+  { text: "What causes a thunderstorm?", tool: null },
+  // The word "weather" next to the task vocabulary, which is where a small
+  // model most easily crosses the two.
+  { text: "Add a task to check the weather forecast", tool: "create_task" },
   { text: "What can you help me with?", tool: null },
   { text: "Tell me a fun fact.", tool: null },
   { text: "What's 15% of 240?", tool: null },

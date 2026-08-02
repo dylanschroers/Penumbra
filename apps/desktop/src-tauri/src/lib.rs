@@ -1,4 +1,5 @@
 mod db;
+mod dropper;
 mod fs;
 
 use std::io::{BufRead, BufReader};
@@ -52,6 +53,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             db::db_exec,
+            dropper::dropper_capabilities,
+            dropper::dropper_color_at_cursor,
+            dropper::dropper_pick,
             fs::fs_list,
             fs::fs_move,
             fs::fs_read_head,

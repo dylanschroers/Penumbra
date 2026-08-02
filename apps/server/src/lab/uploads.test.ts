@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   computeNeed,
@@ -12,14 +12,17 @@ import {
 } from "./uploads";
 
 describe("resolveDest — path safety", () => {
-  const root = "/srv/uploads";
+  // resolveDest builds its answer with node:path, so the expectations have to
+  // as well: a bare "/srv/uploads" is drive-relative on Windows, where resolve
+  // prepends the cwd's drive and joins with backslashes.
+  const root = resolve("/srv/uploads");
 
   it("resolves a normal relative path under the kind dir", () => {
     expect(resolveDest(root, "datasets", "train.jsonl")).toBe(
-      "/srv/uploads/datasets/train.jsonl",
+      join(root, "datasets", "train.jsonl"),
     );
     expect(resolveDest(root, "models", "Qwen/model.safetensors")).toBe(
-      "/srv/uploads/models/Qwen/model.safetensors",
+      join(root, "models", "Qwen", "model.safetensors"),
     );
   });
 

@@ -29,7 +29,7 @@ function renderDock(props: { dragActive?: boolean; openIds?: string[] } = {}) {
       <ModuleDock
         openIds={props.openIds ?? []}
         addableIds={[]}
-        focusedId={null}
+        activeIds={[]}
         hostFor={() => host}
         onExpand={() => {}}
         onAdd={() => {}}

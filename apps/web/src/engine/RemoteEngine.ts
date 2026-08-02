@@ -5,6 +5,7 @@ import type {
   Engine,
 } from "@penumbra/shared";
 import { normalizeBaseUrl, readSseFrames } from "@penumbra/shared";
+import { authHeaders, getServerUrl } from "../serverAddress";
 import { flushSync, requestSync } from "../sync/SyncClient";
 
 // Tier 1: the model runs on a Penumbra server, and so do its tools. This engine is
@@ -13,23 +14,39 @@ import { flushSync, requestSync } from "../sync/SyncClient";
 // is the asymmetry the Engine interface was reshaped for: runAgent takes only
 // messages, so there is nothing here to pass and ignore.
 
-const DEFAULT_URL = import.meta.env.VITE_SERVER_URL ?? "http://127.0.0.1:3000";
-
 export interface RemoteEngineConfig {
+  /** Overrides the app's server address. Tests pass one; the app does not, so
+   *  that chat follows the address the status pill edits. */
   baseURL?: string;
-  /** Matches the server's PENUMBRA_AGENT_TOKEN; unset works for a loopback server. */
+  /** Matches the server's PENUMBRA_AGENT_TOKEN; unset works for a loopback
+   *  server. Overrides the stored bearer, on the same terms as `baseURL`. */
   token?: string;
 }
 
 export class RemoteEngine implements Engine {
-  private readonly baseURL: string;
-  private readonly headers: Record<string, string>;
+  private readonly baseURLOverride?: string;
+  private readonly tokenOverride?: string;
 
   constructor(config: RemoteEngineConfig = {}) {
-    this.baseURL = normalizeBaseUrl(config.baseURL ?? DEFAULT_URL);
-    this.headers = config.token
-      ? { Authorization: `Bearer ${config.token}` }
-      : {};
+    this.baseURLOverride = config.baseURL
+      ? normalizeBaseUrl(config.baseURL)
+      : undefined;
+    this.tokenOverride = config.token;
+  }
+
+  // Both read per request rather than captured in the constructor. This engine
+  // is built once at module load (../engine/index.ts), before the user has
+  // touched anything, so a field assigned there would pin chat to whatever the
+  // app started with — the exact trap ../serverAddress warns about, and the
+  // reason this file used to hold a build-time URL of its own.
+  private get baseURL(): string {
+    return this.baseURLOverride ?? getServerUrl();
+  }
+
+  private get headers(): Record<string, string> {
+    return this.tokenOverride
+      ? { Authorization: `Bearer ${this.tokenOverride}` }
+      : authHeaders();
   }
 
   async getStatus(): Promise<AgentStatus> {

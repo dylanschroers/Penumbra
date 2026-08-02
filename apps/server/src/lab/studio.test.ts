@@ -19,7 +19,13 @@ interface Recorded {
 }
 
 function startFakeStudio(
-  handler: (req: Recorded) => { status?: number; body?: unknown; sse?: string },
+  handler: (req: Recorded) => {
+    status?: number;
+    body?: unknown;
+    sse?: string;
+    /** A non-JSON body, for standing in as whatever is in front of Studio. */
+    html?: string;
+  },
 ) {
   const recorded: Recorded[] = [];
   const server: Server = createServer((req, res) => {
@@ -36,6 +42,11 @@ function startFakeStudio(
       };
       recorded.push(entry);
       const reply = handler(entry);
+      if (reply.html !== undefined) {
+        res.writeHead(reply.status ?? 200, { "Content-Type": "text/html" });
+        res.end(reply.html);
+        return;
+      }
       if (reply.sse !== undefined) {
         res.writeHead(reply.status ?? 200, {
           "Content-Type": "text/event-stream",
@@ -219,10 +230,37 @@ describe("export", () => {
 });
 
 describe("reachable / probe", () => {
-  it("is ready when Studio answers", async () => {
+  it("is ready when Studio answers, with nothing serving yet", async () => {
     const c = await client(() => ({ body: { data: [] } }));
     expect(await c.reachable()).toBe(true);
-    expect(await c.probe()).toBe("ready");
+    expect(await c.probe()).toEqual({ state: "ready", served: null });
+  });
+
+  // The model rides along on the readiness probe, which is what lets a panel
+  // that polls for reachability show a model appearing on another machine
+  // without a second call. Read through the shared rule, so a model merely
+  // downloaded is not reported as the one answering.
+  it("reports the resident model from the same listing", async () => {
+    const c = await client(() => ({
+      body: {
+        data: [
+          { id: "on-disk", loaded: false },
+          { id: "unsloth/gemma-4-12b-it", loaded: true },
+        ],
+      },
+    }));
+    expect(await c.probe()).toEqual({
+      state: "ready",
+      served: "unsloth/gemma-4-12b-it",
+    });
+  });
+
+  // Newer Studio builds list only what is loaded and carry no flag at all.
+  it("reports the resident model when no entry carries a flag", async () => {
+    const c = await client(() => ({
+      body: { data: [{ id: "unsloth/gemma-4-12b-it" }] },
+    }));
+    expect((await c.probe()).served).toBe("unsloth/gemma-4-12b-it");
   });
 
   it("reports unauthorized on a 401 rather than stopped", async () => {
@@ -231,13 +269,32 @@ describe("reachable / probe", () => {
       status: 401,
       body: { error: { message: "Not authenticated" } },
     }));
-    expect(await c.probe()).toBe("unauthorized");
+    expect(await c.probe()).toEqual({ state: "unauthorized", served: null });
     expect(await c.reachable()).toBe(false);
   });
 
   it("is stopped when nothing is listening", async () => {
     const c = new StudioClient({ baseURL: "http://127.0.0.1:1", env: {} });
-    expect(await c.probe()).toBe("stopped");
+    expect((await c.probe()).state).toBe("stopped");
     expect(await c.reachable()).toBe(false);
+  });
+
+  // The failure that used to read as "ready, nothing loaded". A proxy in front
+  // of Studio answers for itself — Colab's kernel proxy redirects a server to a
+  // Google sign-in page — and a 200 of HTML then broke every later call while
+  // the panel said the target was fine.
+  it("is not_studio when a 200 comes back that is not a model listing", async () => {
+    const c = await client(() => ({
+      html: "<!doctype html><title>Sign in - Google Accounts</title>",
+    }));
+    expect(await c.probe()).toEqual({ state: "not_studio", served: null });
+    expect(await c.reachable()).toBe(false);
+  });
+
+  // JSON, and still not Studio: a proxy that answers every path with its own
+  // status document is a 200 of valid JSON with no `data` in it.
+  it("is not_studio when the body is JSON without a listing", async () => {
+    const c = await client(() => ({ body: { status: "ok" } }));
+    expect((await c.probe()).state).toBe("not_studio");
   });
 });

@@ -111,7 +111,7 @@ spine and everything else is an opt-in **module**.
   live in React state and are deliberately not persisted yet — the shell is
   still settling. What *does* persist to `localStorage` is narrower: the
   imported file-rail roots, the Model Lab's chosen folders, the selected chat
-  provider, and the server address.
+  provider, and the server address and access token.
 - **File rail → native filesystem (desktop only).** `fs/fsClient.ts` wraps four
   Tauri commands (`src-tauri/src/fs.rs`): list a directory, read a bounded
   head, read a chunk, and move an entry. The folder picker seeds a root for the
@@ -238,9 +238,15 @@ Current posture, honestly stated:
 
 - All owned data lives on your devices; the sync server sees only what it
   reconciles, and you run it yourself.
-- Tier-0 inference is fully local — prompts never leave the machine. Choosing
+- Tier-0 *inference* is fully local — prompts never leave the machine. Choosing
   the **Server** provider sends the conversation to your own server instead;
-  no third party is involved either way.
+  no third party sees the conversation either way.
+- **One tool reaches a third party.** `get_weather` sends the place name the
+  model extracted — not the conversation — to Open-Meteo, on both tiers. It is
+  the only outbound call any tool makes, it carries no credential because
+  Open-Meteo needs none, and it is skipped entirely unless the model calls the
+  tool. A machine with no network still answers; the tool reports that it could
+  not reach the service.
 - **Sync v0 has no auth** and reflects any CORS origin: run it on localhost or
   a trusted LAN only (SYNC.md → v0 limitations).
 - **The actuator routes do have a gate.** `/agent/*` and `/lab/*` run models
@@ -248,10 +254,16 @@ Current posture, honestly stated:
   behind `requireAuth` (`apps/server/src/http/auth.ts`): a bearer token when
   `PENUMBRA_AGENT_TOKEN` is set, loopback-only when it is not. There is
   deliberately no open mode — an unconfigured server cannot expose an actuator
-  to the network by accident.
-- **Studio's key never leaves the server.** It is an unscoped admin credential;
-  no client-side code holds a Studio URL or key, and the Colab fallback's bearer
-  is held in server memory only, never written to disk or returned to a client.
+  to the network by accident. The client keeps its copy of that bearer in
+  `localStorage` beside the server address (`web/src/serverAddress.ts`), set
+  from the status pill; `VITE_AGENT_TOKEN` is only the initial default. Neither
+  place is a secret from the user's own browser — the build-time value was
+  inlined into the shipped JavaScript — but per-device storage at least keeps it
+  out of every copy of the build.
+- **Studio's key never leaves the server.** It is unscoped across that Studio's
+  own surfaces — training, export, and inference alike — so no client-side code
+  holds a Studio URL or key. Both targets' bearers, the Colab fallback's
+  included, are stored server-side and never returned to a client.
 - **The desktop filesystem commands are unscoped.** `fs_list`, `fs_read_head`,
   `fs_read_chunk`, and `fs_move` accept any absolute path the user's account can
   reach; the folder picker seeds the UI, it does not confine the commands. Only

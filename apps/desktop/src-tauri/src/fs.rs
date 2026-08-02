@@ -178,7 +178,8 @@ pub fn fs_read_chunk(
         .canonicalize()
         .map_err(|e| e.to_string())?;
     let mut file = std::fs::File::open(&file_path).map_err(|e| e.to_string())?;
-    file.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|e| e.to_string())?;
 
     let mut buf = vec![0u8; length];
     let mut read = 0usize;

@@ -4,16 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AGENT_SYSTEM,
+  agentTools,
   type BenchmarkResult,
   type CaseOutcome,
   evalCases,
   type SuiteDefinition,
   scoreCase,
   summarize,
+  type TargetId,
   type TaskScore,
-  taskTools,
   toToolSpec,
 } from "@penumbra/shared";
+import { caseProgress, type RunProgress, readOutputChunk } from "./progress";
 
 // Runs both benchmark families and reduces them to one BenchmarkResult, which
 // is what lets a single table hold both and a single view compare them
@@ -25,15 +27,31 @@ import {
 // Python, and no way to drift from the tool specs the app ships.
 
 export interface BenchmarkOptions {
+  /** The id sent on the wire. Studio ignores it and serves what it has loaded,
+   *  so it is what was *asked for*, not what answered. */
   model: string;
+  /** What the endpoint reports as loaded — the model the scores actually
+   *  describe. Recorded beside `model` so a mismatch is visible. */
+  servedModel: string | null;
+  /** Which compute target served it. Two targets can hold different weights
+   *  under one name, so a score is not comparable without it. */
+  target: TargetId;
   suite: SuiteDefinition;
   samplesPerTask: number;
   /** OpenAI-compatible endpoint the model is served from. */
   baseURL: string;
   apiKey?: string;
   signal?: AbortSignal;
-  /** Progress lines, for the job's SSE relay. */
-  onProgress?: (line: string) => void;
+  /**
+   * Where the run has got to, for the job record.
+   *
+   * Structured rather than a line of text: a job row can only draw a bar if
+   * something hands it a number, and the number is already in the output both
+   * suites produce. Interpreting it here keeps the route a relay — it writes
+   * what it is given and does not need to know what lm_eval's stdout looks
+   * like.
+   */
+  onProgress?: (update: RunProgress) => void;
 }
 
 export async function runBenchmark(
@@ -49,6 +67,8 @@ export async function runBenchmark(
     suite: opts.suite.id,
     suiteKind: opts.suite.kind,
     model: opts.model,
+    servedModel: opts.servedModel,
+    target: opts.target,
     samplesPerTask: opts.samplesPerTask,
     at: new Date().toISOString(),
     durationMs: Date.now() - started,
@@ -122,7 +142,7 @@ async function ask(
 }
 
 async function runPersonalSuite(opts: BenchmarkOptions): Promise<TaskScore[]> {
-  const tools = taskTools.map(toToolSpec);
+  const tools = agentTools.map(toToolSpec);
   // samplesPerTask caps the run so a smoke check stays quick; the full set is
   // small enough that the cap is usually the whole thing.
   const cases = evalCases.slice(0, opts.samplesPerTask);
@@ -131,7 +151,7 @@ async function runPersonalSuite(opts: BenchmarkOptions): Promise<TaskScore[]> {
   for (const [i, c] of cases.entries()) {
     opts.signal?.throwIfAborted();
     scored.push(scoreCase(c, await ask(c.text, opts, tools)));
-    opts.onProgress?.(`case ${i + 1}/${cases.length}: ${c.text}`);
+    opts.onProgress?.(caseProgress(i + 1, cases.length, c.text));
   }
 
   const s = summarize(scored);
@@ -218,6 +238,32 @@ export async function lmEvalAvailable(): Promise<boolean> {
   });
 }
 
+/**
+ * Environment for the lm_eval child.
+ *
+ * The UTF-8 pair is load-bearing on a Windows host. lm_eval finishes the run,
+ * writes results.json, and *then* prints a summary table containing "↑" — which
+ * cp1252, Python's default stdout encoding there, cannot encode. The process
+ * died with a UnicodeEncodeError and exited 1 after the evaluation had already
+ * succeeded, so every general-suite run failed at the last step with its scores
+ * sitting on disk unread.
+ *
+ * Fixed on the child rather than by accepting a non-zero exit whenever
+ * results.json happens to exist: that would swallow the failures worth seeing,
+ * and a run that dies partway through a task also leaves a file behind.
+ *
+ * Exported for the test — this is invisible on a POSIX CI box and would return
+ * unnoticed.
+ */
+export function lmEvalEnv(apiKey?: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    OPENAI_API_KEY: apiKey ?? "dummy",
+    PYTHONIOENCODING: "utf-8",
+    PYTHONUTF8: "1",
+  };
+}
+
 async function runGeneralSuite(opts: BenchmarkOptions): Promise<TaskScore[]> {
   const outDir = await mkdtemp(join(tmpdir(), "penumbra-lmeval-"));
   const args = [
@@ -238,21 +284,29 @@ async function runGeneralSuite(opts: BenchmarkOptions): Promise<TaskScore[]> {
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(LM_EVAL_BIN, args, {
-      env: { ...process.env, OPENAI_API_KEY: opts.apiKey ?? "dummy" },
+      env: lmEvalEnv(opts.apiKey),
     });
     // A client abort must kill the subprocess, or a cancelled benchmark keeps
     // burning GPU for hours.
     const onAbort = () => child.kill("SIGTERM");
     opts.signal?.addEventListener("abort", onAbort, { once: true });
 
+    // lm_eval writes its progress bars to stderr and its tables to stdout, and
+    // a chunk from either can be several frames or half of one — so both go
+    // through the same reader, which reports only what is worth showing.
+    const relay = (chunk: string) => {
+      const update = readOutputChunk(chunk);
+      if (update) opts.onProgress?.(update);
+    };
+
     let stderrTail = "";
-    child.stdout.on("data", (d: Buffer) =>
-      opts.onProgress?.(d.toString().trimEnd()),
-    );
+    child.stdout.on("data", (d: Buffer) => relay(d.toString()));
     child.stderr.on("data", (d: Buffer) => {
       const line = d.toString();
+      // Kept whole and unparsed: this is what a failed run's message is built
+      // from, and a bar frame trimmed for display would lose the traceback.
       stderrTail = `${stderrTail}${line}`.slice(-2000);
-      opts.onProgress?.(line.trimEnd());
+      relay(line);
     });
     child.on("error", (err) =>
       reject(new Error(`lm_eval failed to start: ${err.message}`)),
