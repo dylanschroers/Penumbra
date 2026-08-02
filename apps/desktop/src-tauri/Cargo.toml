@@ -37,6 +37,7 @@ windows = { version = "0.61", features = [
 # the app dies, so a crash or SIGKILL can't leave it orphaned on :8080
 # (src/lib.rs). Linux-only; other platforms rely on the RunEvent::Exit handler.
 [target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13.13", default-features = false, features = ["screenshot", "tokio"] }
 libc = "0.2"
 
 # Keep the debug `target/` dir smaller: emit line-tables only instead of full

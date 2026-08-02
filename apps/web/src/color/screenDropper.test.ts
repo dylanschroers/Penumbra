@@ -9,9 +9,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 //   2. The backend choice. Native must win wherever it exists, because the
 //      EyeDropper magnifier is the thing that made picking lag; falling back
 //      silently would look like the fix never landed.
+//   3. Picking and live sampling are separate capabilities. A backend that
+//      picks but cannot sample is the *expected* shape everywhere except
+//      Windows, so `liveSample` must never be inferred from `backend`.
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+
+/** What the Windows shell reports: it built the interaction, so it can do both. */
+const CAPABLE = { pick: true, liveSample: true };
+/** A portal-style backend: it owns the picker, so there is nothing to poll. */
+const PICK_ONLY = { pick: true, liveSample: false };
+/** A shell with no native backend at all — today's Linux and macOS builds. */
+const NO_NATIVE = { pick: false, liveSample: false };
 
 type OpenResult = { sRGBHex: string };
 
@@ -50,58 +60,105 @@ afterEach(() => {
   vi.resetModules();
 });
 
-describe("dropperBackend", () => {
-  it("prefers native when the desktop shell reports support", async () => {
+describe("dropperSupport", () => {
+  it("prefers native when the desktop shell reports it can pick", async () => {
     setTauri(true);
     stubEyeDropper(async () => ({ sRGBHex: "#000000" }));
-    invoke.mockResolvedValue(true);
+    invoke.mockResolvedValue(CAPABLE);
 
-    const { dropperBackend } = await freshImport();
+    const { dropperSupport } = await freshImport();
 
-    await expect(dropperBackend()).resolves.toBe("native");
-    expect(invoke).toHaveBeenCalledWith("dropper_supported");
+    await expect(dropperSupport()).resolves.toEqual({
+      backend: "native",
+      liveSample: true,
+    });
+    expect(invoke).toHaveBeenCalledWith("dropper_capabilities");
+  });
+
+  it("keeps a native backend that cannot sample live", async () => {
+    // The portal/NSColorSampler shape. Losing the readout must not cost the
+    // pick — falling back to EyeDropper here would trade the fast path for the
+    // laggy one to regain a readout EyeDropper does not have either.
+    setTauri(true);
+    stubEyeDropper(async () => ({ sRGBHex: "#000000" }));
+    invoke.mockResolvedValue(PICK_ONLY);
+
+    const { dropperSupport } = await freshImport();
+
+    await expect(dropperSupport()).resolves.toEqual({
+      backend: "native",
+      liveSample: false,
+    });
   });
 
   it("falls back to EyeDropper on a desktop build without native support", async () => {
     setTauri(true);
     stubEyeDropper(async () => ({ sRGBHex: "#000000" }));
-    invoke.mockResolvedValue(false); // e.g. a Linux desktop build
+    invoke.mockResolvedValue(NO_NATIVE); // today's Linux and macOS builds
 
-    const { dropperBackend } = await freshImport();
+    const { dropperSupport } = await freshImport();
 
-    await expect(dropperBackend()).resolves.toBe("eyedropper");
+    await expect(dropperSupport()).resolves.toEqual({
+      backend: "eyedropper",
+      liveSample: false,
+    });
   });
 
   it("falls back to EyeDropper when the shell lacks the command entirely", async () => {
+    // Covers a shell older than the dropper *and* one older than this
+    // capability split, which answered `dropper_supported` and nothing else.
     setTauri(true);
     stubEyeDropper(async () => ({ sRGBHex: "#000000" }));
     invoke.mockRejectedValue(new Error("unknown command"));
 
-    const { dropperBackend } = await freshImport();
+    const { dropperSupport } = await freshImport();
 
-    await expect(dropperBackend()).resolves.toBe("eyedropper");
+    await expect(dropperSupport()).resolves.toMatchObject({
+      backend: "eyedropper",
+    });
   });
 
   it("uses EyeDropper in a plain browser without probing the shell", async () => {
     stubEyeDropper(async () => ({ sRGBHex: "#000000" }));
 
-    const { dropperBackend } = await freshImport();
+    const { dropperSupport } = await freshImport();
 
-    await expect(dropperBackend()).resolves.toBe("eyedropper");
+    await expect(dropperSupport()).resolves.toMatchObject({
+      backend: "eyedropper",
+    });
     expect(invoke).not.toHaveBeenCalled();
   });
 
   it("reports none when neither backend exists", async () => {
-    const { dropperBackend } = await freshImport();
-    await expect(dropperBackend()).resolves.toBe("none");
+    const { dropperSupport } = await freshImport();
+    await expect(dropperSupport()).resolves.toEqual({
+      backend: "none",
+      liveSample: false,
+    });
+  });
+
+  it("never claims a live sample without a native backend", async () => {
+    // The invariant the split exists to protect: only the native path can ever
+    // answer colorAtCursor, so liveSample must be false everywhere else no
+    // matter what the shell said.
+    setTauri(true);
+    stubEyeDropper(async () => ({ sRGBHex: "#000000" }));
+    invoke.mockResolvedValue({ pick: false, liveSample: true });
+
+    const { dropperSupport } = await freshImport();
+
+    await expect(dropperSupport()).resolves.toEqual({
+      backend: "eyedropper",
+      liveSample: false,
+    });
   });
 
   it("probes only once and reuses the answer", async () => {
     setTauri(true);
-    invoke.mockResolvedValue(true);
+    invoke.mockResolvedValue(CAPABLE);
 
-    const { dropperBackend } = await freshImport();
-    await Promise.all([dropperBackend(), dropperBackend(), dropperBackend()]);
+    const { dropperSupport } = await freshImport();
+    await Promise.all([dropperSupport(), dropperSupport(), dropperSupport()]);
 
     expect(invoke).toHaveBeenCalledTimes(1);
   });
@@ -112,7 +169,7 @@ describe("pickScreenColor via the native backend", () => {
 
   it("returns the hex the shell picked", async () => {
     invoke.mockImplementation(async (cmd: string) =>
-      cmd === "dropper_supported" ? true : "#a1b2c3",
+      cmd === "dropper_capabilities" ? CAPABLE : "#a1b2c3",
     );
 
     const { pickScreenColor } = await freshImport();
@@ -123,7 +180,7 @@ describe("pickScreenColor via the native backend", () => {
 
   it("returns null when the shell reports a cancel", async () => {
     invoke.mockImplementation(async (cmd: string) =>
-      cmd === "dropper_supported" ? true : null,
+      cmd === "dropper_capabilities" ? CAPABLE : null,
     );
 
     const { pickScreenColor } = await freshImport();
@@ -137,7 +194,7 @@ describe("pickScreenColor via the native backend", () => {
     const open = vi.fn(async () => ({ sRGBHex: "#ffffff" }));
     stubEyeDropper(open);
     invoke.mockImplementation(async (cmd: string) => {
-      if (cmd === "dropper_supported") return true;
+      if (cmd === "dropper_capabilities") return CAPABLE;
       throw new Error("A screen pick is already in progress.");
     });
 
@@ -194,7 +251,7 @@ describe("colorAtCursor", () => {
   it("samples the pixel under the cursor on the native backend", async () => {
     setTauri(true);
     invoke.mockImplementation(async (cmd: string) =>
-      cmd === "dropper_supported" ? true : "#0f0f0f",
+      cmd === "dropper_capabilities" ? CAPABLE : "#0f0f0f",
     );
 
     const { colorAtCursor } = await freshImport();
@@ -210,5 +267,30 @@ describe("colorAtCursor", () => {
 
     await expect(colorAtCursor()).resolves.toBeNull();
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("returns null on a native backend that owns its own picker", async () => {
+    // The case the whole split exists for. Before it, a native backend implied
+    // a live sample, so a portal-style dropper would have had this polled at
+    // 60ms against a command that can only ever error.
+    setTauri(true);
+    invoke.mockResolvedValue(PICK_ONLY);
+
+    const { colorAtCursor } = await freshImport();
+
+    await expect(colorAtCursor()).resolves.toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith("dropper_color_at_cursor");
+  });
+
+  it("still picks on that backend, just without the readout", async () => {
+    setTauri(true);
+    invoke.mockImplementation(async (cmd: string) =>
+      cmd === "dropper_capabilities" ? PICK_ONLY : "#c0ffee",
+    );
+
+    const { pickScreenColor } = await freshImport();
+
+    await expect(pickScreenColor()).resolves.toBe("#c0ffee");
+    expect(invoke).toHaveBeenCalledWith("dropper_pick");
   });
 });

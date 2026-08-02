@@ -2,9 +2,9 @@
 //
 // Two backends, because neither covers everything:
 //
-//   native      The desktop shell's GDI dropper (apps/desktop/src-tauri/src/
-//               dropper.rs). Reads a single pixel per sample and swallows the
-//               pick click with a mouse hook. Windows only.
+//   native      The desktop shell's dropper (apps/desktop/src-tauri/src/
+//               dropper.rs). Today that is Windows' GDI path: one pixel per
+//               sample, with the pick click swallowed by a mouse hook.
 //   eyedropper  The browser EyeDropper API. Works in any Chromium (including
 //               the plain-web build), but drags a magnifier overlay that
 //               continuously captures the screen — noticeably laggy across
@@ -12,6 +12,14 @@
 //
 // Both sample the composited desktop, so either way this reads pixels from other
 // applications on any monitor, not just from our own window.
+//
+// Picking and *live sampling* are reported separately, because they are not the
+// same capability. EyeDropper draws its own magnifier and exposes nothing to
+// poll; the Linux and macOS native backends (the XDG portal, NSColorSampler)
+// will be the same way, since each runs the whole pick itself. Only the Windows
+// path, which had to build the interaction by hand, can also answer "what is
+// under the cursor right now". So a caller asks for the readout and is told no,
+// rather than inferring it from which backend won.
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -34,6 +42,20 @@ declare global {
 
 export type DropperBackend = "native" | "eyedropper" | "none";
 
+export interface DropperSupport {
+  /** Which backend a pick will go through; `none` means picking is unavailable. */
+  backend: DropperBackend;
+  /** Whether `colorAtCursor` can report anything during a pick. Never true
+   *  unless `backend` is `native`, but not implied by it. */
+  liveSample: boolean;
+}
+
+/** What the desktop shell reports (`dropper_capabilities` in dropper.rs). */
+interface NativeCapabilities {
+  pick: boolean;
+  liveSample: boolean;
+}
+
 // Injected into every Tauri v2 webview; absent in ordinary browsers. Mirrors the
 // probe in src/db/client.ts and src/fs/fsClient.ts.
 const isTauri =
@@ -42,23 +64,32 @@ const isTauri =
 const hasEyeDropper = () =>
   typeof window !== "undefined" && typeof window.EyeDropper === "function";
 
-async function detectBackend(): Promise<DropperBackend> {
+/** Whatever the webview itself offers, once the shell has declined or is absent. */
+const webBackend = (): DropperSupport =>
+  hasEyeDropper()
+    ? { backend: "eyedropper", liveSample: false }
+    : { backend: "none", liveSample: false };
+
+async function detectSupport(): Promise<DropperSupport> {
   if (isTauri) {
     try {
-      if (await invoke<boolean>("dropper_supported")) return "native";
+      const caps = await invoke<NativeCapabilities>("dropper_capabilities");
+      if (caps.pick) {
+        return { backend: "native", liveSample: caps.liveSample === true };
+      }
     } catch {
-      // An older shell without the command, or a non-Windows desktop build.
-      // Fall through to whatever the webview itself offers.
+      // A shell without the command — either older than the dropper, or older
+      // than this capability split. Either way, fall through to the webview.
     }
   }
-  return hasEyeDropper() ? "eyedropper" : "none";
+  return webBackend();
 }
 
-let cached: Promise<DropperBackend> | null = null;
+let cached: Promise<DropperSupport> | null = null;
 
-/** Which backend this build will use. Probed once, then reused. */
-export function dropperBackend(): Promise<DropperBackend> {
-  cached ??= detectBackend();
+/** What this build can do. Probed once, then reused. */
+export function dropperSupport(): Promise<DropperSupport> {
+  cached ??= detectSupport();
   return cached;
 }
 
@@ -93,7 +124,7 @@ async function openEyeDropper(signal?: AbortSignal): Promise<string | null> {
 export async function pickScreenColor(
   signal?: AbortSignal,
 ): Promise<string | null> {
-  const backend = await dropperBackend();
+  const { backend } = await dropperSupport();
   if (backend === "native") {
     return await invoke<string | null>("dropper_pick");
   }
@@ -104,11 +135,13 @@ export async function pickScreenColor(
 /**
  * The color under the cursor right now, for a live readout while picking.
  *
- * Native backend only: it is one cheap pixel read, safe to poll. The EyeDropper
- * backend draws its own magnifier and exposes nothing to sample, so this returns
- * `null` there rather than pretending.
+ * Only where the backend reports `liveSample` — there it is one cheap pixel
+ * read, safe to poll. Everywhere else the picker owns its own magnifier and
+ * exposes nothing to sample, so this returns `null` rather than pretending, and
+ * callers should hide the readout instead of polling for a value that will not
+ * come.
  */
 export async function colorAtCursor(): Promise<string | null> {
-  if ((await dropperBackend()) !== "native") return null;
+  if (!(await dropperSupport()).liveSample) return null;
   return await invoke<string>("dropper_color_at_cursor");
 }
