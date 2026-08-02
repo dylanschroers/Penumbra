@@ -7,7 +7,7 @@ import type {
   SuiteDefinition,
 } from "@penumbra/shared";
 import { useCallback, useEffect, useState } from "react";
-import { api, SERVER_URL, TOKEN } from "../../api";
+import { api, getAgentToken, getServerUrl } from "../../api";
 import { type UploadProgress, uploadDataset, uploadModel } from "./upload";
 
 // Drives the Model Lab module. Everything goes through the Penumbra server's
@@ -129,13 +129,17 @@ export function useLab() {
     // to train from. Desktop only (needs disk access).
     uploadDataset: (localPath: string, onProgress?: UploadProgress) =>
       uploadDataset(
-        { serverURL: SERVER_URL, token: TOKEN },
+        // Resolved per call, not captured: the address can change under a long
+        // session, and an upload is the last thing that should go somewhere else.
+        { serverURL: getServerUrl(), token: getAgentToken() },
         localPath,
         onProgress,
       ),
     uploadModel: (localDir: string, onProgress?: UploadProgress) =>
       uploadModel(
-        { serverURL: SERVER_URL, token: TOKEN },
+        // Resolved per call, not captured: the address can change under a long
+        // session, and an upload is the last thing that should go somewhere else.
+        { serverURL: getServerUrl(), token: getAgentToken() },
         localDir,
         onProgress,
       ),

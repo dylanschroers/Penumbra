@@ -111,7 +111,7 @@ spine and everything else is an opt-in **module**.
   live in React state and are deliberately not persisted yet — the shell is
   still settling. What *does* persist to `localStorage` is narrower: the
   imported file-rail roots, the Model Lab's chosen folders, the selected chat
-  provider, and the server address.
+  provider, and the server address and access token.
 - **File rail → native filesystem (desktop only).** `fs/fsClient.ts` wraps four
   Tauri commands (`src-tauri/src/fs.rs`): list a directory, read a bounded
   head, read a chunk, and move an entry. The folder picker seeds a root for the
@@ -254,7 +254,12 @@ Current posture, honestly stated:
   behind `requireAuth` (`apps/server/src/http/auth.ts`): a bearer token when
   `PENUMBRA_AGENT_TOKEN` is set, loopback-only when it is not. There is
   deliberately no open mode — an unconfigured server cannot expose an actuator
-  to the network by accident.
+  to the network by accident. The client keeps its copy of that bearer in
+  `localStorage` beside the server address (`web/src/serverAddress.ts`), set
+  from the status pill; `VITE_AGENT_TOKEN` is only the initial default. Neither
+  place is a secret from the user's own browser — the build-time value was
+  inlined into the shipped JavaScript — but per-device storage at least keeps it
+  out of every copy of the build.
 - **Studio's key never leaves the server.** It is unscoped across that Studio's
   own surfaces — training, export, and inference alike — so no client-side code
   holds a Studio URL or key. Both targets' bearers, the Colab fallback's
