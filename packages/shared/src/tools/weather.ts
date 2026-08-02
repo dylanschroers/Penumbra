@@ -90,11 +90,27 @@ interface CurrentWeather {
   wind_speed_10m?: number;
 }
 
+/**
+ * A non-2xx from the weather service, carrying the status.
+ *
+ * Typed so the caller can tell "it answered and refused" from "nothing
+ * answered" — the distinction StudioHttpError draws for the same reason.
+ * Collapsed into a plain Error, every HTTP failure read as a missing network
+ * connection, which sends someone to check their wi-fi while the connection is
+ * fine and the service is rate-limiting them.
+ */
+class WeatherHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`weather service responded ${status}`);
+    this.name = "WeatherHttpError";
+  }
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, {
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`weather service responded ${res.status}`);
+  if (!res.ok) throw new WeatherHttpError(res.status);
   return (await res.json()) as T;
 }
 
@@ -147,13 +163,16 @@ export async function fetchWeather(args: {
     );
     current = forecast.current;
   } catch (err) {
-    // Offline is the expected case on the tier this matters for, and it is
-    // worth naming: the user can act on "no connection" and cannot act on a
-    // DOMException.
+    // Three outcomes, three different things to do about them. Offline is the
+    // expected case on the tier this matters for, so it is worth naming rather
+    // than surfacing a DOMException — but only when it is actually what
+    // happened.
     const reason =
-      err instanceof Error && err.name === "TimeoutError"
-        ? "it did not respond in time"
-        : "there may be no network connection";
+      err instanceof WeatherHttpError
+        ? `it answered ${err.status}`
+        : err instanceof Error && err.name === "TimeoutError"
+          ? "it did not respond in time"
+          : "there may be no network connection";
     return `Could not reach the weather service — ${reason}.`;
   }
 

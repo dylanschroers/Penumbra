@@ -280,9 +280,19 @@ function formatSize(bytes: number | null): string {
  * dataset libraries — they differ only in what they scan for and how each row
  * renders. Desktop-only (needs disk access); the web build shows a hint instead.
  *
- * Selecting an item fills the field with its *client* path. Transferring the
- * file to the Studio host is a later step, so for now a HuggingFace id typed in
- * the field is what trains end to end.
+ * Selecting an item fills the field with its *client* path, and what happens to
+ * that path next differs by kind:
+ *
+ *   dataset  Transferred all the way. It uploads to this server, and the run
+ *            then hands it to Studio (StudioClient.uploadDataset), training
+ *            from the path Studio gives back. Works on a remote trainer too.
+ *   model    Only as far as this server. There is no upload endpoint for a
+ *            model on Studio, so the trainer has to be able to read the path
+ *            itself — true when it shares a filesystem with us, not true for
+ *            Colab, which refuses a local path with `remote_model_path`.
+ *
+ * So a local dataset trains end to end; a local base model needs a trainer on
+ * this filesystem, or a HuggingFace id instead.
  */
 function LibraryPanel<T>({
   library,
@@ -928,9 +938,15 @@ export function LabModule() {
       </nav>
 
       {/* Why three tabs are dead, said once here rather than repeated as an
-          error inside each. */}
+          error inside each. States the consequence and lets lab.error give the
+          cause: `connected` goes false on any failed poll, so this covers a
+          server that is refusing (401, or the 403 an off-loopback client gets
+          from one with no PENUMBRA_AGENT_TOKEN) as well as one that is down.
+          Claiming there is no server would send you to start a running one. */}
       {offline ? (
-        <p className="lab__error">⚠️ No Penumbra server: {lab.error}</p>
+        <p className="lab__error">
+          ⚠️ Fine-tuning, runs, and benchmarks are unavailable — {lab.error}
+        </p>
       ) : (
         lab.error && <p className="lab__error">⚠️ {lab.error}</p>
       )}
