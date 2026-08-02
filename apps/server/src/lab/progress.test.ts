@@ -114,3 +114,36 @@ describe("caseProgress", () => {
     });
   });
 });
+
+describe("long lines", () => {
+  // The regression: TQDM_FRAME's label group and the `\s*` after it both match
+  // whitespace, so the engine retries every split and the match goes quadratic.
+  // Unguarded, the 20k-space line below takes over a minute; lm_eval really does
+  // emit long single lines (config dumps, padded columns), and Node has one
+  // thread, so that is the whole server stalled mid-benchmark.
+  it("refuses to scan a line far longer than any real frame", () => {
+    const started = Date.now();
+    expect(parseTqdmFrame(`${" ".repeat(20_000)}x`)).toBeNull();
+    expect(parseTqdmFrame("x".repeat(20_000))).toBeNull();
+    expect(
+      parseTqdmFrame(JSON.stringify({ k: "v".repeat(20_000) })),
+    ).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("still reads a frame that is merely long-labelled", () => {
+    const label = "Requesting API for a task with a rather wordy name";
+    const frame = parseTqdmFrame(
+      `${label}:  18%|##        | 33/180 [13:25<1:54:32, 46.75s/it]`,
+    );
+    expect(frame?.progress).toBeCloseTo(33 / 180);
+    expect(frame?.detail).toContain("33/180");
+  });
+
+  it("does not lose a frame sitting in a chunk beside a long line", () => {
+    // readOutputChunk splits on newlines, so the guard must drop only the long
+    // line — not the frame that shares the chunk with it.
+    const chunk = `${"noise ".repeat(2_000)}\r  7%|#         | 1/15 [00:01<?, ?it/s]`;
+    expect(readOutputChunk(chunk)?.progress).toBeCloseTo(1 / 15);
+  });
+});
