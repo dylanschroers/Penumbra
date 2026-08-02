@@ -148,7 +148,9 @@ function loadProvider(): ProviderKind {
 
 function createEngine(): SwitchableEngine {
   const local = new LocalEngine({ bindings: clientBindings });
-  const server = new RemoteEngine({ token: import.meta.env.VITE_AGENT_TOKEN });
+  // No address or bearer passed: both come from ../serverAddress, read per
+  // request, so the status pill moves Tier-1 chat along with everything else.
+  const server = new RemoteEngine();
   return new SwitchableEngine({ local, server }, loadProvider());
 }
 

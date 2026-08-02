@@ -1,25 +1,26 @@
-import { normalizeBaseUrl } from "@penumbra/shared";
-
-// The Penumbra server's address and gate, for the plain request/response routes
-// (/lab/*, /compute/*). Everything goes through the server and never to Studio
-// directly: the Studio key is an unscoped admin credential that must not reach a
-// browser (docs/MODEL_LAB.md → Deployment topology).
+// The Penumbra server's gate, for the plain request/response routes (/lab/*,
+// /compute/*, /agent/prompt). Everything goes through the server and never to
+// Studio directly: the Studio key is an unscoped admin credential that must not
+// reach a browser (docs/MODEL_LAB.md → Deployment topology).
 //
-// SyncClient deliberately keeps its own copy of the server URL, because that one
-// is user-editable at runtime; this is the build-time default.
+// The address comes from ./serverAddress, read per request. It used to be a
+// build-time constant here while SyncClient held a separate runtime-editable
+// one, so setting an address in the status pill moved sync and the pill but not
+// the Lab — the pill then reported "Connected" about a server this file was not
+// calling.
 
-export const SERVER_URL = normalizeBaseUrl(
-  import.meta.env.VITE_SERVER_URL ?? "http://localhost:3000",
-);
+import { authHeaders, getServerUrl } from "./serverAddress";
 
-export const TOKEN = import.meta.env.VITE_AGENT_TOKEN;
+export { getAgentToken, getServerUrl } from "./serverAddress";
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${SERVER_URL}${path}`, {
+  // Address and bearer both read per request, never captured: the status pill
+  // can change either between one call and the next.
+  const res = await fetch(`${getServerUrl()}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
+      ...authHeaders(),
     },
   });
   if (!res.ok) {
