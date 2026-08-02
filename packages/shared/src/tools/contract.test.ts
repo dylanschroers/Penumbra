@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { type ToolContract, toToolSpec } from "./contract";
-import { createTaskTool, listTasksTool, taskTools } from "./tasks";
+import { agentTools } from "./registry";
+import { createTaskTool, listTasksTool } from "./tasks";
 
 describe("toToolSpec", () => {
   it("wraps the contract in the OpenAI function-tool shape", () => {
@@ -61,12 +62,13 @@ describe("toToolSpec", () => {
   });
 
   it("derives every shipped contract without throwing, with unique names", () => {
-    const names = taskTools.map((c) => toToolSpec(c).function.name);
+    const names = agentTools.map((c) => toToolSpec(c).function.name);
     expect(names).toEqual([
       "create_task",
       "list_tasks",
       "complete_task",
       "delete_task",
+      "get_weather",
     ]);
     expect(new Set(names).size).toBe(names.length);
   });

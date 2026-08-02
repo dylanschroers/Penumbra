@@ -1,4 +1,5 @@
 import { normalizeBaseUrl } from "../net";
+import { type ModelCatalogEntry, pickLoadedModel } from "./catalog";
 import type {
   AgentEvent,
   AgentStatus,
@@ -25,6 +26,23 @@ const DEFAULT_MAX_TOKENS = 512;
 const DEFAULT_MAX_TOOL_STEPS = 4;
 /** The status probe is a liveness check, so it fails fast. */
 const DEFAULT_STATUS_TIMEOUT_MS = 1500;
+
+/**
+ * Emoji, with the modifiers that ride along: skin tones, variation selectors,
+ * and the zero-width joiners that fuse multi-part sequences.
+ *
+ * Stripped from the answer rather than merely forbidden in the prompt, because
+ * a 1.7B model does not reliably obey a negative style rule — asked for an
+ * enthusiastic greeting it appends 😊 whatever the system prompt says. The
+ * prompt still carries the instruction, so a model capable of following it
+ * never emits one and this never fires.
+ *
+ * The cost is that the assistant cannot produce an emoji even when asked for
+ * one. That is the intended trade here; deleting this and its use in runAgent
+ * restores the model's own output verbatim.
+ */
+const EMOJI =
+  /(?:\p{Extended_Pictographic}|[\u{1F3FB}-\u{1F3FF}\u{FE0F}\u{200D}])+/gu;
 
 export interface OpenAiEngineConfig {
   /** Tools, prompt, and executor for every turn this engine runs. */
@@ -84,22 +102,17 @@ export class OpenAiEngine implements Engine {
         headers: this.headers,
         signal: AbortSignal.timeout(this.statusTimeoutMs),
       });
+      // A backend that answers but rejects the key is a different fix from one
+      // that isn't running — see AgentState. Studio rotates its key on every
+      // reinstall, so this is the ordinary case, not an edge one.
+      if (res.status === 401 || res.status === 403) {
+        return { state: "unauthorized" };
+      }
       if (!res.ok) return { state: "stopped" };
-      const body = (await res.json()) as {
-        data?: Array<{ id?: string; loaded?: boolean }>;
-      };
-      const entries = body.data ?? [];
-
-      // The two backends list different things. llama-server advertises only
-      // what it has resident and omits `loaded` entirely, so the first entry is
-      // servable. Unsloth Studio also lists models that are merely downloaded,
-      // marking each `loaded: true|false` — taking entries[0] there would
-      // report "ready" off a model sitting on disk, and the next completion
-      // would fail against a backend with nothing loaded. (Verified against
-      // studio/backend/routes/inference.py → _openai_catalog_objects.)
-      const loaded = entries.find((m) => m.loaded === true);
-      const marksLoaded = entries.some((m) => typeof m.loaded === "boolean");
-      const model = loaded?.id ?? (marksLoaded ? undefined : entries[0]?.id);
+      const body = (await res.json()) as { data?: ModelCatalogEntry[] };
+      // Which entry is actually servable is a rule with a trap in it; it lives
+      // in ./catalog so the benchmark route reads the listing the same way.
+      const model = pickLoadedModel(body.data ?? []);
 
       return model ? { state: "ready", model } : { state: "no_model" };
     } catch {
@@ -118,7 +131,7 @@ export class OpenAiEngine implements Engine {
   ): AsyncGenerator<AgentEvent> {
     const { tools, system, runTool } = this.bindings;
     const convo: WireMessage[] = [
-      { role: "system", content: system },
+      { role: "system", content: await this.systemWithIdentity(system) },
       ...messages.map((m) => ({ role: m.role, content: m.content })),
     ];
 
@@ -128,9 +141,14 @@ export class OpenAiEngine implements Engine {
 
       if (calls.length === 0) {
         // No tool: this is the answer. Strip any <think> block (thinking-off
-        // still emits empty tags) so only the reply text shows.
+        // still emits empty tags) so only the reply text shows, then the emoji
+        // the prompt asked it not to write. Removing one mid-sentence leaves a
+        // double space behind, so runs of spaces collapse after.
         const text = (msg.content ?? "")
           .replace(/<think>[\s\S]*?<\/think>/g, "")
+          .replace(EMOJI, "")
+          .replace(/[ \t]{2,}/g, " ")
+          .replace(/[ \t]+$/gm, "")
           .trim();
         yield { kind: "answer", text };
         return;
@@ -157,6 +175,28 @@ export class OpenAiEngine implements Engine {
       kind: "answer",
       text: "I hit the tool-step limit before finishing.",
     };
+  }
+
+  /**
+   * The bindings' prompt, plus what this turn is actually running on.
+   *
+   * A model has no way to know which weights are serving it: `this.model` is
+   * whatever the caller configured, and for Studio that is the placeholder
+   * "unsloth" — Studio ignores the field and serves whatever is resident. Asked
+   * what it is, a small model therefore improvises, and the answer looks as
+   * confident as a real one. So the served id is read from the backend and
+   * stated, which is also the only honest source for it.
+   *
+   * Costs one `/v1/models` GET per turn, not per token, against a backend the
+   * status pill is already polling. When it cannot be resolved the line is left
+   * out entirely rather than guessed at, and the prompt's standing instruction
+   * to admit ignorance takes over.
+   */
+  private async systemWithIdentity(system: string): Promise<string> {
+    const status = await this.getStatus();
+    const model = status.state === "ready" ? status.model : undefined;
+    if (!model) return system;
+    return `${system}\n\nYou are currently running as the model "${model}", served by the ${this.label} backend. If the user asks which model, backend, or version they are talking to, answer with exactly that and nothing invented.`;
   }
 
   /** One `/v1/chat/completions` round trip, returning the assistant message. */

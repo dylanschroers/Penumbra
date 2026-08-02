@@ -279,12 +279,17 @@ body {
   line-height: 1.5;
 }
 
-/* Color picker module */
+/* Color picker module. --cp-color (set inline by the component) is the current
+   color, so the glow, focus rings and hovers all tint to the picked hue. */
 .color-picker {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.85rem;
+  gap: 1rem;
+  width: 100%;
+  max-width: 300px;
+  margin: 0 auto;
+  padding: 0.25rem 0;
 }
 
 .color-picker__row {
@@ -296,36 +301,154 @@ body {
 
 .color-picker__swatch {
   flex: none;
-  width: 2rem;
-  height: 2rem;
+  width: 2.4rem;
+  height: 2.4rem;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: none;
+  border-radius: 12px;
   cursor: pointer;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+    0 2px 8px rgba(0, 0, 0, 0.35);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.25s ease;
+}
+
+.color-picker__swatch:hover {
+  transform: scale(1.06);
+}
+
+.color-picker__swatch:active {
+  transform: scale(0.95);
 }
 
 .color-picker__hex {
   flex: 1;
   min-width: 0;
-  padding: 0.45rem 0.6rem;
+  padding: 0.5rem 0.65rem;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  border-radius: 10px;
+  background: var(--bg);
   color: var(--text);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 0.9rem;
+  font-size: 0.92rem;
+  letter-spacing: 0.03em;
+  text-align: center;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .color-picker__hex:focus {
-  outline: 2px solid var(--primary);
-  outline-offset: 1px;
+  outline: none;
+  border-color: var(--cp-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cp-color) 25%, transparent);
 }
 
-.color-picker__copied {
+/* Square icon button. Height matches the swatch and the fields either side so
+   the row reads as one strip; the corner radius follows its neighbours (the hex
+   box and the copy button) rather than the swatch's rounder 12px. Overrides the
+   wide default .btn padding. */
+.color-picker__dropper {
   flex: none;
-  min-width: 3.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  padding: 0;
+  border-radius: 10px;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.color-picker__dropper:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--cp-color) 60%, var(--border));
+}
+
+/* While the dropper is open the webview loses focus to the OS magnifier, so the
+   pressed state is the only cue that the app is still waiting for a pick. */
+.color-picker__dropper[aria-pressed="true"] {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+/* Dropper status line. Deliberately not .notice: that carries 1.5rem of block
+   padding for full-panel empty states, which would jolt the card's height every
+   time the dropper opens. Always rendered, with the height reserved, so
+   appearing and clearing the text shifts nothing below it. */
+.color-picker__status {
+  margin: 0;
+  min-height: 1.1rem;
   font-size: 0.8rem;
+  line-height: 1.1rem;
+  text-align: center;
   color: var(--muted);
+}
+
+.color-picker__status--error {
+  color: var(--danger);
+}
+
+/* The live hex under the cursor. Tabular figures so the six digits don't jitter
+   the line as the value changes at ~25Hz. */
+.color-picker__preview {
+  margin-right: 0.4rem;
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.color-picker__copy {
+  flex: none;
+  min-width: 4.6rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.color-picker__copy:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--cp-color) 60%, var(--border));
+}
+
+/* rgb()/hsl() readouts, click to copy. */
+.color-picker__meta {
+  display: flex;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.color-picker__chip {
+  flex: 1;
+  min-width: 0;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.color-picker__chip:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--cp-color) 45%, var(--border));
 }
 
 /* Weather module */
@@ -453,6 +576,146 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+  /* Anchors .agent__popover, which hangs off the status pill. */
+  position: relative;
+}
+
+/* The pill becomes a control on the server tier: the fix for "key rejected" or
+   "not answering" is the compute panel, and it should not live in another
+   module. Mirrors .lab__pill--action, which opens the same panel. */
+.agent__pill--action {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.agent__pill--action:hover {
+  border-color: var(--primary);
+}
+
+.agent__pill-caret {
+  font-size: 0.6rem;
+  opacity: 0.7;
+}
+
+.agent__popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  border: none;
+  padding: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.agent__popover {
+  position: absolute;
+  z-index: 21;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  width: min(22rem, 90vw);
+  padding: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface, var(--bg));
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
+}
+
+/* The system prompt panel. Wider than the compute panel: it shows the fixed
+   policy in full, and a persona box you can actually read while editing. */
+.agent__popover:has(.prompt) {
+  width: min(32rem, 92vw);
+}
+
+.prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.prompt__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.prompt__label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+/* Shown, not hidden: seeing the prompt means seeing the half you cannot change.
+   Scrolls rather than growing, so the editor stays on screen beside it. */
+.prompt__policy {
+  margin: 0;
+  max-height: 8rem;
+  overflow-y: auto;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.prompt__input {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.prompt__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.prompt__count--over {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.prompt__hint {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.prompt__error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--danger);
+}
+
+.prompt__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* A model change mid-thread. Reads as a rule across the conversation rather
+   than as a turn, because it is the shell talking, not the assistant. */
+.agent__notice {
+  margin: 0.5rem 0;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--border);
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-align: center;
 }
 
 /* Provider selector: a small segmented control routing the chat to a backend
@@ -470,9 +733,9 @@ body {
   border: none;
   background: transparent;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.85rem;
   line-height: 1;
-  padding: 0.25rem 0.6rem;
+  padding: 0.4rem 0.85rem;
   border-radius: 999px;
   cursor: pointer;
   transition:
@@ -495,8 +758,8 @@ body {
 }
 
 .agent__pill {
-  font-size: 0.72rem;
-  padding: 0.15rem 0.5rem;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.75rem;
   border-radius: 999px;
   border: 1px solid var(--border);
   color: var(--muted);
@@ -507,6 +770,14 @@ body {
   color: var(--primary-text);
   background: var(--primary);
   border-color: var(--primary);
+}
+
+/* Answering, but rejecting the key: a warning, not "off". Same treatment as
+   .lab__pill--unauthorized — it is the same condition seen from the chat. */
+.agent__pill--unauthorized {
+  color: #7c4a03;
+  background: #fbbf24;
+  border-color: #f59e0b;
 }
 
 .agent__messages {
@@ -623,12 +894,12 @@ body {
 .agent__input {
   flex: 1;
   min-width: 0;
-  padding: 0.45rem 0.6rem;
+  padding: 0.6rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
-  font-size: 0.9rem;
+  font-size: 0.95rem;
 }
 
 .agent__input:focus {
@@ -669,8 +940,10 @@ body {
   border-color: var(--primary);
 }
 
-/* Up, but the server's key is missing or wrong: a warning, not "off". */
-.lab__pill--unauthorized {
+/* Answering, but not usable as it stands: the key is wrong, or what answered is
+   not Studio's API at all. A warning, not "off". */
+.lab__pill--unauthorized,
+.lab__pill--not_studio {
   color: #7c4a03;
   background: #fbbf24;
   border-color: #f59e0b;
@@ -695,6 +968,14 @@ body {
 .lab__tab--active {
   color: var(--text);
   border-bottom-color: var(--primary);
+}
+
+/* Greyed rather than hidden: a tab that vanished would read as a missing
+   feature, where a dead one plus the notice above it reads as a missing
+   server. */
+.lab__tab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .lab__form {
@@ -1086,6 +1367,32 @@ body {
   color: var(--muted);
 }
 
+/* Tabular so the number does not jitter the row as it counts up. */
+.lab__job-pct {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Narrow on purpose: this sits inside a one-line strip and is read for whether
+   it moved since the last look, not for a precise reading — the percentage
+   beside it is there for that. */
+.lab__job-bar {
+  flex-shrink: 0;
+  width: 4rem;
+  height: 0.3rem;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.lab__job-fill {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  /* A benchmark advances one request at a time, so the steps are large and far
+     apart; easing them stops each one reading as a glitch. */
+  transition: width 0.3s ease-out;
+}
+
 /* Which machine holds this run's checkpoint. Colab is called out because its
    disk is temporary — that decides whether an export needs a Hub push. */
 .lab__run-where {
@@ -1153,6 +1460,18 @@ body {
   color: var(--danger);
 }
 
+/* Muted, not red: a run stopped on purpose is not a failure, and colouring it
+   like one would send you looking for a bug you already know is not there. */
+.lab__job--cancelled .lab__job-state {
+  color: var(--muted);
+}
+
+.lab__job-cancel {
+  margin-left: auto;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.72rem;
+}
+
 .lab__job-detail {
   color: var(--muted);
   overflow: hidden;
@@ -1176,21 +1495,95 @@ body {
   overflow-wrap: anywhere;
 }
 
-/* Wide tables scroll inside the card rather than stretching the canvas. */
-.lab__scores {
-  display: block;
+/* ---- Benchmarks: form and scores --------------------------------------- */
+
+/* The whole benchmark form on one line. The model list gets the slack (its
+   ids are the long ones); everything else is sized to its content. */
+.lab__bench-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.lab__bench-controls select {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.lab__bench-controls select:first-child {
+  flex: 1 1 14rem;
+}
+
+.lab__bench-controls .lab__field {
+  font-size: 0.78rem;
+  gap: 0.25rem;
+}
+
+.lab__bench-controls .lab__field input {
+  width: 4rem;
+}
+
+/* Keeps the submit at the end of the row rather than beside the last field. */
+.lab__bench-controls button[type="submit"] {
+  margin-left: auto;
+}
+
+/* One card per run instead of a table: five narrow meta columns were taking
+   the width the numbers needed, which left every score on its own line with
+   its value pushed to the far edge. Wide cards scroll the list, not the app. */
+.lab__score-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
   overflow: auto;
-  border-collapse: collapse;
   min-height: 0;
 }
 
-.lab__scores th,
-.lab__scores td {
-  text-align: left;
-  padding: 0.25rem 0.5rem;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
+.lab__score-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--bg);
+}
+
+.lab__score-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+}
+
+.lab__score-model {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.lab__score-meta {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.lab__score-when {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--muted);
   white-space: nowrap;
+}
+
+/* The numbers in columns. A leaderboard suite reports two dozen of them, which
+   is two dozen lines down one column otherwise. */
+.lab__score-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0 0.9rem;
 }
 
 /* The two families are visually distinct so a general score is never read as a
@@ -1213,6 +1606,113 @@ body {
 
 .lab__score {
   display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0 0.6rem;
+  padding: 0.08rem 0;
+  font-size: 0.75rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+}
+
+/* The id is the part worth truncating: the number beside it never is. */
+.lab__score-task {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.lab__score-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Which number this is, for the tasks that report several. Full metric id,
+   filter and all, is in the title. */
+.lab__score-metric {
+  margin-right: 0.25rem;
+  font-size: 0.68rem;
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+/* The run asked for one model and the target had another loaded. Studio serves
+   what it has regardless of the request, so this is the only sign the scores
+   describe something other than what was typed. */
+.lab__score-warn {
+  display: block;
+  margin: 0;
+  font-size: 0.68rem;
+  color: #b45309;
+}
+
+/* ---- Model Lab: native controls pick up the app's styling --------------- */
+
+/* The lab's plain buttons (Choose folder, Rescan, the submit) render as OS
+   defaults otherwise. Scoped to unclassed buttons so the styled ones (tabs,
+   list items, pills) keep their own look. */
+.lab button:not([class]) {
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.lab button:not([class]):hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+}
+
+.lab button:not([class]):disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* The fine-tune submit stands out as the section's primary action. */
+.lab form button[type="submit"]:not([class]) {
+  background: var(--primary);
+  color: var(--primary-text);
+  border-color: transparent;
+  padding: 0.55rem 1rem;
+  font-size: 0.88rem;
+}
+
+.lab form button[type="submit"]:not([class]):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--primary) 88%, #fff);
+}
+
+.lab input:not([type="checkbox"]),
+.lab select {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.lab input:not([type="checkbox"]):focus,
+.lab select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.lab input[type="checkbox"] {
+  accent-color: var(--primary);
+}
+
+/* Number fields (Max steps) stay compact; text fields fill their row. */
+.lab__form input[type="text"],
+.lab__form input:not([type]) {
+  width: 100%;
 }

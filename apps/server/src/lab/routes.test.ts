@@ -1,13 +1,15 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import Fastify, { type FastifyInstance } from "fastify";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createCredentialStore } from "./credentials";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTargetStore, type TargetStore } from "../compute/targets";
 import { createLabStore, type LabStore } from "./jobs";
 import { registerLabRoutes } from "./routes";
-import { type HubTarget, StudioClient, type TrainingStart } from "./studio";
+import type { HubTarget, StudioClient, TrainingStart } from "./studio";
 
 /** Studio stand-in; only the methods a given test exercises are supplied.
  *
@@ -21,11 +23,15 @@ function fakeStudio(over: Partial<StudioClient> = {}): StudioClient {
   const base = {
     baseURL: "http://studio",
     reachable: async () => true,
+    // Studio serves what it has loaded regardless of the request, so a
+    // benchmark asks before it runs; the default here is "something is loaded".
+    loadedModel: async () => "loaded-model",
     startTraining: async () => {},
     uploadDataset: async (path: string) => path,
     listRuns: async () => [],
     async *trainingProgress() {},
     loadCheckpoint: async () => {},
+    listLocalModels: async () => [],
     // A real export advances the op counter when it finishes.
     exportGguf: async () => {
       opSeq += 1;
@@ -48,22 +54,69 @@ function fakeStudio(over: Partial<StudioClient> = {}): StudioClient {
 
 let app: FastifyInstance;
 let store: LabStore;
+let targets: TargetStore;
 
 beforeEach(() => {
   store = createLabStore(new Database(":memory:"));
+  // An empty environment, so the local target resolves to Studio's default
+  // address and nothing leaks in from the machine running the tests.
+  targets = createTargetStore(new Database(":memory:"), {});
 });
 afterEach(() => app?.close());
+
+/** Make the Colab target exist. The store decides *whether* a target is
+ *  configured; `build` decides what answers for it. Splitting the two is what
+ *  lets a test route training to Colab without a live tunnel. */
+function configureColab(baseURL = "https://tunnel.example") {
+  targets.set("colab", { baseURL, apiKey: "colab-secret" });
+}
 
 async function build(
   studio = fakeStudio(),
   token?: string,
-  makeColab?: (config: { baseURL: string; apiKey?: string }) => StudioClient,
+  colabStudio?: StudioClient,
+  inferenceURL?: string,
 ) {
   app = Fastify();
-  registerLabRoutes(app, { store, studio, token, makeColab });
+  registerLabRoutes(app, {
+    store,
+    targets,
+    token,
+    inferenceURL,
+    makeClient: (id) =>
+      id === "colab" ? (colabStudio ?? fakeStudio()) : studio,
+  });
   await app.ready();
   return app;
 }
+
+/** A model server that answers anything with a plain reply. The personal suite
+ *  talks real HTTP, so a benchmark that must *finish* needs something to
+ *  answer; the fake StudioClient above only covers the control plane. */
+function startFakeModel() {
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: "ok" } }] }));
+    });
+  });
+  return {
+    listen: () =>
+      new Promise<string>((resolve) =>
+        server.listen(0, "127.0.0.1", () =>
+          resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`),
+        ),
+      ),
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  };
+}
+
+let fakeModel: ReturnType<typeof startFakeModel> | undefined;
+afterEach(async () => {
+  await fakeModel?.close();
+  fakeModel = undefined;
+});
 
 /** Jobs run in the background; wait for one to settle. */
 async function settle(id: string, tries = 40) {
@@ -99,11 +152,6 @@ const finetuneBody = {
   dataset: { kind: "hf", id: "tatsu-lab/alpaca" },
 };
 
-const colabConfig = {
-  baseURL: "https://tunnel.example",
-  apiKey: "colab-secret",
-};
-
 describe("auth", () => {
   // /lab is a stronger actuator than /agent/chat: it spawns training and writes
   // files. It must never be the one unauthenticated endpoint on the box.
@@ -127,173 +175,32 @@ describe("auth", () => {
 });
 
 describe("GET /lab/status", () => {
-  it("reports Studio reachability and the suite catalog", async () => {
+  it("reports the suite catalog and whether lm-eval is installed", async () => {
     const app = await build();
     const body = (await app.inject({ url: "/lab/status" })).json();
 
-    expect(body.studio).toBe("ready");
     expect(body.suites.map((s: { id: string }) => s.id)).toContain(
       "penumbra-tools-v1",
     );
+    expect(["installed", "missing"]).toContain(body.lmEval);
   });
 
-  it("says so honestly when Studio is down", async () => {
-    const app = await build(fakeStudio({ reachable: async () => false }));
-    expect((await app.inject({ url: "/lab/status" })).json().studio).toBe(
-      "stopped",
-    );
-  });
-
-  it("distinguishes an unauthorized Studio from a stopped one", async () => {
-    const app = await build(
-      fakeStudio({ probe: async () => "unauthorized" as const }),
-    );
-    expect((await app.inject({ url: "/lab/status" })).json().studio).toBe(
-      "unauthorized",
-    );
-  });
-
-  it("reports no Colab fallback until one is configured", async () => {
+  // Target addresses, keys, and readiness live at /compute/targets now: chat
+  // needs them too, so reporting them from a Lab route made the Lab the owner
+  // of a setting it merely shares.
+  it("no longer carries compute configuration", async () => {
     const app = await build();
-    expect(
-      (await app.inject({ url: "/lab/status" })).json().colab,
-    ).toMatchObject({ configured: false, baseURL: null });
+    const body = (await app.inject({ url: "/lab/status" })).json();
+    expect(body.studio).toBeUndefined();
+    expect(body.local).toBeUndefined();
+    expect(body.colab).toBeUndefined();
   });
 });
 
-// Rotating Studio's key used to mean editing .env and restarting the server.
-describe("POST /lab/provider/local", () => {
-  async function buildWithCredentials() {
-    const db = new Database(":memory:");
-    const credentials = createCredentialStore(db, {
-      UNSLOTH_BASE_URL: "http://env:8888",
-      UNSLOTH_API_KEY: "env-key",
-    });
-    app = Fastify();
-    registerLabRoutes(app, {
-      store,
-      credentials,
-      studio: new StudioClient(credentials.current()),
-    });
-    await app.ready();
-    return { app, credentials };
-  }
-
-  it("stores a rotated key and reports where the running values came from", async () => {
-    const { app, credentials } = await buildWithCredentials();
-
-    expect(
-      (await app.inject({ url: "/lab/status" })).json().local,
-    ).toMatchObject({
-      baseURL: "http://env:8888",
-      source: "env",
-      hasKey: true,
-    });
-
-    const res = await app.inject({
-      method: "POST",
-      url: "/lab/provider/local",
-      payload: { baseURL: "http://studio.lan:8888", apiKey: "rotated" },
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(credentials.current().apiKey).toBe("rotated");
-    // The client the lab trains through follows without a restart.
-    expect(
-      (await app.inject({ url: "/lab/status" })).json().local,
-    ).toMatchObject({ baseURL: "http://studio.lan:8888", source: "settings" });
-  });
-
-  it("never sends the key back", async () => {
-    const { app } = await buildWithCredentials();
-    await app.inject({
-      method: "POST",
-      url: "/lab/provider/local",
-      payload: { apiKey: "rotated" },
-    });
-
-    const body = (await app.inject({ url: "/lab/status" })).body;
-    expect(body).not.toContain("rotated");
-    expect(body).not.toContain("env-key");
-  });
-
-  it("reverts to the environment on delete", async () => {
-    const { app } = await buildWithCredentials();
-    await app.inject({
-      method: "POST",
-      url: "/lab/provider/local",
-      payload: { baseURL: "http://studio.lan:8888" },
-    });
-
-    const res = await app.inject({
-      method: "DELETE",
-      url: "/lab/provider/local",
-    });
-
-    expect(res.json()).toMatchObject({
-      baseURL: "http://env:8888",
-      source: "env",
-    });
-  });
-
-  it("rejects an empty patch and a bad URL", async () => {
-    const { app } = await buildWithCredentials();
-    for (const payload of [{}, { baseURL: "not-a-url" }]) {
-      const res = await app.inject({
-        method: "POST",
-        url: "/lab/provider/local",
-        payload,
-      });
-      expect(res.statusCode).toBe(400);
-    }
-  });
-});
-
-describe("Colab provider", () => {
-  it("configures a fallback and reflects it in status, never echoing the key", async () => {
-    const built = fakeStudio({ baseURL: "https://tunnel.example" });
-    const app = await build(fakeStudio(), undefined, () => built);
-
-    const set = await app.inject({
-      method: "POST",
-      url: "/lab/provider/colab",
-      payload: colabConfig,
-    });
-    expect(set.statusCode).toBe(200);
-    // The URL is echoed to confirm the target; the bearer is not.
-    expect(JSON.stringify(set.json())).not.toContain("colab-secret");
-
-    const status = (await app.inject({ url: "/lab/status" })).json();
-    expect(status.colab).toMatchObject({
-      configured: true,
-      baseURL: "https://tunnel.example",
-      studio: "ready",
-    });
-  });
-
-  it("rejects a malformed endpoint", async () => {
-    const app = await build();
-    const res = await app.inject({
-      method: "POST",
-      url: "/lab/provider/colab",
-      payload: { baseURL: "not-a-url" },
-    });
-    expect(res.statusCode).toBe(400);
-  });
-
-  it("clears the fallback on DELETE", async () => {
-    const app = await build(fakeStudio(), undefined, () => fakeStudio());
-    await app.inject({
-      method: "POST",
-      url: "/lab/provider/colab",
-      payload: colabConfig,
-    });
-    await app.inject({ method: "DELETE", url: "/lab/provider/colab" });
-    expect(
-      (await app.inject({ url: "/lab/status" })).json().colab.configured,
-    ).toBe(false);
-  });
-
+// Configuring a target now lives at /compute/targets — see
+// ../compute/routes.test.ts. What stays here is what the *Lab* does with the
+// targets once they exist: route training, and refuse when it cannot.
+describe("Colab as a trainer", () => {
   // The whole point: when the local GPU host is offline, training routes to the
   // configured Colab tunnel instead of failing.
   it("trains via Colab when the local Studio is unreachable", async () => {
@@ -310,13 +217,9 @@ describe("Colab provider", () => {
     const app = await build(
       fakeStudio({ reachable: async () => false }),
       undefined,
-      () => colab,
+      colab,
     );
-    await app.inject({
-      method: "POST",
-      url: "/lab/provider/colab",
-      payload: colabConfig,
-    });
+    configureColab();
 
     const { jobId } = (
       await app.inject({
@@ -330,6 +233,17 @@ describe("Colab provider", () => {
     expect(colabTrained).toBe(true);
   });
 
+  it("refuses to train on Colab while none is configured", async () => {
+    const app = await build(fakeStudio({ reachable: async () => false }));
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/finetune",
+      payload: { ...finetuneBody, provider: "colab" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("colab_not_configured");
+  });
+
   // Colab resolves an unknown model name against HuggingFace, so a path from
   // this machine comes back as "Repo id must use alphanumeric chars…" minutes
   // later. There is no model-upload endpoint to fix it with, so refuse early.
@@ -337,13 +251,9 @@ describe("Colab provider", () => {
     const app = await build(
       fakeStudio({ reachable: async () => false }),
       undefined,
-      () => fakeStudio({ baseURL: "https://tunnel.example" }),
+      fakeStudio({ baseURL: "https://tunnel.example" }),
     );
-    await app.inject({
-      method: "POST",
-      url: "/lab/provider/colab",
-      payload: colabConfig,
-    });
+    configureColab();
 
     const res = await app.inject({
       method: "POST",
@@ -679,13 +589,9 @@ describe("POST /lab/export", () => {
         },
       }),
       undefined,
-      () => colab,
+      colab,
     );
-    await app.inject({
-      method: "POST",
-      url: "/lab/provider/colab",
-      payload: colabConfig,
-    });
+    configureColab();
 
     const run = seedRun(store, "/root/outputs/run", "colab");
     const { jobId } = (
@@ -976,6 +882,214 @@ describe("POST /lab/export", () => {
   });
 });
 
+// Stopping a run you started by mistake. The suites already honour a signal —
+// the personal loop checks it per case, the general one SIGTERMs lm_eval — so
+// what is tested here is that a controller reaches them and that the outcome is
+// recorded as a deliberate stop rather than a break.
+describe("POST /lab/jobs/:id/cancel", () => {
+  /** Start a benchmark and hand back its job id. */
+  async function startBenchmark(app: FastifyInstance) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/benchmark",
+      payload: {
+        model: "loaded-model",
+        suite: "penumbra-tools-v1",
+        samplesPerTask: 50,
+      },
+    });
+    expect(res.statusCode).toBe(202);
+    return res.json().jobId as string;
+  }
+
+  it("stops a running benchmark and records it as cancelled", async () => {
+    // Accepts the request and never answers, so the run is genuinely in flight
+    // when the cancel lands. A refused port would finish first and the test
+    // would pass or fail on a race rather than on the behaviour.
+    const hanging = createServer(() => {});
+    const url = await new Promise<string>((resolve) =>
+      hanging.listen(0, "127.0.0.1", () =>
+        resolve(`http://127.0.0.1:${(hanging.address() as AddressInfo).port}`),
+      ),
+    );
+
+    try {
+      const app = await build(fakeStudio(), undefined, undefined, url);
+      const id = await startBenchmark(app);
+      await vi.waitFor(async () => {
+        const job = (await app.inject({ url: `/lab/jobs/${id}` })).json();
+        expect(job.state).toBe("running");
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/lab/jobs/${id}/cancel`,
+      });
+      expect(res.statusCode).toBe(202);
+
+      // The signal reaches the in-flight fetch, so this settles rather than
+      // waiting out a request that was never going to answer.
+      await vi.waitFor(async () => {
+        const job = (await app.inject({ url: `/lab/jobs/${id}` })).json();
+        expect(job.state).toBe("cancelled");
+      });
+
+      // A partial suite is not a result; nothing may be written for one.
+      expect((await app.inject({ url: "/lab/scores" })).json()).toEqual([]);
+    } finally {
+      hanging.closeAllConnections();
+      await new Promise<void>((r) => hanging.close(() => r()));
+    }
+  });
+
+  // A row can outlive the process that owned it, and the user's instinct is to
+  // press Cancel. Answering 409 there left the job "running" forever, blocking
+  // every later run with no way out of the UI.
+  it("clears a job whose process is gone rather than refusing", async () => {
+    const app = await build();
+    const orphan = store.createJob("benchmark");
+    store.updateJob(orphan.id, { state: "running" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/lab/jobs/${orphan.id}/cancel`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, reconciled: true });
+    expect(store.getJob(orphan.id)?.state).toBe("failed");
+  });
+
+  it("404s an unknown job", async () => {
+    const app = await build();
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/jobs/nope/cancel",
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("refuses a job that has already finished", async () => {
+    const app = await build();
+    const id = await startBenchmark(app);
+    await vi.waitFor(async () => {
+      const job = (await app.inject({ url: `/lab/jobs/${id}` })).json();
+      expect(["done", "failed"]).toContain(job.state);
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/lab/jobs/${id}/cancel`,
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("not_running");
+  });
+
+  it("is gated like the rest of the lab surface", async () => {
+    const app = await build(fakeStudio(), "secret");
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/jobs/any/cancel",
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
+// The picker's list. Free text here used to be a trap: Studio ignores the
+// `model` a request names and answers from whatever is resident, so a typo
+// returned a full score attributed to another model rather than an error.
+describe("GET /lab/models", () => {
+  const inventory = [
+    {
+      id: "unsloth/gemma-4-12b-it-GGUF",
+      load_id: "unsloth/gemma-4-12b-it-GGUF",
+      display_name: "gemma-4-12b-it",
+      size_bytes: 7_366_421_920,
+      model_format: "gguf",
+      capabilities: { can_chat: true, requires_variant: true },
+    },
+    {
+      id: "loaded-model",
+      load_id: "loaded-model",
+      display_name: "loaded-model",
+      size_bytes: 1_132_952_128,
+      model_format: "gguf",
+      capabilities: { can_chat: true, requires_variant: true },
+    },
+  ];
+
+  it("lists the target's models and marks the resident one", async () => {
+    const app = await build(
+      fakeStudio({ listLocalModels: async () => inventory }),
+    );
+    const body = (await app.inject({ url: "/lab/models" })).json();
+
+    expect(body.target).toBe("local");
+    expect(body.models.map((m: { id: string }) => m.id)).toEqual([
+      "unsloth/gemma-4-12b-it-GGUF",
+      "loaded-model",
+    ]);
+    // `loadedModel` is the fake's default, and is the only entry a benchmark
+    // would actually measure.
+    expect(
+      body.models.filter((m: { loaded: boolean }) => m.loaded),
+    ).toHaveLength(1);
+    expect(body.models[1]).toMatchObject({
+      loaded: true,
+      format: "gguf",
+      requiresVariant: true,
+      sizeBytes: 1_132_952_128,
+    });
+  });
+
+  // The form has to stay usable when the inventory cannot be read: a short
+  // picker is recoverable, an error that blanks the Lab is not. What is loaded
+  // still comes from /v1/models, so the run the form exists for is still
+  // offered — and the reason the rest is missing is reported rather than
+  // swallowed.
+  it("keeps the loaded model, and says why, when the target will not list", async () => {
+    const app = await build(
+      fakeStudio({
+        listLocalModels: async () => {
+          throw new Error("studio /api/hub/local responded 500");
+        },
+      }),
+    );
+    const res = await app.inject({ url: "/lab/models" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      target: "local",
+      models: [{ id: "loaded-model", loaded: true }],
+    });
+    expect(res.json().inventoryError).toContain("500");
+  });
+
+  // The case that blocked benchmarking on Colab: a reachable target with a
+  // model loaded, whose disk inventory lists nothing. The picker was empty, the
+  // form disabled itself, and the GPU sat there with a model on it.
+  it("offers a resident model the inventory never mentions", async () => {
+    const app = await build(fakeStudio({ listLocalModels: async () => [] }));
+    const body = (await app.inject({ url: "/lab/models" })).json();
+    expect(body.models).toMatchObject([{ id: "loaded-model", loaded: true }]);
+    expect(body.inventoryError).toBeNull();
+  });
+
+  it("marks nothing loaded when the target has nothing resident", async () => {
+    const app = await build(
+      fakeStudio({
+        listLocalModels: async () => inventory,
+        loadedModel: async () => null,
+      }),
+    );
+    const body = (await app.inject({ url: "/lab/models" })).json();
+    expect(body.models.some((m: { loaded: boolean }) => m.loaded)).toBe(false);
+  });
+
+  it("is gated like the rest of the lab surface", async () => {
+    const app = await build(fakeStudio(), "secret");
+    expect((await app.inject({ url: "/lab/models" })).statusCode).toBe(401);
+  });
+});
+
 describe("POST /lab/benchmark", () => {
   it("rejects an unknown suite", async () => {
     const app = await build();
@@ -996,6 +1110,80 @@ describe("POST /lab/benchmark", () => {
       payload: { model: "q", suite: "penumbra-tools-v1", samplesPerTask: 1 },
     });
     expect(res.statusCode).toBe(202);
+  });
+
+  // Studio ignores the `model` field and serves whatever is resident, so a run
+  // against an empty backend does not error — it scores nothing, or scores
+  // whatever answers. Refusing up front is the only place this can be caught.
+  it("refuses when the target has no model loaded", async () => {
+    const app = await build(fakeStudio({ loadedModel: async () => null }));
+    const res = await app.inject({
+      method: "POST",
+      url: "/lab/benchmark",
+      payload: { model: "q", suite: "penumbra-tools-v1", samplesPerTask: 1 },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("no_model_loaded");
+    // Nothing was started, so no job row was left behind.
+    expect(store.listJobs()).toEqual([]);
+  });
+
+  it("records what actually served, and where, not what was typed", async () => {
+    fakeModel = startFakeModel();
+    const app = await build(
+      fakeStudio({ loadedModel: async () => "qwen3-8b" }),
+      undefined,
+      undefined,
+      await fakeModel.listen(),
+    );
+    const { jobId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/benchmark",
+        payload: {
+          model: "whatever-i-typed",
+          suite: "penumbra-tools-v1",
+          samplesPerTask: 1,
+        },
+      })
+    ).json();
+    expect((await settle(jobId))?.state).toBe("done");
+
+    // The typed name is kept as the request, but the scores are attributed to
+    // the model that answered — the two differ here precisely because Studio
+    // ignores the field.
+    expect(store.listScores()[0]).toMatchObject({
+      model: "whatever-i-typed",
+      servedModel: "qwen3-8b",
+      target: "local",
+    });
+  });
+
+  it("attributes a run to the target the benchmark role points at", async () => {
+    fakeModel = startFakeModel();
+    const app = await build(
+      fakeStudio(),
+      undefined,
+      fakeStudio({ loadedModel: async () => "big-model" }),
+      await fakeModel.listen(),
+    );
+    configureColab();
+    targets.assign("benchmark", "colab");
+
+    const { jobId } = (
+      await app.inject({
+        method: "POST",
+        url: "/lab/benchmark",
+        payload: { model: "q", suite: "penumbra-tools-v1", samplesPerTask: 1 },
+      })
+    ).json();
+    expect((await settle(jobId))?.state).toBe("done");
+
+    expect(store.listScores()[0]).toMatchObject({
+      servedModel: "big-model",
+      target: "colab",
+    });
   });
 });
 

@@ -43,11 +43,18 @@ describe("UnslothEngine", () => {
     expect(url).toBe("http://gpu-host:8888/v1/models");
     expect(headers.Authorization).toBe("Bearer sk-unsloth-abc");
 
-    mockFetch.mockResolvedValueOnce(
-      res({ choices: [{ message: { content: "hi" } }] }),
+    // Routed by URL: a turn first asks /v1/models which model is actually
+    // serving it, so the chat call is no longer simply the next one.
+    mockFetch.mockImplementation(async (target: string) =>
+      String(target).includes("/v1/models")
+        ? res({ data: [] })
+        : res({ choices: [{ message: { content: "hi" } }] }),
     );
     await engine.runAgent([{ role: "user", content: "x" }]).next();
-    const body = JSON.parse(mockFetch.mock.calls[1]?.[1]?.body as string);
+    const chat = mockFetch.mock.calls.find((c) =>
+      String(c[0]).includes("/v1/chat/completions"),
+    );
+    const body = JSON.parse(chat?.[1]?.body as string);
     expect(body.model).toBe("gpt-oss-20b");
   });
 

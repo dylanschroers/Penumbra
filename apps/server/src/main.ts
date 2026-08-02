@@ -3,15 +3,17 @@
 import "./env";
 import cors from "@fastify/cors";
 import type { AgentEvent, ChatMessage, Engine } from "@penumbra/shared";
+import { composeSystem } from "@penumbra/shared";
 import Fastify from "fastify";
+import { createPromptStore } from "./agent/prompt";
 import { registerAgentRoutes } from "./agent/routes";
 import { createServerTools } from "./agent/tools";
 import { UnslothEngine } from "./agent/UnslothEngine";
+import { registerComputeRoutes } from "./compute/routes";
+import { createTargetStore } from "./compute/targets";
 import { sqlite } from "./db";
-import { createCredentialStore } from "./lab/credentials";
 import { createLabStore } from "./lab/jobs";
 import { registerLabRoutes } from "./lab/routes";
-import { StudioClient } from "./lab/studio";
 import { createServerTaskStore } from "./store/tasks";
 import { createTaskSyncStore } from "./sync/store";
 import { registerTaskSyncRoutes } from "./sync/tasks";
@@ -40,38 +42,42 @@ app.get("/health", async () => ({ status: "ok" }));
 const sync = createTaskSyncStore(sqlite);
 registerTaskSyncRoutes(app, sync);
 
-// The local Studio's address and bearer. Environment first, overridden by
-// anything set through /lab/provider/local — so rotating Studio's key is a form
-// in the UI rather than an edit to .env and a restart.
-const credentials = createCredentialStore(sqlite);
+// Which Studios this server can reach, and which one each role uses. The
+// environment supplies the local default; anything set through /compute/targets
+// outranks it, so rotating Studio's key is a form in the UI rather than an edit
+// to .env and a restart.
+const targets = createTargetStore(sqlite);
+registerComputeRoutes(app, { targets });
 
 // Tier 1: the model runs here and executes tools in-process against the store,
 // with no client in the turn loop (docs/SYNC.md → Server-side writes).
 const tasks = createServerTaskStore(sqlite, sync);
 const bindings = createServerTools(tasks);
-const build = () => new UnslothEngine({ bindings, ...credentials.current() });
-let engine = build();
-credentials.onChange(() => {
-  engine = build();
-});
+const prompts = createPromptStore(sqlite);
 
-// Inference reads the engine the *current* credentials built. Without this
-// indirection a key change would move training to the new Studio and leave chat
-// talking to the old one — the split the StudioClient docs warn about.
+// Built per call, from whichever target the chat role resolves to right now. An
+// engine is a URL, a key, and the bindings — constructing one opens no
+// connection — so caching it would buy nothing and would need invalidating
+// every time a key rotated or the role was pointed somewhere else.
 const currentEngine: Engine = {
-  getStatus: () => engine.getStatus(),
+  getStatus: () => chatEngine().getStatus(),
   runAgent: (messages: ChatMessage[], signal?: AbortSignal) =>
-    engine.runAgent(messages, signal) as AsyncGenerator<AgentEvent>,
+    chatEngine().runAgent(messages, signal) as AsyncGenerator<AgentEvent>,
 };
-registerAgentRoutes(app, { engine: currentEngine });
+function chatEngine(): UnslothEngine {
+  // The persona is read here rather than captured with the bindings, for the
+  // same reason the credentials are: an edit must reach the next turn without a
+  // restart, and there is nothing to invalidate if nothing is cached.
+  return new UnslothEngine({
+    bindings: { ...bindings, system: composeSystem(prompts.current().persona) },
+    ...targets.resolve("chat"),
+  });
+}
+registerAgentRoutes(app, { engine: currentEngine, targets, prompts });
 
-// Model Lab: fine-tuning and benchmarking against the Studio on this host
-// (docs/MODEL_LAB.md). Same gate as the agent routes.
-registerLabRoutes(app, {
-  store: createLabStore(sqlite),
-  credentials,
-  studio: new StudioClient(credentials.current()),
-});
+// Model Lab: fine-tuning, export, and benchmarking (docs/MODEL_LAB.md). Same
+// gate as the agent routes.
+registerLabRoutes(app, { store: createLabStore(sqlite), targets });
 
 const port = Number(process.env.PORT ?? 3000);
 app.listen({ port, host: "0.0.0.0" }).catch((err) => {

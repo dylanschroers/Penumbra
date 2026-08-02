@@ -1,11 +1,24 @@
 import { z } from "zod";
+import { targetId } from "../compute/types";
 
 // Wire contracts for the Model Lab (docs/MODEL_LAB.md): fine-tuning,
 // export, and benchmarking. Shared so the server and the UI cannot disagree
 // about a job's shape, and so suite definitions have one home.
 
 export const labJobKind = z.enum(["finetune", "export", "benchmark"]);
-export const labJobState = z.enum(["queued", "running", "done", "failed"]);
+/**
+ * "cancelled" is deliberately not "failed". A run stopped on purpose and a run
+ * that broke need different reactions — one is noise to be ignored, the other
+ * is a bug to chase — and collapsing them would leave the job list unable to
+ * say which happened. Studio's own download jobs draw the same line.
+ */
+export const labJobState = z.enum([
+  "queued",
+  "running",
+  "done",
+  "failed",
+  "cancelled",
+]);
 
 /** One stage of the pipeline. The job record is the source of truth: an SSE
  *  relay can drop, the server can restart, and the job still says what
@@ -120,7 +133,22 @@ export const taskScore = z.object({
 export const benchmarkResult = z.object({
   suite: z.string(),
   suiteKind,
+  /** What the run *asked* for. Studio ignores the `model` field and serves
+   *  whatever it has loaded, so this is a label, not evidence. */
   model: z.string(),
+  /**
+   * What actually answered, read from the target's `/v1/models` at run time.
+   *
+   * This is the model the scores describe. When it differs from `model` the run
+   * measured something other than what was requested — which produces no error
+   * anywhere, so it has to be recorded to be noticed. Null on rows written
+   * before this was captured.
+   */
+  servedModel: z.string().nullable().default(null),
+  /** Which compute target served it. Two targets can hold different weights
+   *  under the same name, so a score without this cannot be compared to one
+   *  from the other machine. Rows written before this read as "local". */
+  target: targetId.default("local"),
   samplesPerTask: z.number().int(),
   at: z.string().datetime(),
   durationMs: z.number().int().nonnegative(),
@@ -147,6 +175,30 @@ export const labRun = z.object({
   createdAt: z.string().datetime(),
 });
 
+/**
+ * A model the benchmark target can serve, as the picker needs it.
+ *
+ * Reported by the server from the target's own inventory rather than typed by
+ * hand. Studio ignores the `model` field of a request and answers with whatever
+ * is resident, so a mistyped id does not fail — it returns a complete score
+ * attributed to some other model. The list is the fix for the typo; `loaded`
+ * is the fix for the rest, because it says which of these is the one a run
+ * would actually measure.
+ */
+export const availableModel = z.object({
+  /** The string to send back as `model`, and to load with. */
+  id: z.string(),
+  label: z.string(),
+  /** "gguf" | "safetensors" | "unknown" as the target reports it. */
+  format: z.string(),
+  sizeBytes: z.number(),
+  /** GGUF repos hold several quants; one must be named to load. */
+  requiresVariant: z.boolean(),
+  /** Resident right now, and therefore what a benchmark would really score. */
+  loaded: z.boolean(),
+});
+
+export type AvailableModel = z.infer<typeof availableModel>;
 export type LabJobKind = z.infer<typeof labJobKind>;
 export type LabJobState = z.infer<typeof labJobState>;
 export type LabJob = z.infer<typeof labJob>;

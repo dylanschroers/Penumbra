@@ -18,11 +18,11 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AGENT_SYSTEM,
+  agentTools,
   type CaseOutcome,
   evalCases,
   scoreCase,
   summarize,
-  taskTools,
   toJsonl,
   toRecord,
   toToolSpec,
@@ -36,7 +36,7 @@ const API_KEY = process.env.API_KEY;
 const LABEL = process.env.LABEL;
 const BENCH_DIR = process.env.BENCH_DIR ?? "bench";
 
-const tools = taskTools.map(toToolSpec);
+const tools = agentTools.map(toToolSpec);
 
 async function ask(text: string): Promise<CaseOutcome> {
   const t0 = Date.now();

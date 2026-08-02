@@ -35,6 +35,7 @@ describe("dispatch", () => {
       "complete_task",
       "create_task",
       "delete_task",
+      "get_weather",
       "list_tasks",
     ]);
   });

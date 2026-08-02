@@ -1,27 +1,22 @@
 import type {
+  AvailableModel,
   BenchmarkResult,
   FinetuneRequest,
   LabJob,
   LabRun,
   SuiteDefinition,
 } from "@penumbra/shared";
-import { normalizeBaseUrl } from "@penumbra/shared";
 import { useCallback, useEffect, useState } from "react";
+import { api, getAgentToken, getServerUrl } from "../../api";
 import { type UploadProgress, uploadDataset, uploadModel } from "./upload";
 
 // Drives the Model Lab module. Everything goes through the Penumbra server's
 // /lab/* routes — never to Studio directly, because the Studio key is an
 // unscoped admin credential that must not reach a browser
 // (docs/MODEL_LAB.md → Deployment topology).
-
-const SERVER_URL = normalizeBaseUrl(
-  import.meta.env.VITE_SERVER_URL ?? "http://localhost:3000",
-);
-const TOKEN = import.meta.env.VITE_AGENT_TOKEN;
-
-/** Studio readiness. "unauthorized" means it is up but the server's key is
- *  missing or wrong — a different fix from "stopped" (not running). */
-export type StudioState = "ready" | "unauthorized" | "stopped";
+//
+// Which Studio the Lab trains and benchmarks on is *not* here: that is a compute
+// target, shared with chat, and lives in ../../compute/useCompute.
 
 /** What the export form collects. Everything past `runId` is the optional
  *  "publish it somewhere permanent" half. */
@@ -34,43 +29,19 @@ export interface ExportRequestInput {
 }
 
 export interface LabStatus {
-  studio: StudioState;
   lmEval: "installed" | "missing";
   suites: SuiteDefinition[];
-  /** What the local Studio is pointed at, and whether a bearer is in play.
-   *  `source` says whether the running values came from the server's
-   *  environment or were set here; the key itself never comes back. */
-  local: {
-    baseURL: string;
-    source: "env" | "settings";
-    hasKey: boolean;
-  };
-  /** The optional Colab fallback trainer. `baseURL` is echoed to confirm the
-   *  target; the bearer never comes back from the server. */
-  colab: {
-    configured: boolean;
-    baseURL: string | null;
-    studio: StudioState;
-  };
 }
 
-const headers = (): Record<string, string> => ({
-  "Content-Type": "application/json",
-  ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
-});
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${SERVER_URL}${path}`, {
-    ...init,
-    headers: headers(),
-  });
-  if (!res.ok) {
-    // The server's error codes are meaningful (busy, no_checkpoint,
-    // lm_eval_missing); surface them rather than a bare status.
-    const body = (await res.json().catch(() => ({}))) as { message?: string };
-    throw new Error(body.message ?? `server responded ${res.status}`);
-  }
-  return (await res.json()) as T;
+/** What the benchmark target can serve, and which of it is resident. The
+ *  resident model is always listed, inventory or no inventory: it is the only
+ *  one a benchmark can actually score. */
+export interface AvailableModels {
+  target: string;
+  models: AvailableModel[];
+  /** Why the list holds no more than that, when the target's own inventory
+   *  refused to answer. Null when it answered. */
+  inventoryError: string | null;
 }
 
 export function useLab() {
@@ -78,24 +49,37 @@ export function useLab() {
   const [jobs, setJobs] = useState<LabJob[]>([]);
   const [runs, setRuns] = useState<LabRun[]>([]);
   const [scores, setScores] = useState<BenchmarkResult[]>([]);
+  const [available, setAvailable] = useState<AvailableModels | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Whether the server answered the last poll. Null until the first one
+   *  returns — kept apart from `false` so the UI can hold off on saying
+   *  "disconnected" during the round trip it takes to find out, rather than
+   *  flashing it on every mount. */
+  const [connected, setConnected] = useState<boolean | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [s, j, r, sc] = await Promise.all([
+      const [s, j, r, sc, av] = await Promise.all([
         api<LabStatus>("/lab/status"),
         api<LabJob[]>("/lab/jobs"),
         api<LabRun[]>("/lab/runs"),
         api<BenchmarkResult[]>("/lab/scores"),
+        // Reaches the target's inventory, so it is the one call here that can
+        // be slow. A failure leaves the picker empty rather than blanking the
+        // whole Lab, which the other four would do.
+        api<AvailableModels>("/lab/models").catch(() => null),
       ]);
       setStatus(s);
       setJobs(j);
       setRuns(r);
       setScores(sc);
+      setAvailable(av);
       setError(null);
+      setConnected(true);
     } catch (err) {
       setStatus(null);
       setError(err instanceof Error ? err.message : String(err));
+      setConnected(false);
     }
   }, []);
 
@@ -127,7 +111,9 @@ export function useLab() {
     jobs,
     runs,
     scores,
+    available,
     error,
+    connected,
     running: jobs.some((j) => j.state === "running"),
     finetune: (req: FinetuneRequest) => act("/lab/finetune", req),
     // The Hub fields are optional and, when given, are the only way the artifact
@@ -136,45 +122,24 @@ export function useLab() {
     exportRun: (req: ExportRequestInput) => act("/lab/export", req),
     benchmark: (model: string, suite: string, samplesPerTask: number) =>
       act("/lab/benchmark", { model, suite, samplesPerTask }),
-    // Point the local Studio somewhere else, or give it a rotated key. Send only
-    // what changed: an omitted field keeps its current value, while an empty
-    // apiKey is an explicit "no bearer".
-    setLocalStudio: (patch: { baseURL?: string; apiKey?: string }) =>
-      act("/lab/provider/local", patch),
-    clearLocalStudio: async () => {
-      try {
-        await api("/lab/provider/local", { method: "DELETE" });
-        await refresh();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    },
-    // The key is sent once and is not held anywhere on the client afterwards;
-    // omit an empty one so a trusted-LAN tunnel can run without a bearer.
-    setColab: (baseURL: string, apiKey: string) =>
-      act("/lab/provider/colab", {
-        baseURL,
-        ...(apiKey ? { apiKey } : {}),
-      }),
-    clearColab: async () => {
-      try {
-        await api("/lab/provider/colab", { method: "DELETE" });
-        await refresh();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    },
+    // Stops a running benchmark. No scores are written for a partial run, so
+    // cancelling costs the run and nothing else.
+    cancelJob: (id: string) => act(`/lab/jobs/${id}/cancel`, {}),
     // Transfer a client-local file to the Studio host and return the path there
     // to train from. Desktop only (needs disk access).
     uploadDataset: (localPath: string, onProgress?: UploadProgress) =>
       uploadDataset(
-        { serverURL: SERVER_URL, token: TOKEN },
+        // Resolved per call, not captured: the address can change under a long
+        // session, and an upload is the last thing that should go somewhere else.
+        { serverURL: getServerUrl(), token: getAgentToken() },
         localPath,
         onProgress,
       ),
     uploadModel: (localDir: string, onProgress?: UploadProgress) =>
       uploadModel(
-        { serverURL: SERVER_URL, token: TOKEN },
+        // Resolved per call, not captured: the address can change under a long
+        // session, and an upload is the last thing that should go somewhere else.
+        { serverURL: getServerUrl(), token: getAgentToken() },
         localDir,
         onProgress,
       ),

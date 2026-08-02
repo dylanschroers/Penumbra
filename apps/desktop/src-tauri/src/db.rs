@@ -76,13 +76,9 @@ pub fn db_exec(
                 ValueRef::Null => Value::Null,
                 ValueRef::Integer(n) => Value::from(n),
                 ValueRef::Real(f) => Value::from(f),
-                ValueRef::Text(t) => {
-                    Value::String(String::from_utf8_lossy(t).into_owned())
-                }
+                ValueRef::Text(t) => Value::String(String::from_utf8_lossy(t).into_owned()),
                 // No blob columns in the schema; decode leniently if one appears.
-                ValueRef::Blob(b) => {
-                    Value::String(String::from_utf8_lossy(b).into_owned())
-                }
+                ValueRef::Blob(b) => Value::String(String::from_utf8_lossy(b).into_owned()),
             });
         }
         out.push(vals);

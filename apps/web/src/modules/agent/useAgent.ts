@@ -17,7 +17,60 @@ import {
 /** One tool the model ran during a turn, shown inline in the thread. */
 export type ToolStep = { name: string; result: string };
 /** A message as the UI holds it: wire content plus any tool steps that ran. */
-export type DisplayMessage = ChatMessage & { steps?: ToolStep[] };
+export type DisplayMessage = ChatMessage & {
+  steps?: ToolStep[];
+  /** A marker written by the shell rather than by anyone in the conversation.
+   *  Shown in the thread, never replayed as history — it is a note *about* the
+   *  conversation, and feeding it back would put it in the model's mouth. */
+  notice?: boolean;
+};
+
+/** Who answered: a compute target and the model resident on it. */
+interface Identity {
+  target: string | null;
+  model: string | null;
+}
+
+function identityOf(status: AgentStatus): Identity {
+  return {
+    target: status.target?.id ?? null,
+    // Only a ready backend names a model; anything else is "unknown", which is
+    // not the same as "changed".
+    model: status.state === "ready" ? (status.model ?? null) : null,
+  };
+}
+
+/**
+ * Whether the thread has changed hands.
+ *
+ * Only a move between two *known* values counts. Dropping to unknown is the
+ * backend going away, which the pill already reports, and treating it as a
+ * change would mark the thread every time a poll caught a restart.
+ */
+function differs(a: Identity, b: Identity): boolean {
+  return (
+    (!!a.target && !!b.target && a.target !== b.target) ||
+    (!!a.model && !!b.model && a.model !== b.model)
+  );
+}
+
+/**
+ * Put `notice` at the end of the thread, replacing one already there, or take
+ * the trailing one away when passed null.
+ *
+ * Replacing rather than appending is what keeps a run of switches to a single
+ * marker: consecutive notices describe boundaries with no conversation between
+ * them, so only the last one is about anything.
+ */
+function replaceTrailingNotice(notice: DisplayMessage | null) {
+  return (prev: DisplayMessage[]): DisplayMessage[] => {
+    const trailing = prev[prev.length - 1]?.notice === true;
+    const base = trailing ? prev.slice(0, -1) : prev;
+    // Nothing to separate in an empty thread.
+    if (!notice) return trailing ? base : prev;
+    return base.length === 0 ? prev : [...base, notice];
+  };
+}
 
 export function useAgent() {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
@@ -25,9 +78,55 @@ export function useAgent() {
   const [busy, setBusy] = useState(false);
   const [provider, setProviderState] = useState<ProviderKind>(getProvider);
   const abortRef = useRef<AbortController | null>(null);
+  /**
+   * The target and model that produced the most recent *turn*.
+   *
+   * Compared against, rather than against the previous poll, because the marker
+   * describes a boundary in the conversation. Polling the difference instead
+   * meant every hop counted: switching provider and back stacked three markers
+   * around no conversation at all, when the thread had not actually changed
+   * hands. Null until something has answered — an empty thread has no boundary.
+   */
+  const answeredBy = useRef<Identity | null>(null);
 
   const refreshStatus = useCallback(async () => {
-    setStatus(await engine.getStatus());
+    const next = await engine.getStatus();
+    setStatus(next);
+
+    // A conversation can change model underneath itself: the target is
+    // reassigned in the compute panel, or a Colab session ends and the role
+    // falls back to the local Studio. Either way the transcript would otherwise
+    // hold answers from two models with nothing separating them — the same
+    // class of silent wrongness as a crashed training run reading as done.
+    //
+    // The model is watched alongside the target because one target serves one
+    // model at a time and swapping it in Studio never touches the target id.
+    // Keying on the target alone made the commonest change of all — the same
+    // machine now running different weights — the one the transcript stayed
+    // silent about.
+    const was = answeredBy.current;
+    if (!was) return;
+    const now = identityOf(next);
+
+    // Coming back to whatever answered last leaves nothing to announce, so any
+    // marker written on the way out is taken back down.
+    if (!differs(was, now)) {
+      setMessages(replaceTrailingNotice(null));
+      return;
+    }
+
+    const where = next.target?.label ?? now.target;
+    const moved =
+      was.target && now.target && was.target !== now.target
+        ? `Now answering from ${where}${now.model ? ` as ${now.model}` : ""}.`
+        : `Now answering as ${now.model}.`;
+    setMessages(
+      replaceTrailingNotice({
+        role: "assistant",
+        notice: true,
+        content: `${moved} Replies below this line come from a different model than the ones above.`,
+      }),
+    );
   }, []);
 
   // Route the chat to a different provider, then re-check status so the pill
@@ -61,9 +160,13 @@ export function useAgent() {
       if (!trimmed || busy) return;
 
       // History is role + content only; tool steps are display-only and never
-      // replayed (each turn runs a fresh tool loop).
+      // replayed (each turn runs a fresh tool loop). Notices are dropped for a
+      // stronger reason: they are the shell talking about the conversation, and
+      // replaying one would present it as something the assistant said.
       const history: ChatMessage[] = [
-        ...messages.map(({ role, content }) => ({ role, content })),
+        ...messages
+          .filter((m) => !m.notice)
+          .map(({ role, content }) => ({ role, content })),
         { role: "user", content: trimmed },
       ];
       setMessages((prev) => [
@@ -71,6 +174,9 @@ export function useAgent() {
         { role: "user", content: trimmed },
         { role: "assistant", content: "", steps: [] },
       ]);
+      // Whatever is resolved now is what serves this turn, and what a later
+      // change is measured against.
+      answeredBy.current = identityOf(status);
       setBusy(true);
 
       const controller = new AbortController();
@@ -107,8 +213,26 @@ export function useAgent() {
         abortRef.current = null;
       }
     },
-    [messages, busy],
+    [messages, busy, status],
   );
 
-  return { messages, status, busy, send, provider, setProvider };
+  /**
+   * Start a fresh thread.
+   *
+   * The transcript is the model's context, not just a display log: every turn
+   * replays it, so one wrong answer keeps regenerating itself. A small model
+   * asked what it is will copy its own earlier reply over anything the system
+   * prompt says, which made an old answer outlive the prompt that produced it.
+   * Discarding the history is the only way back, so it needs a control.
+   */
+  const clear = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setMessages([]);
+    // A cleared thread has no last turn to measure a change against.
+    answeredBy.current = null;
+    setBusy(false);
+  }, []);
+
+  return { messages, status, busy, send, clear, provider, setProvider };
 }
