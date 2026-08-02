@@ -14,6 +14,7 @@ import { MODULE_ICONS } from "./icons";
 import { Logo } from "./Logo";
 import { ModuleDock } from "./ModuleDock";
 import { ModuleSlot, type ModuleView } from "./ModuleSlot";
+import { ResizeHandles } from "./ResizeHandles";
 import { ServerStatus } from "./ServerStatus";
 import {
   loadSession,
@@ -22,6 +23,13 @@ import {
   type WindowPlacement,
 } from "./session";
 import { TitleBar } from "./TitleBar";
+import {
+  clampAllToDesk,
+  clampToDesk,
+  dropZoneForCard,
+  isDeskMeasurable,
+  snapZoneForDrag,
+} from "./windowing";
 import "./shell.css";
 
 // Prototype shell (see the UI-overhaul discussion). Flow:
@@ -54,11 +62,6 @@ import "./shell.css";
 // launcher" rather than a minimize/restore click.
 const HOLD_MS = 500;
 
-// Width (px) of the desk-edge hot zones that snap a dragged window, and the
-// larger corner boxes that snap it to a quarter.
-const SNAP_EDGE = 48;
-const SNAP_CORNER = 110;
-
 // How long a closing window stays rendered for its fade-out (matches the
 // win-close animation in shell.css).
 const CLOSE_MS = 200;
@@ -70,9 +73,6 @@ const CLOSE_MS = 200;
 const ADDABLE_MODULE_IDS = MODULES.map((m) => m.id).filter(
   (id) => id !== "agent",
 );
-
-const clamp = (v: number, lo: number, hi: number) =>
-  Math.min(Math.max(v, lo), Math.max(lo, hi));
 
 // Caption for the dock-drag drop preview.
 const ZONE_LABEL: Record<SnapZone, string> = {
@@ -170,19 +170,8 @@ export function AppShell() {
       const rect = desk.getBoundingClientRect();
       // Mid-collapse (the 0fr column animating) the desk is momentarily tiny;
       // clamping against that would pile every window into the corner.
-      if (rect.width < 240 || rect.height < 160) return;
-      setWindows((prev) => {
-        let changed = false;
-        const next = prev.map((w) => {
-          if (w.zone !== null) return w;
-          const x = clamp(w.x, 0, rect.width - w.w);
-          const y = clamp(w.y, 0, rect.height - w.h);
-          if (x === w.x && y === w.y) return w;
-          changed = true;
-          return { ...w, x, y };
-        });
-        return changed ? next : prev;
-      });
+      if (!isDeskMeasurable(rect)) return;
+      setWindows((prev) => clampAllToDesk(prev, rect));
     });
     ro.observe(desk);
     return () => ro.disconnect();
@@ -422,28 +411,8 @@ export function AppShell() {
         x: ev.clientX - drag.deskRect.left - drag.grabX,
         y: ev.clientY - drag.deskRect.top - drag.grabY,
       });
-      // Corners beat edges (a wider hot box, or quarters would be
-      // unreachable); then top = maximize, sides = halves.
-      const nearL = ev.clientX - drag.deskRect.left < SNAP_CORNER;
-      const nearR = drag.deskRect.right - ev.clientX < SNAP_CORNER;
-      const nearT = ev.clientY - drag.deskRect.top < SNAP_CORNER;
-      const nearB = drag.deskRect.bottom - ev.clientY < SNAP_CORNER;
       updateSnapHint(
-        nearL && nearT
-          ? "top-left"
-          : nearR && nearT
-            ? "top-right"
-            : nearL && nearB
-              ? "bottom-left"
-              : nearR && nearB
-                ? "bottom-right"
-                : ev.clientY - drag.deskRect.top < SNAP_EDGE
-                  ? "max"
-                  : ev.clientX - drag.deskRect.left < SNAP_EDGE
-                    ? "left"
-                    : drag.deskRect.right - ev.clientX < SNAP_EDGE
-                      ? "right"
-                      : null,
+        snapZoneForDrag({ x: ev.clientX, y: ev.clientY }, drag.deskRect),
       );
     };
 
@@ -466,15 +435,7 @@ export function AppShell() {
       // Keep a free window inside the desk, measured fresh at release.
       const rect = deskRef.current?.getBoundingClientRect() ?? drag.deskRect;
       setWindows((prev) =>
-        prev.map((w) =>
-          w.id === drag.id
-            ? {
-                ...w,
-                x: clamp(w.x, 0, rect.width - w.w),
-                y: clamp(w.y, 0, rect.height - w.h),
-              }
-            : w,
-        ),
+        prev.map((w) => (w.id === drag.id ? clampToDesk(w, rect) : w)),
       );
     };
 
@@ -561,9 +522,15 @@ export function AppShell() {
         isFsAvailable ? " shell--desktop" : ""
       }`}
     >
-      {/* Desktop-only custom window chrome (drag strip + min/max/close); the
-          native decorations are off in tauri.conf.json. */}
-      {isFsAvailable && <TitleBar />}
+      {/* Desktop-only custom window chrome; the native decorations are off in
+          tauri.conf.json, so both halves of the frame are ours: TitleBar is the
+          drag strip and min/max/close, ResizeHandles the edge grips. */}
+      {isFsAvailable && (
+        <>
+          <TitleBar />
+          <ResizeHandles />
+        </>
+      )}
 
       {/* One persistent logo: it transitions between the intro's centered/large
           position and the app's top-middle resting spot. In the app it's the
@@ -662,25 +629,11 @@ export function AppShell() {
                     onDragOver={(e) => {
                       e.preventDefault();
                       e.dataTransfer.dropEffect = "copy";
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      const fx = (e.clientX - rect.left) / rect.width;
-                      const fy = (e.clientY - rect.top) / rect.height;
-                      // Sides split vertically into quarter corners around a
-                      // half-height middle band; the centre opens centred.
                       setDropZone(
-                        fx < 0.3
-                          ? fy < 0.33
-                            ? "top-left"
-                            : fy > 0.67
-                              ? "bottom-left"
-                              : "left"
-                          : fx > 0.7
-                            ? fy < 0.33
-                              ? "top-right"
-                              : fy > 0.67
-                                ? "bottom-right"
-                                : "right"
-                            : "center",
+                        dropZoneForCard(
+                          { x: e.clientX, y: e.clientY },
+                          e.currentTarget.getBoundingClientRect(),
+                        ),
                       );
                     }}
                     onDragLeave={() => setDropZone(null)}

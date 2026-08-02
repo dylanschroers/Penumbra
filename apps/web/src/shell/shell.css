@@ -272,6 +272,81 @@
   color: #fff;
 }
 
+/* ---- Window resize grips (desktop) ------------------------------------- */
+
+/* Invisible strips over the window's own edges, standing in for the native
+   resize border that `decorations: false` removed. 6px rather than the ~4px
+   Windows uses: the cursor has to change before the press to be aimable, and a
+   couple of extra pixels is the difference between "snappy" and "fiddly".
+
+   Above .titlebar (z 100) so the top edge resizes instead of dragging the
+   window, which is what the native frame does too. The same rule puts them over
+   the dock's bottom 6px — a dock that opens on hover loses a sliver of its
+   trigger area, in exchange for the bottom edge being resizable at all. */
+.resize-grip {
+  position: fixed;
+  z-index: 101;
+}
+
+.resize-grip--n,
+.resize-grip--s {
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: ns-resize;
+}
+.resize-grip--n {
+  top: 0;
+}
+.resize-grip--s {
+  bottom: 0;
+}
+
+.resize-grip--w,
+.resize-grip--e {
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+.resize-grip--w {
+  left: 0;
+}
+.resize-grip--e {
+  right: 0;
+}
+
+/* Corners overlap the edges they meet and are painted after them, so they take
+   the pointer there. Wider than the edges because a diagonal drag is aimed at a
+   point rather than a line. */
+.resize-grip--nw,
+.resize-grip--ne,
+.resize-grip--sw,
+.resize-grip--se {
+  width: 14px;
+  height: 14px;
+}
+.resize-grip--nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+.resize-grip--se {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
+}
+.resize-grip--ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+.resize-grip--sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+
 /* ---- Server status (top-right) ----------------------------------------- */
 
 .server-status {
@@ -359,8 +434,11 @@
   word-break: break-all;
 }
 
+/* Stacked since the bearer joined the address: three controls side by side left
+   each too narrow to read a URL or a token in. */
 .server-status__form {
   display: flex;
+  flex-direction: column;
   gap: 0.4rem;
 }
 
@@ -378,6 +456,13 @@
 .server-status__input:focus {
   outline: none;
   border-color: var(--primary);
+}
+
+.server-status__hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--muted);
 }
 
 /* ---- Body (sidebar + stage) -------------------------------------------- */
