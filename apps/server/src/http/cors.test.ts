@@ -24,11 +24,9 @@ afterEach(async () => {
 async function serve(allowedFromEnv?: string): Promise<FastifyInstance> {
   const instance = Fastify();
   await instance.register(cors, { origin: allowedOrigins(allowedFromEnv) });
-  instance.post(
-    "/agent/chat",
-    { preHandler: requireAuth(undefined) },
-    async () => ({ ok: true }),
-  );
+  instance.post("/agent/chat", { preHandler: requireAuth({}) }, async () => ({
+    ok: true,
+  }));
   return instance;
 }
 
