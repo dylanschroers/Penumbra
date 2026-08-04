@@ -30,5 +30,8 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const body = (await res.json().catch(() => ({}))) as { message?: string };
     throw new Error(body.message ?? `server responded ${res.status}`);
   }
+  // A 204 carries no body — parsing one as JSON would throw. Revoking a device
+  // is the caller that returns one.
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }

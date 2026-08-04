@@ -26,6 +26,32 @@ async function build(token?: string): Promise<void> {
 beforeEach(() => build());
 afterEach(() => app.close());
 
+describe("GET /auth/context", () => {
+  it("reports loopback for a same-machine caller", async () => {
+    const res = await app.inject({ method: "GET", url: "/auth/context" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ loopback: true, requiresToken: false });
+  });
+
+  // Ungated: a device with no credential still needs to learn it is off-machine
+  // and cannot enrol here, rather than being refused with no explanation.
+  it("answers a remote caller without a credential", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/auth/context",
+      headers: REMOTE,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().loopback).toBe(false);
+  });
+
+  it("reports a shared secret when one is set", async () => {
+    await build("shared-secret");
+    const res = await app.inject({ method: "GET", url: "/auth/context" });
+    expect(res.json().requiresToken).toBe(true);
+  });
+});
+
 describe("enrolment is gated", () => {
   it("serves loopback when nothing is configured — the bootstrap path", async () => {
     const res = await app.inject({ method: "GET", url: "/auth/devices" });

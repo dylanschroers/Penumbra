@@ -19,8 +19,9 @@ import type { DeviceStore } from "../devices/store";
 
 /** Loopback callers are inside the trust boundary the v0 model assumes. It is
  *  also the enrolment path: the first device is issued from the machine the
- *  server runs on, where there is no credential to present yet. */
-function isLoopback(ip: string): boolean {
+ *  server runs on, where there is no credential to present yet. Exported so the
+ *  context route can report the same judgement the gate makes. */
+export function isLoopback(ip: string): boolean {
   return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
 }
 

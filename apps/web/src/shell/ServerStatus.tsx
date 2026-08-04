@@ -1,4 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import { DevicePanel } from "../devices/DevicePanel";
+import { useDevices } from "../devices/useDevices";
 import { getAgentToken, getServerUrl, setAgentToken } from "../serverAddress";
 import {
   getSyncStatus,
@@ -35,6 +37,9 @@ export function ServerStatus() {
   // it does not match what the server was started with.
   const [token, setToken] = useState(() => getAgentToken() ?? "");
   const ref = useRef<HTMLDivElement>(null);
+  // Fetched only while the menu is open. Its admin controls render only when the
+  // server reports this caller as loopback — see DevicePanel.
+  const devices = useDevices(open);
 
   // Live status: sync rounds dispatch SYNC_STATUS_EVENT as they settle.
   useEffect(() => {
@@ -126,10 +131,12 @@ export function ServerStatus() {
               green on sync while the Lab and chat are refused. */}
           <p className="server-status__hint">
             Needed for the assistant and the Model Lab when the server is on
-            another machine — it must match that server's PENUMBRA_AGENT_TOKEN.
-            Sync works without it, so the dot can be green while those are still
-            refused.
+            another machine — it must match that server's PENUMBRA_AGENT_TOKEN,
+            or a device token issued below. Sync works without it, so the dot
+            can be green while those are still refused.
           </p>
+
+          <DevicePanel devices={devices} />
         </div>
       )}
     </div>
