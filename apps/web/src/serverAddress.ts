@@ -36,6 +36,11 @@ import {
 const SERVER_URL_KEY = `${STORAGE_NAMESPACE}.sync.server-url.v1`;
 const LEGACY_SERVER_URL_KEY = "penumbra.serverUrl";
 const AGENT_TOKEN_KEY = `${STORAGE_NAMESPACE}.server.agent-token.v1`;
+const HISTORY_KEY = `${STORAGE_NAMESPACE}.server.history.v1`;
+
+/** How many past servers to keep. A few more than the pill shows, so forgetting
+ *  or leaving one still leaves the list populated. */
+const HISTORY_MAX = 5;
 
 /** The deployment default, used until an address is set in the UI. */
 export const DEFAULT_SERVER_URL: string = normalizeBaseUrl(
@@ -128,4 +133,76 @@ export function setAgentToken(token: string): void {
  */
 export function authHeaders(): Record<string, string> {
   return agentToken ? { Authorization: `Bearer ${agentToken}` } : {};
+}
+
+/**
+ * One server the app has connected to before.
+ *
+ * The token rides along so reconnecting is one click rather than re-pasting a
+ * bearer — the address and the token are one fact, the same reason they are
+ * edited together in the pill. It is the same class of secret already in this
+ * browser, not a new exposure; the UI still never renders it.
+ */
+export interface ServerHistoryEntry {
+  url: string;
+  token: string;
+  /** When it was last connected to, for ordering and a relative label. */
+  at: string;
+}
+
+function loadHistory(): ServerHistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    if (!Array.isArray(parsed)) return [];
+    // Tolerate a malformed or half-written entry rather than throwing the whole
+    // list away: keep only the ones with the shape we wrote.
+    return parsed.filter(
+      (e): e is ServerHistoryEntry =>
+        !!e &&
+        typeof e.url === "string" &&
+        typeof e.token === "string" &&
+        typeof e.at === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+export function getServerHistory(): ServerHistoryEntry[] {
+  return loadHistory();
+}
+
+/**
+ * Note a server the app just reached. Called on a proven connection, not on a
+ * mere address change, so the list is "servers that answered" and holds no
+ * typos.
+ *
+ * Deduped by address, newest first: reconnecting to a known server moves it to
+ * the front and refreshes its token rather than adding a second row.
+ */
+export function recordConnection(url: string, token: string): void {
+  const normalized = normalizeBaseUrl(url);
+  const rest = loadHistory().filter((e) => e.url !== normalized);
+  const next: ServerHistoryEntry[] = [
+    { url: normalized, token, at: new Date().toISOString() },
+    ...rest,
+  ].slice(0, HISTORY_MAX);
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+  } catch {
+    // Non-fatal: history just won't persist.
+  }
+}
+
+/** Drop one server from the list. The only way an entry leaves before it ages
+ *  out — a machine that is gone for good, or a token not worth keeping around. */
+export function forgetServer(url: string): void {
+  const normalized = normalizeBaseUrl(url);
+  const next = loadHistory().filter((e) => e.url !== normalized);
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+  } catch {
+    // Non-fatal.
+  }
 }

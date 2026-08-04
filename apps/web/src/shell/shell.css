@@ -469,6 +469,102 @@
   color: var(--muted);
 }
 
+/* ---- Recent servers (collapsible) -------------------------------------- */
+
+.recents {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.recents__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.recents__caret {
+  display: inline-block;
+  transition: transform 0.12s ease;
+}
+
+.recents__caret--open {
+  transform: rotate(90deg);
+}
+
+.recents__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.recents__row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.recents__pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.3rem 0.4rem;
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 3px);
+  cursor: pointer;
+}
+
+.recents__pick:hover {
+  border-color: var(--primary);
+}
+
+.recents__url {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.74rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recents__ago {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.recents__forget {
+  flex-shrink: 0;
+  width: 1.5rem;
+  padding: 0.25rem 0;
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) - 3px);
+  cursor: pointer;
+}
+
+.recents__forget:hover {
+  color: #e5484d;
+  border-color: var(--border);
+}
+
 /* ---- Device management (loopback only) --------------------------------- */
 
 .devices {
