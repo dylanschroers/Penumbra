@@ -1,13 +1,19 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { DevicePanel } from "../devices/DevicePanel";
 import { useDevices } from "../devices/useDevices";
-import { getAgentToken, getServerUrl, setAgentToken } from "../serverAddress";
+import {
+  getAgentToken,
+  getServerUrl,
+  type ServerHistoryEntry,
+  setAgentToken,
+} from "../serverAddress";
 import {
   getSyncStatus,
   SYNC_STATUS_EVENT,
   type SyncStatus,
   setServerUrl,
 } from "../sync/SyncClient";
+import { RecentServers } from "./RecentServers";
 
 // Top-right status pill: a coloured dot + label reflecting whether the last sync
 // round reached the server (that *is* the server-connection status). Clicking it
@@ -67,15 +73,28 @@ export function ServerStatus() {
     };
   }, [open]);
 
-  function connect(event: FormEvent) {
-    event.preventDefault();
-    const trimmed = address.trim();
+  /** Point the app at an address and bearer and test it. Shared by the form and
+   *  by picking a recent server, so both go through one path. */
+  function connectTo(nextUrl: string, nextToken: string) {
+    const trimmed = nextUrl.trim();
     if (!trimmed) return;
+    setAddress(trimmed);
+    setToken(nextToken);
     // Bearer first, so the round the address change triggers — and every gated
     // call after it — already carries the new one.
-    setAgentToken(token.trim());
+    setAgentToken(nextToken.trim());
     // setServerUrl persists + runs a round; the status updates via the event.
     void setServerUrl(trimmed);
+  }
+
+  function connect(event: FormEvent) {
+    event.preventDefault();
+    connectTo(address, token);
+  }
+
+  /** Reconnect to a server from the history list, restoring its stored token. */
+  function pickRecent(entry: ServerHistoryEntry) {
+    connectTo(entry.url, entry.token);
   }
 
   return (
@@ -135,6 +154,8 @@ export function ServerStatus() {
             or a device token issued below. Sync works without it, so the dot
             can be green while those are still refused.
           </p>
+
+          <RecentServers currentUrl={getServerUrl()} onPick={pickRecent} />
 
           <DevicePanel devices={devices} />
         </div>

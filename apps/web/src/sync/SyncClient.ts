@@ -6,7 +6,12 @@
 
 import type { PullTasksResult } from "@penumbra/shared";
 import { getDb } from "../db/client";
-import { getServerUrl, setServerUrlValue } from "../serverAddress";
+import {
+  getAgentToken,
+  getServerUrl,
+  recordConnection,
+  setServerUrlValue,
+} from "../serverAddress";
 
 // The server base URL is runtime-settable (see setServerUrl) so the user can
 // point the app at a server by IP from the UI. It lives in ../serverAddress
@@ -113,6 +118,13 @@ async function runRound(): Promise<void> {
       window.dispatchEvent(new CustomEvent(SYNC_EVENT));
     }
     // Every round ends in a pull, so reaching here proves the server answered.
+    // Record the server only on the transition into "connected", not every
+    // round — otherwise the interval would rewrite history every 15s. The token
+    // rides along so a later reconnect needs no re-paste; sync itself is ungated
+    // and does not use it.
+    if (status !== "connected") {
+      recordConnection(getServerUrl(), getAgentToken() ?? "");
+    }
     setStatus("connected");
   } catch (err) {
     // Offline or server down is the normal local-first case: stay quiet-ish and
