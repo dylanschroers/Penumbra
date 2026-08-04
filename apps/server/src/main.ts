@@ -15,6 +15,7 @@ import { sqlite } from "./db";
 import { registerDeviceRoutes } from "./devices/routes";
 import { createDeviceStore } from "./devices/store";
 import { allowedOrigins } from "./http/cors";
+import { trustProxyFromEnv } from "./http/trustProxy";
 import { createLabStore } from "./lab/jobs";
 import { registerLabRoutes } from "./lab/routes";
 import { createServerTaskStore } from "./store/tasks";
@@ -23,7 +24,16 @@ import { registerTaskSyncRoutes } from "./sync/tasks";
 
 // bodyLimit covers the Model Lab's upload chunks (a few MB each); the default
 // 1 MB would reject them. See registerLabRoutes → POST /lab/upload.
-const app = Fastify({ logger: true, bodyLimit: 16 * 1024 * 1024 });
+//
+// trustProxy is off unless PENUMBRA_TRUST_PROXY names the reverse proxy. Behind
+// one, the socket peer is the proxy, so without this every request would read as
+// loopback and the auth gate's local-only exemption would open to the network
+// (http/trustProxy.ts).
+const app = Fastify({
+  logger: true,
+  bodyLimit: 16 * 1024 * 1024,
+  trustProxy: trustProxyFromEnv(process.env.PENUMBRA_TRUST_PROXY),
+});
 
 // Raw binary bodies for the upload route; every other route stays JSON. Fastify
 // hands the handler a Buffer.
@@ -47,16 +57,16 @@ app.get("/health", async () => ({ status: "ok" }));
 const sync = createTaskSyncStore(sqlite);
 registerTaskSyncRoutes(app, sync);
 
-// Which Studios this server can reach, and which one each role uses. The
-// environment supplies the local default; anything set through /compute/targets
-// outranks it, so rotating Studio's key is a form in the UI rather than an edit
-// to .env and a restart.
 // Which devices may call the gated routes. Passed to every gate below, so a
 // token issued here reaches the agent, the lab, and the compute panel alike —
 // one credential per device rather than one per surface.
 const devices = createDeviceStore(sqlite);
 registerDeviceRoutes(app, { devices });
 
+// Which Studios this server can reach, and which one each role uses. The
+// environment supplies the local default; anything set through /compute/targets
+// outranks it, so rotating Studio's key is a form in the UI rather than an edit
+// to .env and a restart.
 const targets = createTargetStore(sqlite);
 registerComputeRoutes(app, { targets, devices });
 
