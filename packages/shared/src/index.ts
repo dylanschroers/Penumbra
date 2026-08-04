@@ -1,6 +1,7 @@
 // Public surface of @penumbra/shared — the single seam between server and clients.
 
 export * from "./compute";
+export * from "./devices";
 export * from "./engine";
 export * from "./eval";
 export * from "./identity";

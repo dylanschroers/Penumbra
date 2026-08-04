@@ -12,6 +12,8 @@ import { UnslothEngine } from "./agent/UnslothEngine";
 import { registerComputeRoutes } from "./compute/routes";
 import { createTargetStore } from "./compute/targets";
 import { sqlite } from "./db";
+import { registerDeviceRoutes } from "./devices/routes";
+import { createDeviceStore } from "./devices/store";
 import { allowedOrigins } from "./http/cors";
 import { createLabStore } from "./lab/jobs";
 import { registerLabRoutes } from "./lab/routes";
@@ -49,8 +51,14 @@ registerTaskSyncRoutes(app, sync);
 // environment supplies the local default; anything set through /compute/targets
 // outranks it, so rotating Studio's key is a form in the UI rather than an edit
 // to .env and a restart.
+// Which devices may call the gated routes. Passed to every gate below, so a
+// token issued here reaches the agent, the lab, and the compute panel alike —
+// one credential per device rather than one per surface.
+const devices = createDeviceStore(sqlite);
+registerDeviceRoutes(app, { devices });
+
 const targets = createTargetStore(sqlite);
-registerComputeRoutes(app, { targets });
+registerComputeRoutes(app, { targets, devices });
 
 // Tier 1: the model runs here and executes tools in-process against the store,
 // with no client in the turn loop (docs/SYNC.md → Server-side writes).
@@ -76,11 +84,11 @@ function chatEngine(): UnslothEngine {
     ...targets.resolve("chat"),
   });
 }
-registerAgentRoutes(app, { engine: currentEngine, targets, prompts });
+registerAgentRoutes(app, { engine: currentEngine, targets, prompts, devices });
 
 // Model Lab: fine-tuning, export, and benchmarking (docs/MODEL_LAB.md). Same
 // gate as the agent routes.
-registerLabRoutes(app, { store: createLabStore(sqlite), targets });
+registerLabRoutes(app, { store: createLabStore(sqlite), targets, devices });
 
 const port = Number(process.env.PORT ?? 3000);
 app.listen({ port, host: "0.0.0.0" }).catch((err) => {

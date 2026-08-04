@@ -6,6 +6,7 @@ import {
   targetId,
 } from "@penumbra/shared";
 import type { FastifyInstance } from "fastify";
+import type { DeviceStore } from "../devices/store";
 import { requireAuth } from "../http/auth";
 import { readInventory, StudioClient, StudioHttpError } from "../lab/studio";
 import {
@@ -93,6 +94,9 @@ export interface ComputeRouteOptions {
    *  which have no patience for real polling. */
   loadPollMs?: number;
   loadSettleMs?: number;
+  /** Issued device tokens, accepted alongside the shared secret. Optional so a
+   *  test can stand these routes up without a device store. */
+  devices?: DeviceStore;
 }
 
 export function registerComputeRoutes(
@@ -100,12 +104,13 @@ export function registerComputeRoutes(
   {
     targets,
     token = process.env.PENUMBRA_AGENT_TOKEN,
+    devices,
     makeClient = (_id, creds) => new StudioClient(creds),
     loadPollMs = LOAD_POLL_MS,
     loadSettleMs = LOAD_SETTLE_MS,
   }: ComputeRouteOptions,
 ): void {
-  const preHandler = requireAuth(token);
+  const preHandler = requireAuth({ token, devices });
 
   /** The Studio for a target, or null when it has no address yet. Built per
    *  call for the same reason the lab's is: a client is a URL and a header map,
