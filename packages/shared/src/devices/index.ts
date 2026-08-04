@@ -1,4 +1,6 @@
 export {
+  type AuthContext,
+  authContext,
   type Device,
   device,
   type IssueDeviceInput,
