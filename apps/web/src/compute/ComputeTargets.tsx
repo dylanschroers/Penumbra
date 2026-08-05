@@ -163,6 +163,21 @@ function TargetCard({
         </div>
       )}
 
+      {/* Stop it from here. The mirror of launch: shown while it is up (any
+          state but stopped) and only where the stop can reach, so pressing it
+          somewhere it cannot work is not offered. */}
+      {target.canStop && target.state !== "stopped" && (
+        <div className="ct__launch">
+          <button
+            type="button"
+            disabled={compute.stopping === target.id}
+            onClick={() => void compute.stop(target.id)}
+          >
+            {compute.stopping === target.id ? "Stopping…" : "Stop Studio"}
+          </button>
+        </div>
+      )}
+
       {/* Which model this target is serving, and a way to change it. Only for a
           target that is answering: a list from an unreachable Studio would be
           stale, and loading into one is not a thing that can happen. */}

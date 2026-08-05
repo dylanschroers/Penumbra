@@ -11,8 +11,11 @@ import { isLoopback, requireAuth } from "../http/auth";
 import { readInventory, StudioClient, StudioHttpError } from "../lab/studio";
 import {
   isLaunchConfigured,
+  isStopConfigured,
   type LaunchOutcome,
   launchStudio,
+  type StopOutcome,
+  stopStudio,
 } from "./studioLauncher";
 import {
   ROLES,
@@ -108,6 +111,11 @@ export interface ComputeRouteOptions {
   /** Whether a launch command is configured at all. Injected so a test can
    *  drive the button-visibility and refusal paths without touching the env. */
   launchConfigured?: boolean;
+  /** Stops the local Studio. Injected so a test can assert it without a real
+   *  server to shut down. */
+  stop?: () => StopOutcome;
+  /** Whether a stop command is configured at all. */
+  stopConfigured?: boolean;
 }
 
 export function registerComputeRoutes(
@@ -121,6 +129,8 @@ export function registerComputeRoutes(
     loadSettleMs = LOAD_SETTLE_MS,
     launch = () => launchStudio(),
     launchConfigured = isLaunchConfigured(),
+    stop = () => stopStudio(),
+    stopConfigured = isStopConfigured(),
   }: ComputeRouteOptions,
 ): void {
   const preHandler = requireAuth({ token, devices });
@@ -143,7 +153,9 @@ export function registerComputeRoutes(
       // Only a loopback caller can launch, so the flag is decided per request:
       // the same listing off-machine reports canLaunch false and hides the
       // button rather than offering one the launch route would refuse.
-      const launchable = launchConfigured && isLoopback(req.ip);
+      const onMachine = isLoopback(req.ip);
+      const launchable = launchConfigured && onMachine;
+      const stoppable = stopConfigured && onMachine;
       // An unconfigured target has no address to probe, and "stopped" with
       // nothing serving is the honest answer for one that does not exist yet.
       const idle = { state: "stopped" as const, served: null };
@@ -165,6 +177,7 @@ export function registerComputeRoutes(
           servedModel: probes[i]?.served ?? null,
           // Local only: there is no spawning a process on a remote target.
           canLaunch: t.id === "local" && launchable,
+          canStop: t.id === "local" && stoppable,
         })),
         assignments: Object.fromEntries(
           ROLES.map((r) => [r, targets.assignment(r)]),
@@ -331,6 +344,47 @@ export function registerComputeRoutes(
           .send({ error: outcome.reason, message: outcome.message });
       }
       return reply.code(202).send({ launching: true });
+    },
+  );
+
+  /**
+   * Stop the local Studio.
+   *
+   * Same gate as launch — loopback-only, local-only. Fire-and-forget: the stop
+   * command signals Studio to shut down, and the /compute/targets poll turns the
+   * card stopped. No already-stopped guard: stopping something already down is a
+   * harmless no-op, and racing a probe against a shutdown is not worth the round
+   * trip.
+   */
+  app.post<{ Params: { id: string } }>(
+    "/compute/targets/:id/stop",
+    { preHandler },
+    async (req, reply) => {
+      if (!isLoopback(req.ip)) {
+        return reply.code(403).send({
+          error: "local_only",
+          message: "Studio can only be stopped from the server's own machine.",
+        });
+      }
+      if (req.params.id !== "local") {
+        return reply.code(409).send({
+          error: "not_stoppable",
+          message: "Only the local Studio can be stopped from here.",
+        });
+      }
+      if (!stopConfigured) {
+        return reply.code(409).send({
+          error: "not_configured",
+          message: "No stop command is set (UNSLOTH_STOP_CMD).",
+        });
+      }
+      const outcome = stop();
+      if (!outcome.ok) {
+        return reply
+          .code(500)
+          .send({ error: outcome.reason, message: outcome.message });
+      }
+      return reply.code(202).send({ stopping: true });
     },
   );
 

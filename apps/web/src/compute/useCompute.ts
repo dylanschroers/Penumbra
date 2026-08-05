@@ -52,6 +52,10 @@ export interface Compute {
   /** The target being started, if any — held through the ~45s cold start so the
    *  button can say so, cleared when the poll reports it ready. */
   launching: TargetId | null;
+  /** Stop the local Studio (loopback only). */
+  stop: (id: TargetId) => Promise<void>;
+  /** The target being stopped, if any — held until the poll reports it down. */
+  stopping: TargetId | null;
 }
 
 /**
@@ -67,6 +71,7 @@ export function useCompute(enabled = true): Compute {
   >({});
   const [loading, setLoading] = useState<TargetId | null>(null);
   const [launching, setLaunching] = useState<TargetId | null>(null);
+  const [stopping, setStopping] = useState<TargetId | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -173,6 +178,33 @@ export function useCompute(enabled = true): Compute {
     if (s && s !== "stopped") setLaunching(null);
   }, [launching, state]);
 
+  const stop = useCallback(
+    async (id: TargetId) => {
+      setStopping(id);
+      // Studio shuts down in a second or two, but give the state a cap in case
+      // the stop command never lands rather than pinning the button.
+      window.setTimeout(() => {
+        setStopping((cur) => (cur === id ? null : cur));
+      }, 30_000);
+      try {
+        await api(`/compute/targets/${id}/stop`, { method: "POST" });
+        setError(null);
+        await refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        setStopping((cur) => (cur === id ? null : cur));
+      }
+    },
+    [refresh],
+  );
+
+  // Clear once the poll confirms it is down.
+  useEffect(() => {
+    if (!stopping) return;
+    const s = state?.targets.find((t) => t.id === stopping)?.state;
+    if (s === "stopped") setStopping(null);
+  }, [stopping, state]);
+
   return {
     state,
     error,
@@ -183,6 +215,8 @@ export function useCompute(enabled = true): Compute {
     loading,
     launch,
     launching,
+    stop,
+    stopping,
     // Send only what changed: an omitted field keeps its current value, while
     // an empty apiKey is an explicit "no bearer".
     setTarget: (id, patch) =>
