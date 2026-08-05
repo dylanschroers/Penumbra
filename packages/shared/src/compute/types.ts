@@ -64,6 +64,10 @@ export const computeTarget = z.object({
    * the button never appears where it could not work.
    */
   canLaunch: z.boolean().default(false),
+  /** Whether this target can be *stopped* from here. Same conditions as
+   *  `canLaunch` against the stop command, so the Stop button appears only on
+   *  the local Studio, from its own machine, when a stop command is set. */
+  canStop: z.boolean().default(false),
 });
 
 export const computeState = z.object({

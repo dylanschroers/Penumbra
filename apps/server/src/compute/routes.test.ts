@@ -3,7 +3,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type StudioClient, StudioHttpError } from "../lab/studio";
 import { registerComputeRoutes } from "./routes";
-import type { LaunchOutcome } from "./studioLauncher";
+import type { LaunchOutcome, StopOutcome } from "./studioLauncher";
 import { createTargetStore, type TargetStore } from "./targets";
 
 // The HTTP surface over compute targets. Most of these cases came from
@@ -645,6 +645,154 @@ describe("POST /compute/targets/:id/launch", () => {
     expect(
       body.targets.find((t: { id: string }) => t.id === "local"),
     ).toMatchObject({ canLaunch: false });
+  });
+});
+
+// Stopping the local Studio. Same strict gate as launch — loopback required on
+// top of auth, local target only — but simpler: no probe, since stopping an
+// already-stopped Studio is a harmless no-op.
+describe("POST /compute/targets/:id/stop", () => {
+  /** Rebuild the app with an injected stopper, so nothing here shuts a real
+   *  server down. */
+  async function withStopper(opts: {
+    stop?: () => StopOutcome;
+    stopConfigured?: boolean;
+    token?: string;
+  }) {
+    await app.close();
+    app = Fastify();
+    registerComputeRoutes(app, {
+      targets,
+      token: opts.token,
+      stop: opts.stop ?? (() => ({ ok: true })),
+      stopConfigured: opts.stopConfigured ?? true,
+      // A fast fake probe so the /compute/targets listing doesn't reach for a
+      // real Studio (which would hang the canStop cases).
+      makeClient: () =>
+        ({
+          probe: async () => ({ state: "stopped" as const, served: null }),
+        }) as unknown as StudioClient,
+    });
+    await app.ready();
+    return app;
+  }
+
+  it("stops the local Studio for a loopback caller", async () => {
+    const stop = vi.fn((): StopOutcome => ({ ok: true }));
+    const app = await withStopper({ stop });
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/stop",
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ stopping: true });
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a non-loopback caller", async () => {
+    const stop = vi.fn((): StopOutcome => ({ ok: true }));
+    const app = await withStopper({ stop });
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/stop",
+      remoteAddress: "192.168.1.50",
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe("local_only");
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  // Loopback is required on top of the token, not instead of it: a valid device
+  // token from another machine still cannot stop a process here.
+  it("refuses a valid token from off-machine", async () => {
+    const stop = vi.fn((): StopOutcome => ({ ok: true }));
+    const app = await withStopper({ stop, token: "secret" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/stop",
+      headers: { authorization: "Bearer secret" },
+      remoteAddress: "192.168.1.50",
+    });
+    expect(res.statusCode).toBe(403);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("will not stop a remote target", async () => {
+    const stop = vi.fn((): StopOutcome => ({ ok: true }));
+    const app = await withStopper({ stop });
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/colab/stop",
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("not_stoppable");
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("refuses when stopping is not configured", async () => {
+    const stop = vi.fn((): StopOutcome => ({ ok: true }));
+    const app = await withStopper({ stop, stopConfigured: false });
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/stop",
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("not_configured");
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("maps a failed spawn to 500", async () => {
+    const app = await withStopper({
+      stop: (): StopOutcome => ({ ok: false, reason: "spawn_failed" }),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/stop",
+    });
+    expect(res.statusCode).toBe(500);
+  });
+
+  it("reports canStop on local for a loopback caller, and not off-machine", async () => {
+    await withStopper({ stopConfigured: true });
+
+    const near = (await app.inject({ url: "/compute/targets" })).json();
+    expect(
+      near.targets.find((t: { id: string }) => t.id === "local"),
+    ).toMatchObject({ canStop: true });
+    expect(
+      near.targets.find((t: { id: string }) => t.id === "colab"),
+    ).toMatchObject({ canStop: false });
+
+    await app.close();
+    app = Fastify();
+    registerComputeRoutes(app, {
+      targets,
+      token: "secret",
+      stopConfigured: true,
+      makeClient: () =>
+        ({
+          probe: async () => ({ state: "stopped" as const, served: null }),
+        }) as unknown as StudioClient,
+    });
+    await app.ready();
+    const far = (
+      await app.inject({
+        url: "/compute/targets",
+        headers: { authorization: "Bearer secret" },
+        remoteAddress: "192.168.1.50",
+      })
+    ).json();
+    expect(
+      far.targets.find((t: { id: string }) => t.id === "local"),
+    ).toMatchObject({ canStop: false });
+  });
+
+  it("reports canStop false everywhere when stopping is disabled", async () => {
+    const app = await withStopper({ stopConfigured: false });
+    const body = (await app.inject({ url: "/compute/targets" })).json();
+    expect(
+      body.targets.find((t: { id: string }) => t.id === "local"),
+    ).toMatchObject({ canStop: false });
   });
 });
 

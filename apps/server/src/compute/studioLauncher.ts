@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 
-// Starting the local Unsloth Studio from the UI.
+// Starting and stopping the local Unsloth Studio from the UI.
 //
 // Studio is co-located with this server on the GPU host (docs/MODEL_LAB.md →
 // Deployment topology), so the server is in a position to start the process;
@@ -82,4 +82,53 @@ export function launchStudio(spawnFn: typeof spawn = spawn): LaunchOutcome {
  *  next's. */
 export function resetLaunchDebounce(): void {
   launchingUntil = 0;
+}
+
+/**
+ * The stop command, or null when stopping is disabled.
+ *
+ * Defaults to `unsloth studio stop`, which the CLI ships to signal a running
+ * server to shut down (verified). Set UNSLOTH_STOP_CMD to override it, or empty
+ * to hide the Stop button and refuse the route.
+ */
+export function stopCommand(): string | null {
+  const v = process.env.UNSLOTH_STOP_CMD;
+  if (v === undefined) return "unsloth studio stop";
+  const trimmed = v.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+export function isStopConfigured(): boolean {
+  return stopCommand() !== null;
+}
+
+export type StopOutcome =
+  | { ok: true }
+  | { ok: false; reason: "not_configured" | "spawn_failed"; message?: string };
+
+/**
+ * Fire the configured stop command, detached and fire-and-forget like the
+ * launch — the route returns at once and the /compute/targets poll reflects the
+ * target going stopped. Also clears the launch debounce, so a stop-then-launch
+ * is not refused as still-launching.
+ */
+export function stopStudio(spawnFn: typeof spawn = spawn): StopOutcome {
+  const cmd = stopCommand();
+  if (!cmd) return { ok: false, reason: "not_configured" };
+  try {
+    const child: ChildProcess = spawnFn(cmd, {
+      shell: true,
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    launchingUntil = 0;
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: "spawn_failed",
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
