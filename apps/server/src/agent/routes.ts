@@ -2,6 +2,7 @@ import type { AgentEvent, ChatMessage, Engine } from "@penumbra/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { TargetStore } from "../compute/targets";
+import type { DeviceStore } from "../devices/store";
 import { requireAuth } from "../http/auth";
 import { openSseStream } from "../http/sse";
 import type { PromptStore } from "./prompt";
@@ -36,6 +37,9 @@ export interface AgentRouteOptions {
   prompts?: PromptStore;
   /** Shared secret; when unset the routes serve loopback only. */
   token?: string;
+  /** Issued device tokens, accepted alongside the shared secret. Optional so a
+   *  test can stand these routes up without a device store. */
+  devices?: DeviceStore;
 }
 
 export function registerAgentRoutes(
@@ -45,9 +49,10 @@ export function registerAgentRoutes(
     targets,
     prompts,
     token = process.env.PENUMBRA_AGENT_TOKEN,
+    devices,
   }: AgentRouteOptions,
 ): void {
-  const preHandler = requireAuth(token);
+  const preHandler = requireAuth({ token, devices });
 
   // The whole prompt, both halves: "see the system prompt" is not answered by
   // showing only the part that happens to be editable. `policy` is read-only.

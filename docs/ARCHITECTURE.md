@@ -256,17 +256,28 @@ Current posture, honestly stated:
   a browser dials `localhost` *from* `127.0.0.1`, so any page the user merely
   visited could POST `/agent/chat` and read the reply. The gate below stops the
   request only once a token is set, and unset is the default.
-- **The actuator routes do have a gate.** `/agent/*` and `/lab/*` run models
-  with write and delete tools, spawn training jobs, and write files, so they sit
-  behind `requireAuth` (`apps/server/src/http/auth.ts`): a bearer token when
-  `PENUMBRA_AGENT_TOKEN` is set, loopback-only when it is not. There is
-  deliberately no open mode — an unconfigured server cannot expose an actuator
-  to the network by accident. The client keeps its copy of that bearer in
-  `localStorage` beside the server address (`web/src/serverAddress.ts`), set
-  from the status pill; `VITE_AGENT_TOKEN` is only the initial default. Neither
-  place is a secret from the user's own browser — the build-time value was
-  inlined into the shipped JavaScript — but per-device storage at least keeps it
-  out of every copy of the build.
+- **The actuator routes do have a gate.** `/agent/*`, `/lab/*`, and
+  `/compute/*` run models with write and delete tools, spawn training jobs, and
+  write files, so they sit behind `requireAuth` (`apps/server/src/http/auth.ts`).
+  It accepts two kinds of bearer: a **per-device token** (`devices/store.ts`),
+  issued one per device and revocable on its own, or the older shared
+  **`PENUMBRA_AGENT_TOKEN`**. With neither presented, only loopback is served, so
+  an unconfigured server cannot expose an actuator to the network by accident;
+  there is deliberately no open mode. Device tokens are stored only as a SHA-256
+  and returned once at mint — a plain hash, not a KDF, because the secret is 32
+  bytes of CSPRNG output with no dictionary to grind. `/auth/devices` sits behind
+  the same gate it administers: loopback bootstraps the first device from the
+  server's own machine, and its token enrols the next from anywhere. The status
+  pill manages devices, but only when `GET /auth/context` reports the caller as
+  loopback — a stand-in for the admin flag that will later widen it. Behind a
+  reverse proxy, set `PENUMBRA_TRUST_PROXY` to the proxy's address so the gate
+  sees the real client rather than reading every forwarded request as loopback
+  (`apps/server/src/http/trustProxy.ts`). The client keeps its own bearer in
+  `localStorage` beside the server address (`web/src/serverAddress.ts`);
+  `VITE_AGENT_TOKEN` is only the initial default. Neither place is a secret from
+  the user's own browser — the build-time value was inlined into the shipped
+  JavaScript — but per-device storage at least keeps it out of every copy of the
+  build.
 - **Studio's key never leaves the server.** It is unscoped across that Studio's
   own surfaces — training, export, and inference alike — so no client-side code
   holds a Studio URL or key. Both targets' bearers, the Colab fallback's

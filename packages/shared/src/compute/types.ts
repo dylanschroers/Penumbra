@@ -54,6 +54,20 @@ export const computeTarget = z.object({
    * appears on the next poll.
    */
   servedModel: z.string().nullable().default(null),
+  /**
+   * Whether this target can be *started* from here.
+   *
+   * True only for the local Studio, only when the server has a launch command
+   * configured, and only for a caller on the server's own machine — starting it
+   * spawns a process on that host, which cannot be done for a remote target or
+   * on behalf of a client on another box. Off-loopback it is always false, so
+   * the button never appears where it could not work.
+   */
+  canLaunch: z.boolean().default(false),
+  /** Whether this target can be *stopped* from here. Same conditions as
+   *  `canLaunch` against the stop command, so the Stop button appears only on
+   *  the local Studio, from its own machine, when a stop command is set. */
+  canStop: z.boolean().default(false),
 });
 
 export const computeState = z.object({

@@ -14,6 +14,7 @@ import type {
   TargetId,
   TargetStore,
 } from "../compute/targets";
+import type { DeviceStore } from "../devices/store";
 import { requireAuth } from "../http/auth";
 import { openSseStream } from "../http/sse";
 import { lmEvalAvailable, runBenchmark } from "./benchmark";
@@ -68,6 +69,9 @@ export interface LabRouteOptions {
    *  assigned to the benchmark role. */
   inferenceURL?: string;
   token?: string;
+  /** Issued device tokens, accepted alongside the shared secret. Optional so a
+   *  test can stand these routes up without a device store. */
+  devices?: DeviceStore;
 }
 
 export function registerLabRoutes(
@@ -78,9 +82,10 @@ export function registerLabRoutes(
     makeClient = (_id, creds) => new StudioClient(creds),
     inferenceURL,
     token = process.env.PENUMBRA_AGENT_TOKEN,
+    devices,
   }: LabRouteOptions,
 ): void {
-  const preHandler = requireAuth(token);
+  const preHandler = requireAuth({ token, devices });
 
   /** The Studio for a target, or null when it has no address yet. Built per
    *  call rather than cached: a client is a URL and a header map, so there is

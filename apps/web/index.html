@@ -5,6 +5,100 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Penumbra</title>
+    <script>
+      // Boot watchdog. The whole app is one static import graph behind
+      // /src/main.tsx, so if any module in it fails to load the page never
+      // renders and #root stays blank — no React error boundary can catch that,
+      // because the tree it would live in never mounts. The one seen in the
+      // wild: a cold `tauri dev` start where Vite serves a `.sql?raw` migration
+      // module as `application/sql` before its pipeline is warm, and the browser
+      // refuses it as a script. This inline script runs before the module, so it
+      // is the only place that can react to it.
+      //
+      // On a boot failure it waits 500ms and reloads. That alone clears the
+      // cold-start race. Two rails keep it from becoming a trap:
+      //   * bounded — after MAX reloads still failing, it stops and shows the
+      //     error with a Reload button rather than looping forever;
+      //   * boot-scoped — once the app mounts it stands down (see the
+      //     __penumbraBooted() call at the end of main.tsx), so it never reloads
+      //     a running session out from under the user.
+      (() => {
+        var KEY = "penumbra-boot-retries";
+        var MAX = 2;
+        var booted = false;
+
+        window.__penumbraBooted = () => {
+          booted = true;
+          try {
+            sessionStorage.removeItem(KEY);
+          } catch (e) {}
+        };
+
+        function count() {
+          try {
+            return Number(sessionStorage.getItem(KEY)) || 0;
+          } catch (e) {
+            return 0;
+          }
+        }
+
+        function escapeHtml(s) {
+          return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+        }
+
+        function showError(detail) {
+          var root = document.getElementById("root");
+          if (!root) return;
+          root.innerHTML =
+            '<div style="font:14px system-ui,-apple-system,sans-serif;max-width:34rem;' +
+            'margin:14vh auto;padding:0 1.5rem;color:#24292f">' +
+            '<h1 style="font-size:1.15rem;margin:0 0 .5rem">Penumbra failed to start</h1>' +
+            '<p style="opacity:.75;margin:0 0 1rem">Reloaded and it still did not come ' +
+            "up. The error was:</p>" +
+            '<pre style="white-space:pre-wrap;background:#f6f8fa;border:1px solid #d0d7de;' +
+            'padding:.75rem;border-radius:6px;overflow:auto;margin:0">' +
+            escapeHtml(detail) +
+            "</pre>" +
+            '<button id="penumbra-retry" style="margin-top:1rem;padding:.5rem 1rem;' +
+            "border-radius:6px;border:1px solid #d0d7de;background:#f6f8fa;color:#24292f;" +
+            'cursor:pointer">Reload</button></div>';
+          var btn = document.getElementById("penumbra-retry");
+          if (btn)
+            btn.addEventListener("click", () => {
+              try {
+                sessionStorage.removeItem(KEY);
+              } catch (e) {}
+              location.reload();
+            });
+        }
+
+        function onFail(detail) {
+          if (booted) return; // a session that already came up — leave it be
+          var n = count();
+          if (n >= MAX) {
+            showError(detail); // stop looping; hand the error to the user
+            return;
+          }
+          try {
+            sessionStorage.setItem(KEY, String(n + 1));
+          } catch (e) {}
+          setTimeout(() => {
+            location.reload();
+          }, 500);
+        }
+
+        window.addEventListener("error", (e) => {
+          // Skip resource (img/link) load errors: those carry no JS error info
+          // and are not a dead boot.
+          if (!e.message && !e.error) return;
+          onFail(e.message || "Startup error");
+        });
+        window.addEventListener("unhandledrejection", (e) => {
+          var reason = e.reason;
+          onFail((reason && (reason.message || reason)) || "Startup error");
+        });
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

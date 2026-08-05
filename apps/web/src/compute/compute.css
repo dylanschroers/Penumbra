@@ -129,6 +129,19 @@
   gap: 0.35rem;
 }
 
+/* Launch-the-local-Studio control, shown only while it is down and only on the
+   server's own machine. */
+.ct__launch {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ct__launch-note {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
 .ct__roles {
   display: flex;
   flex-direction: column;
