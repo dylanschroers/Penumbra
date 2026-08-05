@@ -408,7 +408,11 @@
   position: absolute;
   top: calc(100% + 0.45rem);
   right: 0;
-  width: 250px;
+  width: 280px;
+  /* The device list can grow; cap the menu and let it scroll rather than run
+     off the viewport. */
+  max-height: min(70vh, 32rem);
+  overflow-y: auto;
   padding: 0.75rem;
   display: flex;
   flex-direction: column;
@@ -463,6 +467,214 @@
   font-size: 0.7rem;
   line-height: 1.4;
   color: var(--muted);
+}
+
+/* ---- Recent servers (collapsible) -------------------------------------- */
+
+.recents {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.recents__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.recents__caret {
+  display: inline-block;
+  transition: transform 0.12s ease;
+}
+
+.recents__caret--open {
+  transform: rotate(90deg);
+}
+
+.recents__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.recents__row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.recents__pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.3rem 0.4rem;
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 3px);
+  cursor: pointer;
+}
+
+.recents__pick:hover {
+  border-color: var(--primary);
+}
+
+.recents__url {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.74rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recents__ago {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.recents__forget {
+  flex-shrink: 0;
+  width: 1.5rem;
+  padding: 0.25rem 0;
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) - 3px);
+  cursor: pointer;
+}
+
+.recents__forget:hover {
+  color: #e5484d;
+  border-color: var(--border);
+}
+
+/* ---- Device management (loopback only) --------------------------------- */
+
+.devices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
+.devices__title {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.devices__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.devices__row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+}
+
+.devices__label {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.devices__meta {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.devices__row--revoked .devices__label {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.devices__revoke {
+  flex-shrink: 0;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 3px);
+  cursor: pointer;
+}
+
+.devices__revoke:hover:not(:disabled) {
+  color: #e5484d;
+  border-color: #e5484d;
+}
+
+.devices__empty {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.devices__minted {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--primary);
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.devices__minted-label {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.devices__token {
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  word-break: break-all;
+  user-select: all;
+}
+
+.devices__minted-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.devices__add {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.devices__error {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #e5484d;
 }
 
 /* ---- Body (sidebar + stage) -------------------------------------------- */

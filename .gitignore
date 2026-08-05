@@ -48,3 +48,9 @@ bench/
 
 # Machine-specific local Cargo linker override (see comment in the file)
 apps/desktop/src-tauri/.cargo/config.toml
+
+# Unsloth writes a compiled-kernel cache to its working directory; the "Launch
+# Studio" button (apps/server/src/compute/studioLauncher.ts) starts it with the
+# server's cwd, so this can land under the repo. It is a regenerated build
+# artifact, never source.
+unsloth_compiled_cache/
