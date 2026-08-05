@@ -47,6 +47,11 @@ export interface Compute {
   loadModel: (id: TargetId, model: string) => Promise<void>;
   /** The target with a load in flight, if any. */
   loading: TargetId | null;
+  /** Start the local Studio (loopback only; the button is hidden elsewhere). */
+  launch: (id: TargetId) => Promise<void>;
+  /** The target being started, if any — held through the ~45s cold start so the
+   *  button can say so, cleared when the poll reports it ready. */
+  launching: TargetId | null;
 }
 
 /**
@@ -61,6 +66,7 @@ export function useCompute(enabled = true): Compute {
     Partial<Record<TargetId, TargetInventory>>
   >({});
   const [loading, setLoading] = useState<TargetId | null>(null);
+  const [launching, setLaunching] = useState<TargetId | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -135,6 +141,38 @@ export function useCompute(enabled = true): Compute {
     [refresh, loadInventory],
   );
 
+  const launch = useCallback(
+    async (id: TargetId) => {
+      setLaunching(id);
+      // Give up the "starting" state after the cold-start window even if the
+      // poll never reports ready — unsloth missing, or a crash — so the button
+      // recovers rather than saying "starting" forever.
+      window.setTimeout(() => {
+        setLaunching((cur) => (cur === id ? null : cur));
+      }, 120_000);
+      try {
+        await api(`/compute/targets/${id}/launch`, { method: "POST" });
+        setError(null);
+        await refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        // It did not even start, so let the button return immediately.
+        setLaunching((cur) => (cur === id ? null : cur));
+      }
+    },
+    [refresh],
+  );
+
+  // Clear the moment it answers at all, rather than waiting out the cap. Any
+  // state but "stopped" means the process is up — "unauthorized" (its fresh key
+  // differs from the configured one) is now a key to paste, not a launch still
+  // in flight.
+  useEffect(() => {
+    if (!launching) return;
+    const s = state?.targets.find((t) => t.id === launching)?.state;
+    if (s && s !== "stopped") setLaunching(null);
+  }, [launching, state]);
+
   return {
     state,
     error,
@@ -143,6 +181,8 @@ export function useCompute(enabled = true): Compute {
     loadInventory,
     loadModel,
     loading,
+    launch,
+    launching,
     // Send only what changed: an omitted field keeps its current value, while
     // an empty apiKey is an explicit "no bearer".
     setTarget: (id, patch) =>

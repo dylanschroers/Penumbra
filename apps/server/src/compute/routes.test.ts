@@ -1,8 +1,9 @@
 import Database from "better-sqlite3";
 import Fastify, { type FastifyInstance } from "fastify";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type StudioClient, StudioHttpError } from "../lab/studio";
 import { registerComputeRoutes } from "./routes";
+import type { LaunchOutcome } from "./studioLauncher";
 import { createTargetStore, type TargetStore } from "./targets";
 
 // The HTTP surface over compute targets. Most of these cases came from
@@ -463,6 +464,187 @@ describe("DELETE /compute/targets/:id", () => {
     });
     await app.inject({ method: "DELETE", url: "/compute/targets/colab" });
     expect(colab(await get())).toMatchObject({ configured: false });
+  });
+});
+
+// Starting the local Studio from the panel. The gate here is stricter than the
+// rest of the surface — it spawns a process on the host — so loopback is
+// required on top of auth, and only the local target qualifies.
+describe("POST /compute/targets/:id/launch", () => {
+  /** Rebuild the app with an injected launcher and, optionally, a Studio probe
+   *  state, so nothing here starts a real server. */
+  async function withLauncher(opts: {
+    launch?: () => LaunchOutcome;
+    launchConfigured?: boolean;
+    probeState?: "ready" | "unauthorized" | "not_studio" | "stopped";
+    token?: string;
+  }) {
+    await app.close();
+    app = Fastify();
+    registerComputeRoutes(app, {
+      targets,
+      token: opts.token,
+      launch: opts.launch ?? (() => ({ ok: true })),
+      launchConfigured: opts.launchConfigured ?? true,
+      makeClient: () =>
+        ({
+          probe: async () => ({
+            state: opts.probeState ?? "stopped",
+            served: null,
+          }),
+        }) as unknown as StudioClient,
+    });
+    await app.ready();
+    return app;
+  }
+
+  it("launches the local Studio for a loopback caller", async () => {
+    const launch = vi.fn((): LaunchOutcome => ({ ok: true }));
+    const app = await withLauncher({ launch });
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/launch",
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ launching: true });
+    expect(launch).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a non-loopback caller even though it spawns nothing", async () => {
+    const launch = vi.fn((): LaunchOutcome => ({ ok: true }));
+    const app = await withLauncher({ launch });
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/launch",
+      remoteAddress: "192.168.1.50",
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe("local_only");
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  // Loopback is required on top of the token, not instead of it: a valid device
+  // token from another machine still cannot start a process here.
+  it("refuses a valid token from off-machine", async () => {
+    const launch = vi.fn((): LaunchOutcome => ({ ok: true }));
+    const app = await withLauncher({ launch, token: "secret" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/launch",
+      headers: { authorization: "Bearer secret" },
+      remoteAddress: "192.168.1.50",
+    });
+    expect(res.statusCode).toBe(403);
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  it("will not launch a remote target", async () => {
+    const launch = vi.fn((): LaunchOutcome => ({ ok: true }));
+    const app = await withLauncher({ launch });
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/colab/launch",
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("not_launchable");
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  it("refuses when launching is not configured", async () => {
+    const launch = vi.fn((): LaunchOutcome => ({ ok: true }));
+    const app = await withLauncher({ launch, launchConfigured: false });
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/launch",
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("not_configured");
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  // A Studio already answering means the port is taken; a second process would
+  // only fail to bind, so don't start one.
+  it("does not launch over a Studio that is already up", async () => {
+    const launch = vi.fn((): LaunchOutcome => ({ ok: true }));
+    const app = await withLauncher({ launch, probeState: "ready" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/compute/targets/local/launch",
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("already_running");
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  it("maps a failed spawn to 500 and a double-launch to 409", async () => {
+    const failed = await withLauncher({
+      launch: (): LaunchOutcome => ({ ok: false, reason: "spawn_failed" }),
+    });
+    expect(
+      (
+        await failed.inject({
+          method: "POST",
+          url: "/compute/targets/local/launch",
+        })
+      ).statusCode,
+    ).toBe(500);
+
+    const racing = await withLauncher({
+      launch: (): LaunchOutcome => ({ ok: false, reason: "already_launching" }),
+    });
+    expect(
+      (
+        await racing.inject({
+          method: "POST",
+          url: "/compute/targets/local/launch",
+        })
+      ).statusCode,
+    ).toBe(409);
+  });
+
+  it("reports canLaunch on local for a loopback caller, and not off-machine", async () => {
+    await withLauncher({ launchConfigured: true });
+
+    const near = (await app.inject({ url: "/compute/targets" })).json();
+    expect(
+      near.targets.find((t: { id: string }) => t.id === "local"),
+    ).toMatchObject({ canLaunch: true });
+    expect(
+      near.targets.find((t: { id: string }) => t.id === "colab"),
+    ).toMatchObject({ canLaunch: false });
+
+    // Off-loopback needs a token to be served at all; the point is canLaunch is
+    // false even so.
+    await app.close();
+    app = Fastify();
+    registerComputeRoutes(app, {
+      targets,
+      token: "secret",
+      launchConfigured: true,
+      makeClient: () =>
+        ({
+          probe: async () => ({ state: "stopped", served: null }),
+        }) as unknown as StudioClient,
+    });
+    await app.ready();
+    const far = (
+      await app.inject({
+        url: "/compute/targets",
+        headers: { authorization: "Bearer secret" },
+        remoteAddress: "192.168.1.50",
+      })
+    ).json();
+    expect(
+      far.targets.find((t: { id: string }) => t.id === "local"),
+    ).toMatchObject({ canLaunch: false });
+  });
+
+  it("reports canLaunch false everywhere when launching is disabled", async () => {
+    const app = await withLauncher({ launchConfigured: false });
+    const body = (await app.inject({ url: "/compute/targets" })).json();
+    expect(
+      body.targets.find((t: { id: string }) => t.id === "local"),
+    ).toMatchObject({ canLaunch: false });
   });
 });
 
