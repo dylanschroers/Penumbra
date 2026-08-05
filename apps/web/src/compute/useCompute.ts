@@ -163,14 +163,14 @@ export function useCompute(enabled = true): Compute {
     [refresh],
   );
 
-  // Clear the moment it actually answers, rather than waiting out the cap.
+  // Clear the moment it answers at all, rather than waiting out the cap. Any
+  // state but "stopped" means the process is up — "unauthorized" (its fresh key
+  // differs from the configured one) is now a key to paste, not a launch still
+  // in flight.
   useEffect(() => {
-    if (
-      launching &&
-      state?.targets.find((t) => t.id === launching)?.state === "ready"
-    ) {
-      setLaunching(null);
-    }
+    if (!launching) return;
+    const s = state?.targets.find((t) => t.id === launching)?.state;
+    if (s && s !== "stopped") setLaunching(null);
   }, [launching, state]);
 
   return {
