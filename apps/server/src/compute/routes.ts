@@ -7,8 +7,13 @@ import {
 } from "@penumbra/shared";
 import type { FastifyInstance } from "fastify";
 import type { DeviceStore } from "../devices/store";
-import { requireAuth } from "../http/auth";
+import { isLoopback, requireAuth } from "../http/auth";
 import { readInventory, StudioClient, StudioHttpError } from "../lab/studio";
+import {
+  isLaunchConfigured,
+  type LaunchOutcome,
+  launchStudio,
+} from "./studioLauncher";
 import {
   ROLES,
   type TargetCredentials,
@@ -97,6 +102,12 @@ export interface ComputeRouteOptions {
   /** Issued device tokens, accepted alongside the shared secret. Optional so a
    *  test can stand these routes up without a device store. */
   devices?: DeviceStore;
+  /** Spawns the local Studio. Injected so a test can assert the launch without
+   *  starting a real GPU server. */
+  launch?: () => LaunchOutcome;
+  /** Whether a launch command is configured at all. Injected so a test can
+   *  drive the button-visibility and refusal paths without touching the env. */
+  launchConfigured?: boolean;
 }
 
 export function registerComputeRoutes(
@@ -108,6 +119,8 @@ export function registerComputeRoutes(
     makeClient = (_id, creds) => new StudioClient(creds),
     loadPollMs = LOAD_POLL_MS,
     loadSettleMs = LOAD_SETTLE_MS,
+    launch = () => launchStudio(),
+    launchConfigured = isLaunchConfigured(),
   }: ComputeRouteOptions,
 ): void {
   const preHandler = requireAuth({ token, devices });
@@ -123,10 +136,14 @@ export function registerComputeRoutes(
   app.get(
     "/compute/targets",
     { preHandler },
-    async (): Promise<ComputeState> => {
+    async (req): Promise<ComputeState> => {
       // Probed in parallel: an unreachable target should cost one timeout, not
       // one per target in series.
       const listed = targets.list();
+      // Only a loopback caller can launch, so the flag is decided per request:
+      // the same listing off-machine reports canLaunch false and hides the
+      // button rather than offering one the launch route would refuse.
+      const launchable = launchConfigured && isLoopback(req.ip);
       // An unconfigured target has no address to probe, and "stopped" with
       // nothing serving is the honest answer for one that does not exist yet.
       const idle = { state: "stopped" as const, served: null };
@@ -146,6 +163,8 @@ export function registerComputeRoutes(
           // names it. This is what makes a model loaded on Colab show up here
           // on the next poll instead of waiting for someone to re-open a panel.
           servedModel: probes[i]?.served ?? null,
+          // Local only: there is no spawning a process on a remote target.
+          canLaunch: t.id === "local" && launchable,
         })),
         assignments: Object.fromEntries(
           ROLES.map((r) => [r, targets.assignment(r)]),
@@ -250,6 +269,68 @@ export function registerComputeRoutes(
       // the authority on what it ended up serving.
       const served = await client.loadedModel().catch(() => null);
       return { loaded: served };
+    },
+  );
+
+  /**
+   * Start the local Studio.
+   *
+   * Loopback-only, on top of the gate. Spawning a process on the host is more
+   * than a device token grants, so even a valid one from another machine cannot
+   * reach this — only a caller on the server's own box, which is also the only
+   * box where starting a local process means anything.
+   *
+   * 202 and done: Studio takes ~45s to bind, and the /compute/targets poll is
+   * what turns the card ready. Nothing here waits on it.
+   */
+  app.post<{ Params: { id: string } }>(
+    "/compute/targets/:id/launch",
+    { preHandler },
+    async (req, reply) => {
+      if (!isLoopback(req.ip)) {
+        return reply.code(403).send({
+          error: "local_only",
+          message: "Studio can only be launched from the server's own machine.",
+        });
+      }
+      if (req.params.id !== "local") {
+        return reply.code(409).send({
+          error: "not_launchable",
+          message: "Only the local Studio can be launched from here.",
+        });
+      }
+      if (!launchConfigured) {
+        return reply.code(409).send({
+          error: "not_configured",
+          message: "No launch command is set (UNSLOTH_LAUNCH_CMD).",
+        });
+      }
+
+      // Don't spawn a second process over one that is already there. "ready",
+      // "unauthorized" (up, wrong key), and "not_studio" (something else on the
+      // port) all mean the port is taken and a fresh Studio would only fail to
+      // bind; only a target that answers nothing is worth starting.
+      const client = clientFor("local");
+      const probe = client
+        ? await client.probe()
+        : { state: "stopped" as const };
+      if (probe.state !== "stopped") {
+        return reply.code(409).send({
+          error: "already_running",
+          message: `The local target is already ${probe.state}.`,
+        });
+      }
+
+      const outcome = launch();
+      if (!outcome.ok) {
+        // A double-click during startup is a 409 (it is coming); a failed spawn
+        // is a 500 (it is not).
+        const code = outcome.reason === "already_launching" ? 409 : 500;
+        return reply
+          .code(code)
+          .send({ error: outcome.reason, message: outcome.message });
+      }
+      return reply.code(202).send({ launching: true });
     },
   );
 
