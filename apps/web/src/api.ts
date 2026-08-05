@@ -14,15 +14,18 @@ import { authHeaders, getServerUrl } from "./serverAddress";
 export { getAgentToken, getServerUrl } from "./serverAddress";
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  // Declare the JSON content-type only when there is a body to describe. Fastify
+  // rejects an empty body sent with `application/json`
+  // (FST_ERR_CTP_EMPTY_JSON_BODY), so a bodyless POST or DELETE — launch Studio,
+  // revert a target, cancel a job — would 400 before its handler ran if this
+  // header rode along unconditionally. A GET never carried a body either; the
+  // header only ever survived on those because Fastify skips body parsing there.
+  const headers: Record<string, string> = { ...authHeaders() };
+  if (init?.body != null) headers["Content-Type"] = "application/json";
+
   // Address and bearer both read per request, never captured: the status pill
   // can change either between one call and the next.
-  const res = await fetch(`${getServerUrl()}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...authHeaders(),
-    },
-  });
+  const res = await fetch(`${getServerUrl()}${path}`, { ...init, headers });
   if (!res.ok) {
     // The server's error codes are meaningful (busy, no_checkpoint,
     // lm_eval_missing, address_required); surface them rather than a bare
