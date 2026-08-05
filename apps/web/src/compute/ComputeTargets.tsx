@@ -140,6 +140,29 @@ function TargetCard({
 
       {hint && <p className="ct__hint">{hint}</p>}
 
+      {/* Start the local Studio from here. Only when it is the thing that is
+          down (state stopped) and only where it can work (canLaunch is the
+          server's own loopback-and-configured verdict), so this never offers to
+          start a machine it cannot reach. */}
+      {target.canLaunch && target.state === "stopped" && (
+        <div className="ct__launch">
+          <button
+            type="button"
+            disabled={compute.launching === target.id}
+            onClick={() => void compute.launch(target.id)}
+          >
+            {compute.launching === target.id
+              ? "Starting Studio…"
+              : "Launch Studio"}
+          </button>
+          {compute.launching === target.id && (
+            <span className="ct__launch-note">
+              Studio takes about a minute to come up.
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Which model this target is serving, and a way to change it. Only for a
           target that is answering: a list from an unreachable Studio would be
           stale, and loading into one is not a thing that can happen. */}
