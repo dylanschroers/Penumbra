@@ -1,12 +1,12 @@
 import {
   type BenchmarkResult,
-  type DatasetSource,
   type FinetuneRequest,
   type LabJob,
   type LabRun,
   looksLocalPath,
   STORAGE_NAMESPACE,
   type TaskScore,
+  toDatasetSource,
 } from "@penumbra/shared";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { ComputeTargets } from "../../compute/ComputeTargets";
@@ -69,24 +69,6 @@ export const SERVER_TABS: ReadonlySet<Tab> = new Set<Tab>([
 /** The tab to fall back to when the server is gone. Named rather than inlined
  *  so the test can assert it is one that actually works offline. */
 export const OFFLINE_TAB: Tab = "datasets";
-
-/**
- * Decide whether a dataset string names a HuggingFace repo or a file on the
- * Studio host. HF ids look like `owner/name` and never start with a path
- * marker, so leading `.` or `/` is the discriminator — as is a data file
- * extension, which no HF repo id carries.
- */
-export function toDatasetSource(value: string): DatasetSource {
-  const trimmed = value.trim();
-  const looksLikePath =
-    trimmed.startsWith(".") ||
-    trimmed.startsWith("/") ||
-    trimmed.startsWith("~") ||
-    /\.(jsonl|json|csv|parquet)$/i.test(trimmed);
-  return looksLikePath
-    ? { kind: "local", path: trimmed }
-    : { kind: "hf", id: trimmed };
-}
 
 /**
  * A timestamp as an age — "just now", "12 min ago", "3 days ago" — falling back

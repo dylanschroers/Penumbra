@@ -109,15 +109,23 @@ export const AGENT_PERSONA_DEFAULT =
 export const AGENT_PERSONA_MAX = 4000;
 
 /**
- * The full prompt: fixed policy, then the persona in force.
+ * The full prompt: fixed policy, then any tier-specific policy, then the
+ * persona in force.
  *
  * Policy leads so that a persona cannot appear to override it by being read
  * first, and the engine appends the identity facts after both — last, because
  * recency is what a small model weighs most.
+ *
+ * `extra` is more fixed policy, for a tier that can do something this one
+ * cannot: today the server passing LAB_POLICY, because it alone can run the
+ * Model Lab. It sits above the persona for the same reason AGENT_POLICY does —
+ * it decides when tools fire, and an editable string must not be read as
+ * outranking it. Omitting it reproduces the old output exactly, which is what
+ * keeps AGENT_SYSTEM byte-stable for the eval.
  */
-export function composeSystem(persona?: string): string {
+export function composeSystem(persona?: string, extra?: string): string {
   const tail = (persona ?? AGENT_PERSONA_DEFAULT).trim();
-  return tail ? `${AGENT_POLICY} ${tail}` : AGENT_POLICY;
+  return [AGENT_POLICY, extra?.trim(), tail].filter(Boolean).join(" ");
 }
 
 /**

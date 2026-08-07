@@ -2,18 +2,30 @@ import {
   AGENT_SYSTEM,
   agentTools,
   completeTaskTool,
+  composeSystem,
   createTaskTool,
   deleteTaskTool,
   fetchWeather,
+  finetuneRequest,
   getWeatherTool,
+  jobStatusTool,
+  LAB_POLICY,
+  type LabJob,
+  labTools,
+  listDatasetsTool,
+  listModelsTool,
   listTasksTool,
+  runBenchmarkTool,
   type SyncTask,
+  startFinetuneTool,
   type ToolBindings,
   type ToolContract,
   type ToolSpec,
+  toDatasetSource,
   toToolSpec,
 } from "@penumbra/shared";
 import type { z } from "zod";
+import type { LabService } from "../lab/routes";
 import type { ServerTaskStore } from "../store/tasks";
 
 // The server half of the tool registry — the Tier-1 mirror of
@@ -59,8 +71,122 @@ function toIso(value: string | undefined): string | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
-/** Build the agent's tool bindings over a server task store. */
-export function createServerTools(store: ServerTaskStore): ToolBindings {
+/** Bytes as a rough size. Lab artifacts are large and their exact size is never
+ *  the question, so GB or MB is as far as this goes. A model of unknown size
+ *  reports 0 bytes, which is not a measurement and must not read as one. */
+function roughSize(bytes: number): string {
+  if (!bytes) return "size unknown";
+  return bytes >= 1e9
+    ? `${(bytes / 1e9).toFixed(1)} GB`
+    : `${Math.round(bytes / 1e6)} MB`;
+}
+
+/** One job as a line to relay: what it is, where it got to, and why it stopped
+ *  if it did. */
+function jobLine(job: LabJob): string {
+  const pct =
+    job.progress === null ? "" : ` ${Math.round(job.progress * 100)}%`;
+  const tail = job.error ?? job.detail;
+  return `${job.kind} ${job.id}: ${job.state}${pct}${tail ? ` — ${tail}` : ""}`;
+}
+
+/** How many recent jobs an unfiltered job_status reports. Enough to cover a
+ *  pipeline's worth of stages, short enough to stay a readable answer. */
+const RECENT_JOBS = 5;
+
+/**
+ * Bind the Model Lab contracts to the lab running in this process.
+ *
+ * Every one of these returns a sentence rather than throwing, including the
+ * refusals: "the local Studio is not answering" is an ordinary outcome the
+ * model should pass on, not a bug. The two that start work return a job id and
+ * say so, because the work outlives the turn — a tool that waited would hold a
+ * conversation open for an hour and still time out (docs/MODEL_LAB.md → Job
+ * records).
+ */
+function labBindings(lab: LabService): BoundTool[] {
+  return [
+    bind(listModelsTool, async () => {
+      const { target, models, inventoryError } = await lab.models();
+      const lines = models.map(
+        (m) =>
+          `- ${m.id} [${m.format}, ${roughSize(m.sizeBytes)}]${
+            m.loaded ? " — loaded" : ""
+          }`,
+      );
+      // An inventory that failed is reported rather than passed off as an empty
+      // shelf: the two look identical here and need different fixes.
+      if (inventoryError) {
+        lines.push(
+          `(the rest of the inventory could not be read: ${inventoryError})`,
+        );
+      }
+      return lines.length
+        ? `Models on ${target}:\n${lines.join("\n")}`
+        : `${target} has no models available and nothing loaded.`;
+    }),
+
+    bind(listDatasetsTool, async () => {
+      const files = await lab.datasets();
+      return files.length
+        ? files
+            .map((f) => `- ${f.name} (${roughSize(f.size)}) — ${f.path}`)
+            .join("\n")
+        : "No datasets have been uploaded to the training host yet.";
+    }),
+
+    bind(startFinetuneTool, async (args) => {
+      // Parsed through the wire schema so a run started from a conversation
+      // gets exactly the defaults — learning rate, LoRA rank, format — that the
+      // form's would, rather than a second set defined here.
+      const started = await lab.finetune(
+        finetuneRequest.parse({
+          baseModel: args.baseModel,
+          dataset: toDatasetSource(args.dataset),
+          maxSteps: args.maxSteps,
+          provider: args.provider,
+        }),
+      );
+      return started.ok
+        ? `Started fine-tune job ${started.jobId} (run ${started.runId}): ${args.baseModel} on ${args.dataset}, ${args.maxSteps} steps. It runs in the background — check job_status for progress.`
+        : `Cannot start fine-tuning: ${started.message}.`;
+    }),
+
+    bind(runBenchmarkTool, async (args) => {
+      const started = await lab.benchmark({
+        suite: args.suite,
+        samplesPerTask: args.samplesPerTask,
+        model: args.model,
+      });
+      return started.ok
+        ? `Started benchmark job ${started.jobId}: ${args.suite}, ${args.samplesPerTask} samples per task. It runs in the background — check job_status for the scores.`
+        : `Cannot start the benchmark: ${started.message}.`;
+    }),
+
+    bind(jobStatusTool, async (args) => {
+      if (args.jobId) {
+        const job = lab.job(args.jobId);
+        return job ? jobLine(job) : `There is no job with id ${args.jobId}.`;
+      }
+      const recent = lab.jobs().slice(0, RECENT_JOBS);
+      return recent.length
+        ? recent.map(jobLine).join("\n")
+        : "No Model Lab jobs have run yet.";
+    }),
+  ];
+}
+
+/**
+ * Build the agent's tool bindings over a server task store.
+ *
+ * `lab` is optional because the Model Lab is the one capability a deployment
+ * can genuinely be without — no GPU host, no Studio — and advertising tools
+ * that cannot run is worse than not advertising them.
+ */
+export function createServerTools(
+  store: ServerTaskStore,
+  lab?: LabService,
+): ToolBindings {
   const bindings: BoundTool[] = [
     bind(createTaskTool, async (args) => {
       const task = store.createTask({
@@ -100,6 +226,8 @@ export function createServerTools(store: ServerTaskStore): ToolBindings {
     bind(getWeatherTool, fetchWeather),
   ];
 
+  if (lab) bindings.push(...labBindings(lab));
+
   const registry = new Map(bindings.map((b) => [b.contract.name, b]));
 
   /** Execute one tool call. Returns a short human-readable result that is both
@@ -128,5 +256,14 @@ export function createServerTools(store: ServerTaskStore): ToolBindings {
     }
   };
 
-  return { tools: toolSpecs, system: AGENT_SYSTEM, runTool };
+  // The lab half of the prompt travels with the lab half of the tool set, so a
+  // deployment without one is never told it has the other. main.ts recomposes
+  // this with the editable persona and must pass the same extra.
+  return lab
+    ? {
+        tools: [...toolSpecs, ...labTools.map(toToolSpec)],
+        system: composeSystem(undefined, LAB_POLICY),
+        runTool,
+      }
+    : { tools: toolSpecs, system: AGENT_SYSTEM, runTool };
 }

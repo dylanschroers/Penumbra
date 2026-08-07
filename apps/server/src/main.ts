@@ -3,7 +3,7 @@
 import "./env";
 import cors from "@fastify/cors";
 import type { AgentEvent, ChatMessage, Engine } from "@penumbra/shared";
-import { composeSystem } from "@penumbra/shared";
+import { composeSystem, LAB_POLICY } from "@penumbra/shared";
 import Fastify from "fastify";
 import { createPromptStore } from "./agent/prompt";
 import { registerAgentRoutes } from "./agent/routes";
@@ -70,10 +70,20 @@ registerDeviceRoutes(app, { devices });
 const targets = createTargetStore(sqlite);
 registerComputeRoutes(app, { targets, devices });
 
+// Model Lab: fine-tuning, export, and benchmarking (docs/MODEL_LAB.md). Same
+// gate as the agent routes. Registered before the agent because the agent binds
+// what it returns: one lab, driven either from the Lab's own UI or from a
+// conversation, so a job started one way is visible and cancellable the other.
+const lab = registerLabRoutes(app, {
+  store: createLabStore(sqlite),
+  targets,
+  devices,
+});
+
 // Tier 1: the model runs here and executes tools in-process against the store,
 // with no client in the turn loop (docs/SYNC.md → Server-side writes).
 const tasks = createServerTaskStore(sqlite, sync);
-const bindings = createServerTools(tasks);
+const bindings = createServerTools(tasks, lab);
 const prompts = createPromptStore(sqlite);
 
 // Built per call, from whichever target the chat role resolves to right now. An
@@ -90,15 +100,17 @@ function chatEngine(): UnslothEngine {
   // same reason the credentials are: an edit must reach the next turn without a
   // restart, and there is nothing to invalidate if nothing is cached.
   return new UnslothEngine({
-    bindings: { ...bindings, system: composeSystem(prompts.current().persona) },
+    bindings: {
+      ...bindings,
+      // LAB_POLICY is restated here because this line replaces the system
+      // prompt createServerTools composed: dropping it would leave the lab
+      // tools advertised with nothing in the prompt saying when to use them.
+      system: composeSystem(prompts.current().persona, LAB_POLICY),
+    },
     ...targets.resolve("chat"),
   });
 }
 registerAgentRoutes(app, { engine: currentEngine, targets, prompts, devices });
-
-// Model Lab: fine-tuning, export, and benchmarking (docs/MODEL_LAB.md). Same
-// gate as the agent routes.
-registerLabRoutes(app, { store: createLabStore(sqlite), targets, devices });
 
 const port = Number(process.env.PORT ?? 3000);
 app.listen({ port, host: "0.0.0.0" }).catch((err) => {
