@@ -106,6 +106,9 @@ function chatEngine(): UnslothEngine {
       // tools advertised with nothing in the prompt saying when to use them.
       system: composeSystem(prompts.current().persona, LAB_POLICY),
     },
+    // Read here for the same reason the persona is: an edit must reach the next
+    // turn without a restart. Undefined leaves Tier 1's own default in force.
+    maxTokens: prompts.current().maxTokens ?? undefined,
     ...targets.resolve("chat"),
   });
 }

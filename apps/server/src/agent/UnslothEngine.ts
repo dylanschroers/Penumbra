@@ -1,4 +1,8 @@
-import { OpenAiEngine, type ToolBindings } from "@penumbra/shared";
+import {
+  AGENT_MAX_TOKENS_SERVER,
+  OpenAiEngine,
+  type ToolBindings,
+} from "@penumbra/shared";
 
 // Tier 1: the server-side model, an Unsloth Studio instance on the GPU host.
 //
@@ -27,6 +31,18 @@ const DEFAULT_MODEL = "unsloth";
  *  gets a longer leash than OpenAiEngine's small-model default of 4. */
 const DEFAULT_MAX_TOOL_STEPS = 8;
 /**
+ * Room for an answer that is actually long.
+ *
+ * OpenAiEngine's 512 exists to stop a *small* model running away on thinking
+ * tokens. Tier 1 is the opposite case: a large model, a full tool registry, and
+ * questions like "what can you do" whose honest answer is a paragraph per tool.
+ * At 512 that answer stopped mid-word, and since nothing read `finish_reason`
+ * it stopped silently — the reply simply ended and read as finished.
+ *
+ * Only the default: the prompt panel's cap overrides it when one is set.
+ */
+const DEFAULT_MAX_TOKENS = AGENT_MAX_TOKENS_SERVER;
+/**
  * Tier 1 is always a network hop — a LAN GPU host at best, a tunnel at worst —
  * where OpenAiEngine's 1.5s default is tuned for probing localhost. Measured
  * ~1s round trip to a Studio behind a Cloudflare tunnel, which leaves almost no
@@ -43,6 +59,7 @@ export interface UnslothEngineConfig {
   apiKey?: string;
   model?: string;
   maxToolSteps?: number;
+  maxTokens?: number;
   statusTimeoutMs?: number;
   /** Environment to read defaults from. Injected so tests need not mutate the
    *  real process.env. */
@@ -62,6 +79,7 @@ export class UnslothEngine extends OpenAiEngine {
       model: config.model ?? env.UNSLOTH_MODEL ?? DEFAULT_MODEL,
       headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
       maxToolSteps: config.maxToolSteps ?? DEFAULT_MAX_TOOL_STEPS,
+      maxTokens: config.maxTokens ?? DEFAULT_MAX_TOKENS,
       statusTimeoutMs: config.statusTimeoutMs ?? DEFAULT_STATUS_TIMEOUT_MS,
       label: "unsloth studio",
     });

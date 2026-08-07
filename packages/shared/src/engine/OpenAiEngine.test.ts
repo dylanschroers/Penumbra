@@ -442,3 +442,93 @@ describe("a backend that never answers", () => {
     await expect(turn).rejects.toThrow(/aborted/);
   });
 });
+
+// A reply that hit the token cap ends mid-sentence and is otherwise
+// indistinguishable from a finished one — the backend says so in
+// `finish_reason`, and that was the only place it was known.
+describe("a reply cut off by the token cap", () => {
+  it("marks the answer as truncated", async () => {
+    mockFetch.mockReset();
+    mockFetch
+      .mockResolvedValueOnce(res({ data: [{ id: "m" }] }))
+      .mockResolvedValueOnce(
+        res({
+          choices: [
+            { message: { content: "**Model Lab (" }, finish_reason: "length" },
+          ],
+        }),
+      );
+
+    const [ev] = await collect(engine.runAgent([]));
+    expect(ev).toEqual({
+      kind: "answer",
+      text: "**Model Lab (",
+      truncated: true,
+    });
+  });
+
+  it("leaves a complete answer unmarked", async () => {
+    mockFetch.mockReset();
+    mockFetch
+      .mockResolvedValueOnce(res({ data: [{ id: "m" }] }))
+      .mockResolvedValueOnce(
+        res({
+          choices: [{ message: { content: "done" }, finish_reason: "stop" }],
+        }),
+      );
+
+    const [ev] = await collect(engine.runAgent([]));
+    expect(ev).toEqual({ kind: "answer", text: "done" });
+  });
+});
+
+// The cap is user-editable, and Tier 0's engine is built once at page load, so
+// a number captured in the constructor would pin the limit to whatever it was
+// when the tab opened. A function is read per request instead.
+describe("an adjustable reply cap", () => {
+  it("sends a fixed cap as given", async () => {
+    mockFetch.mockReset();
+    mockFetch
+      .mockResolvedValueOnce(res({ data: [{ id: "m" }] }))
+      .mockResolvedValueOnce(answerReply("hi"));
+
+    const capped = new OpenAiEngine({
+      bindings: { tools: [], system: "sys", runTool: vi.fn() },
+      baseURL: "http://test",
+      model: "m",
+      maxTokens: 1234,
+    });
+    await collect(capped.runAgent([]));
+
+    expect(JSON.parse(mockFetch.mock.calls[1]?.[1]?.body).max_tokens).toBe(
+      1234,
+    );
+  });
+
+  it("re-reads a resolver, so an edit reaches the next turn", async () => {
+    let cap = 512;
+    const adjustable = new OpenAiEngine({
+      bindings: { tools: [], system: "sys", runTool: vi.fn() },
+      baseURL: "http://test",
+      model: "m",
+      maxTokens: () => cap,
+    });
+
+    mockFetch.mockReset();
+    mockFetch
+      .mockResolvedValueOnce(res({ data: [{ id: "m" }] }))
+      .mockResolvedValueOnce(answerReply("first"));
+    await collect(adjustable.runAgent([]));
+    expect(JSON.parse(mockFetch.mock.calls[1]?.[1]?.body).max_tokens).toBe(512);
+
+    cap = 4096;
+    mockFetch.mockReset();
+    mockFetch
+      .mockResolvedValueOnce(res({ data: [{ id: "m" }] }))
+      .mockResolvedValueOnce(answerReply("second"));
+    await collect(adjustable.runAgent([]));
+    expect(JSON.parse(mockFetch.mock.calls[1]?.[1]?.body).max_tokens).toBe(
+      4096,
+    );
+  });
+});

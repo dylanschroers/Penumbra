@@ -693,6 +693,25 @@ body {
   resize: vertical;
 }
 
+/* Same box as the persona field, sized for a number rather than a paragraph.
+   The placeholder carries the per-tier defaults, so an empty field says what
+   leaving it empty actually does. */
+.prompt__number {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.prompt__number::placeholder {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .prompt__meta {
   display: flex;
   justify-content: space-between;

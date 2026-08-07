@@ -20,6 +20,9 @@ export interface LocalEngineConfig {
   baseURL?: string;
   model?: string;
   maxToolSteps?: number;
+  /** Reply-length cap. A function here is read per turn, which is how an edit
+   *  in the prompt panel reaches an engine built once at page load. */
+  maxTokens?: number | (() => number);
 }
 
 export class LocalEngine extends OpenAiEngine {
@@ -29,6 +32,7 @@ export class LocalEngine extends OpenAiEngine {
       baseURL: config.baseURL ?? DEFAULT_URL,
       model: config.model ?? DEFAULT_MODEL,
       maxToolSteps: config.maxToolSteps,
+      maxTokens: config.maxTokens,
       label: "local model",
     });
   }
