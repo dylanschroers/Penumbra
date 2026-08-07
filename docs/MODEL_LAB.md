@@ -185,6 +185,34 @@ results:
   recorded — the run then has no output dir and export refuses it, which is the
   safe failure.
 
+## Driving it from chat
+
+The Lab's screen is not the only way in: the Tier-1 agent binds five contracts —
+`list_models`, `list_datasets`, `start_finetune`, `run_benchmark`, `job_status` —
+so "what can this box run, and how did last night's fine-tune go" is a
+conversation rather than a form. Three things make that safe rather than a second
+implementation of the same feature:
+
+- **One orchestration, not two.** `registerLabRoutes` returns the operations it
+  registers, and the agent binds *that object*. The alternative — a second copy
+  of the job orchestration, or the agent calling this server's own HTTP surface
+  — would give the two entrances separate `inFlight` maps, and a benchmark
+  started in chat would then ignore the Cancel button on the row it appears in.
+- **Tier 1 only.** These contracts are a second list in the shared registry
+  (`labTools`), not additions to `agentTools`. Running one needs the job store,
+  the compute targets, and a Studio on this host, so Tier 0 could only advertise
+  them and fail every call — and leaving `agentTools` alone is also what keeps
+  the tool eval and the `penumbra-tools-v1` suite measuring the tool set they
+  have always measured.
+- **A job id is the answer.** Starting work returns an id, never a result: a
+  fine-tune outlives the turn by hours. `LAB_POLICY` says so in the prompt, and
+  says not to report a score `job_status` has not shown.
+
+The arguments are the request schemas' own fields, so the suite ids the model may
+emit are `SUITES`, and the step and sample bounds are the ones the routes
+enforce. Everything else about a run — learning rate, LoRA rank, dataset format —
+keeps its default rather than becoming another slot for a model to fill wrong.
+
 ## Compute targets
 
 Two Studios are known: **local**, whose address and bearer come from the

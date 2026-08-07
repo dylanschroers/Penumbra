@@ -1,4 +1,4 @@
-export { looksLocalPath } from "./paths";
+export { looksLocalPath, toDatasetSource } from "./paths";
 export { findSuite, SUITES, type SuiteDefinition } from "./suites";
 export {
   type AvailableModel,

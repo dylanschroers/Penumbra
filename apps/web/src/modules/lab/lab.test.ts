@@ -1,12 +1,6 @@
-import { looksLocalPath } from "@penumbra/shared";
+import { looksLocalPath, toDatasetSource } from "@penumbra/shared";
 import { describe, expect, it } from "vitest";
-import {
-  formatWhen,
-  OFFLINE_TAB,
-  SERVER_TABS,
-  TABS,
-  toDatasetSource,
-} from "./LabModule";
+import { formatWhen, OFFLINE_TAB, SERVER_TABS, TABS } from "./LabModule";
 
 // A new tab is classified by omission: leaving it out of SERVER_TABS silently
 // declares it works with no server, and the failure is a tab that stays clickable
