@@ -2,7 +2,7 @@ import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { requireAuth } from "./auth";
-import { allowedOrigins } from "./cors";
+import { allowedOrigins, corsOptions } from "./cors";
 
 // The hole this closes, stated once: `origin: true` reflected whatever Origin a
 // caller sent, and ./auth exempts loopback when no token is set. A browser
@@ -20,11 +20,20 @@ afterEach(async () => {
   app = undefined;
 });
 
-/** A server wired exactly as main.ts wires it, with no token set. */
+/**
+ * A server wired exactly as main.ts wires it, with no token set.
+ *
+ * Registers `corsOptions(...)` rather than rebuilding the options here. The
+ * hand-mirrored version of this helper is how the missing `methods` survived:
+ * it reproduced the incomplete config and then proved the origin half worked.
+ */
 async function serve(allowedFromEnv?: string): Promise<FastifyInstance> {
   const instance = Fastify();
-  await instance.register(cors, { origin: allowedOrigins(allowedFromEnv) });
+  await instance.register(cors, corsOptions(allowedFromEnv));
   instance.post("/agent/chat", { preHandler: requireAuth({}) }, async () => ({
+    ok: true,
+  }));
+  instance.put("/agent/prompt", { preHandler: requireAuth({}) }, async () => ({
     ok: true,
   }));
   return instance;
@@ -143,5 +152,41 @@ describe("through @fastify/cors, unauthenticated (the default posture)", () => {
     expect(allowedOrigins(undefined)).toEqual(allowedOrigins(""));
     expect(allowedOrigins(" , ,")).toEqual(allowedOrigins(undefined));
     expect(allowedOrigins(undefined)).toContain("tauri://localhost");
+  });
+
+  // A preflight the plugin answers without the verb is a request the browser
+  // never sends: no log line, no status, just "Failed to fetch" in the page.
+  // @fastify/cors defaults to the three simple methods, so every PUT and DELETE
+  // in the app — prompt save, prompt reset, forget target, revoke device — was
+  // refused in the browser while curl sailed through.
+  it("lets the browser use the verbs the app actually needs", async () => {
+    app = await serve();
+    const preflight = await app.inject({
+      method: "OPTIONS",
+      url: "/agent/prompt",
+      headers: {
+        origin: "http://localhost:5173",
+        "access-control-request-method": "PUT",
+      },
+    });
+
+    const allowed = String(preflight.headers["access-control-allow-methods"])
+      .split(",")
+      .map((m) => m.trim());
+    expect(allowed).toEqual(expect.arrayContaining(["PUT", "DELETE"]));
+  });
+
+  it("carries a real PUT through with a readable reply", async () => {
+    app = await serve();
+    const res = await app.inject({
+      method: "PUT",
+      url: "/agent/prompt",
+      headers: { origin: "http://localhost:5173" },
+      payload: { maxTokens: 4096 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["access-control-allow-origin"]).toBe(
+      "http://localhost:5173",
+    );
   });
 });
