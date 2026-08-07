@@ -38,8 +38,10 @@ function statusLabel(status: AgentStatus): string {
 
 function StatusPill({ status }: { status: AgentStatus }) {
   return (
-    <span className={`agent__pill agent__pill--${status.state}`}>
-      {statusLabel(status)}
+    <span
+      className={`agent__pill agent__pill--${status.state} agent__pill--status`}
+    >
+      <span className="agent__pill-label">{statusLabel(status)}</span>
     </span>
   );
 }
@@ -97,74 +99,82 @@ export function AgentModule() {
   return (
     <div className="agent">
       <div className="agent__status">
-        <div className="agent__providers">
-          {/* Each button is individually labelled + aria-pressed; a wrapper role
-              would only trip useSemanticElements for little a11y gain. */}
-          {PROVIDERS.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              className={`agent__provider${
-                provider === p.id ? " agent__provider--active" : ""
-              }`}
-              onClick={() => setProvider(p.id)}
-              disabled={!p.available}
-              aria-pressed={provider === p.id}
-              title={p.hint}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
+        {/* The controls live inside a plain block, not directly in the flex
+            column: a wrapping flex row measured as a column child under-reserves
+            its height (Chromium sizes it at one line), so a wrapped second row
+            would overlap the transcript. The block measures the bar at its real
+            width, and the pill grows to fill a wide row so it truncates on one
+            line rather than forcing the wrap in the first place. */}
+        <div className="agent__status-bar">
+          <div className="agent__providers">
+            {/* Each button is individually labelled + aria-pressed; a wrapper role
+                would only trip useSemanticElements for little a11y gain. */}
+            {PROVIDERS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className={`agent__provider${
+                  provider === p.id ? " agent__provider--active" : ""
+                }`}
+                onClick={() => setProvider(p.id)}
+                disabled={!p.available}
+                aria-pressed={provider === p.id}
+                title={p.hint}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
 
-        {canConfigure ? (
+          {canConfigure ? (
+            <button
+              type="button"
+              className={`agent__pill agent__pill--${status.state} agent__pill--status agent__pill--action`}
+              onClick={() => setPanel(targetsOpen ? null : "targets")}
+              aria-haspopup="dialog"
+              aria-expanded={targetsOpen}
+              title="Configure compute targets"
+            >
+              <span className="agent__pill-label">{statusLabel(status)}</span>
+              <span className="agent__pill-caret" aria-hidden="true">
+                ▾
+              </span>
+            </button>
+          ) : (
+            <StatusPill status={status} />
+          )}
+
+          {/* The transcript is the model's context, so a thread that has gone
+              wrong stays wrong: every turn replays it, and a small model copies
+              its own earlier answer over the system prompt. Discarding it is the
+              only way out, which makes this a control and not a convenience. */}
           <button
             type="button"
-            className={`agent__pill agent__pill--${status.state} agent__pill--action`}
-            onClick={() => setPanel(targetsOpen ? null : "targets")}
-            aria-haspopup="dialog"
-            aria-expanded={targetsOpen}
-            title="Configure compute targets"
+            className="agent__pill agent__pill--action"
+            onClick={clear}
+            disabled={messages.length === 0}
+            title="Discard this conversation and start a fresh one"
           >
-            {statusLabel(status)}
+            Clear
+          </button>
+
+          {/* Beside the pill because the two belong together: which model answers,
+              and what it is told to do. Available on every tier — the prompt is
+              shared, so editing it from a Tier-0 chat is not a category error. */}
+          <button
+            type="button"
+            className="agent__pill agent__pill--action"
+            onClick={() => setPanel(panel === "prompt" ? null : "prompt")}
+            aria-haspopup="dialog"
+            aria-expanded={panel === "prompt"}
+            title="View and edit the system prompt"
+          >
+            Prompt
             <span className="agent__pill-caret" aria-hidden="true">
               ▾
             </span>
           </button>
-        ) : (
-          <StatusPill status={status} />
-        )}
-
-        {/* The transcript is the model's context, so a thread that has gone
-            wrong stays wrong: every turn replays it, and a small model copies
-            its own earlier answer over the system prompt. Discarding it is the
-            only way out, which makes this a control and not a convenience. */}
-        <button
-          type="button"
-          className="agent__pill agent__pill--action"
-          onClick={clear}
-          disabled={messages.length === 0}
-          title="Discard this conversation and start a fresh one"
-        >
-          Clear
-        </button>
-
-        {/* Beside the pill because the two belong together: which model answers,
-            and what it is told to do. Available on every tier — the prompt is
-            shared, so editing it from a Tier-0 chat is not a category error. */}
-        <button
-          type="button"
-          className="agent__pill agent__pill--action"
-          onClick={() => setPanel(panel === "prompt" ? null : "prompt")}
-          aria-haspopup="dialog"
-          aria-expanded={panel === "prompt"}
-          title="View and edit the system prompt"
-        >
-          Prompt
-          <span className="agent__pill-caret" aria-hidden="true">
-            ▾
-          </span>
-        </button>
+        </div>
 
         {panel && (
           <>

@@ -569,15 +569,32 @@ body {
   gap: 0.6rem;
   height: 100%;
   min-height: 0;
+  /* Cap the column to its card. A flex item keeps its content's min-width by
+     default, so one unbreakable child (a long status label) would otherwise
+     force the whole column past the card's edge and off the screen. */
+  min-width: 0;
 }
 
+/* A plain block, not the flex row itself. A wrapping flex container measured
+   directly as a flex-column child under-reserves its height in Chromium (it
+   sizes at max-content — one line), so its wrapped second row overlaps the
+   transcript below. The block measures the bar at its real width instead. */
 .agent__status {
+  min-width: 0;
+  /* Anchors .agent__popover, which hangs off the status pill. */
+  position: relative;
+}
+
+.agent__status-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  /* Anchors .agent__popover, which hangs off the status pill. */
-  position: relative;
+  /* Wrap only as a last resort on a very narrow column; the status pill grows
+     to absorb a wide row (see .agent__pill--status) so the row stays one line
+     when there is room, and the pill truncates rather than forcing a wrap. */
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 /* The pill becomes a control on the server tier: the fix for "key rejected" or
@@ -758,12 +775,34 @@ body {
 }
 
 .agent__pill {
+  display: inline-flex;
+  align-items: center;
+  /* Shrink instead of forcing the row wide; the label truncates within. */
+  min-width: 0;
+  max-width: 100%;
   font-size: 0.85rem;
   padding: 0.35rem 0.75rem;
   border-radius: 999px;
   border: 1px solid var(--border);
   color: var(--muted);
   background: var(--bg);
+}
+
+/* The pill's text (target · state · model). Truncated rather than allowed to
+   push the row wide when the model name is long — the full text is still the
+   pill itself, and the compute panel it opens names the target in full. */
+.agent__pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The status/target pill fills the bar's leftover width (basis 0, so it never
+   forces a wrap) and truncates a long model name, keeping the row on one line
+   whenever the fixed controls beside it fit. */
+.agent__pill--status {
+  flex: 1 1 0;
 }
 
 .agent__pill--ready {
@@ -783,6 +822,7 @@ body {
 .agent__messages {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
