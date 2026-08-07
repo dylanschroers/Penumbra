@@ -223,7 +223,15 @@ export function useAgent() {
               steps: [...(m.steps ?? []), { name: ev.name, result: ev.result }],
             }));
           } else {
-            patch((m) => ({ ...m, content: ev.text }));
+            // A truncated reply ends mid-sentence and otherwise looks finished,
+            // so the shell has to be the one to say the model was cut off.
+            patch((m) => ({
+              ...m,
+              content: ev.text,
+              error: ev.truncated
+                ? "The reply hit the length limit and was cut off."
+                : m.error,
+            }));
           }
         }
       } catch (err) {

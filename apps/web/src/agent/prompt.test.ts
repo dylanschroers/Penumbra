@@ -51,6 +51,8 @@ describe("localPrompt", () => {
       policy: AGENT_POLICY,
       source: "default",
       maxLength: AGENT_PERSONA_MAX,
+      // No override mirrored, so each tier keeps its own default.
+      maxTokens: null,
     });
   });
 

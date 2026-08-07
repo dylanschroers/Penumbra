@@ -1,10 +1,16 @@
+import {
+  AGENT_MAX_TOKENS_LOCAL,
+  AGENT_MAX_TOKENS_MAX,
+  AGENT_MAX_TOKENS_MIN,
+  AGENT_MAX_TOKENS_SERVER,
+} from "@penumbra/shared";
 import { type FormEvent, useEffect, useState } from "react";
 import {
   fetchPrompt,
   localPrompt,
   type PromptState,
   resetPersona,
-  savePersona,
+  savePrompt,
 } from "../../agent/prompt";
 
 // The system prompt, shown whole and edited in part.
@@ -33,6 +39,13 @@ export function PromptPanel() {
   // upgrades it to the server's view when one answers.
   const [state, setState] = useState<PromptState>(localPrompt);
   const [draft, setDraft] = useState(() => localPrompt().persona);
+  /** The cap as typed. A string, not a number, so the field can be *empty* —
+   *  which is the "let each tier use its own default" case and is not the same
+   *  as any number the box could hold. */
+  const [cap, setCap] = useState(() => {
+    const stored = localPrompt().maxTokens;
+    return stored === null ? "" : String(stored);
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** No server reached yet. Editing is disabled meanwhile: the server owns the
@@ -47,6 +60,7 @@ export function PromptPanel() {
         if (!live) return;
         setState(next);
         setDraft(next.persona);
+        setCap(next.maxTokens === null ? "" : String(next.maxTokens));
         setOffline(false);
       })
       .catch(() => live && setOffline(true));
@@ -59,6 +73,7 @@ export function PromptPanel() {
   const applied = (next: PromptState) => {
     setState(next);
     setDraft(next.persona);
+    setCap(next.maxTokens === null ? "" : String(next.maxTokens));
     setError(null);
     setOffline(false);
   };
@@ -67,7 +82,15 @@ export function PromptPanel() {
     event.preventDefault();
     setBusy(true);
     try {
-      applied(await savePersona(draft));
+      // An empty box clears the override; anything else is sent as a number and
+      // the server has the final say on the range.
+      const trimmed = cap.trim();
+      applied(
+        await savePrompt({
+          persona: draft,
+          maxTokens: trimmed === "" ? null : Number(trimmed),
+        }),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -87,7 +110,17 @@ export function PromptPanel() {
   }
 
   const over = draft.length > state.maxLength;
-  const dirty = draft !== state.persona;
+  const storedCap = state.maxTokens === null ? "" : String(state.maxTokens);
+  const capNumber = Number(cap.trim());
+  // An empty box is valid — it means "no override". Anything present has to be
+  // a whole number in range, checked here so Save is disabled rather than the
+  // server refusing a value the field happily accepted.
+  const capInvalid =
+    cap.trim() !== "" &&
+    (!Number.isInteger(capNumber) ||
+      capNumber < AGENT_MAX_TOKENS_MIN ||
+      capNumber > AGENT_MAX_TOKENS_MAX);
+  const dirty = draft !== state.persona || cap.trim() !== storedCap;
 
   return (
     <form className="prompt" onSubmit={submit}>
@@ -124,10 +157,47 @@ export function PromptPanel() {
         </div>
       </div>
 
+      <div className="prompt__section">
+        <label className="prompt__label" htmlFor="prompt-max-tokens">
+          Editable — longest reply
+        </label>
+        <input
+          id="prompt-max-tokens"
+          className="prompt__number"
+          type="number"
+          inputMode="numeric"
+          min={AGENT_MAX_TOKENS_MIN}
+          max={AGENT_MAX_TOKENS_MAX}
+          step={64}
+          value={cap}
+          readOnly={offline}
+          placeholder={`Default — local ${AGENT_MAX_TOKENS_LOCAL}, server ${AGENT_MAX_TOKENS_SERVER}`}
+          onChange={(e) => setCap(e.target.value)}
+        />
+        <div className="prompt__meta">
+          <span className={capInvalid ? "prompt__count--over" : undefined}>
+            {AGENT_MAX_TOKENS_MIN}–{AGENT_MAX_TOKENS_MAX} tokens
+          </span>
+          <span>{cap.trim() === "" ? "Default" : "Custom"} in force</span>
+        </div>
+        {/* The defaults differ per tier on purpose, so "empty" is a real
+            setting rather than an unset field: 512 stops a 1.7B model running
+            away on thinking tokens, and would cut the server model off
+            mid-sentence. Leaving this blank keeps both. */}
+        <p className="prompt__hint">
+          How many tokens one reply may use before it is cut off. Leave empty to
+          let each model use its own default. A reply that hits the cap is
+          marked as cut off in the chat.
+        </p>
+      </div>
+
       {error && <p className="prompt__error">{error}</p>}
 
       <div className="prompt__actions">
-        <button type="submit" disabled={busy || over || !dirty || offline}>
+        <button
+          type="submit"
+          disabled={busy || over || capInvalid || !dirty || offline}
+        >
           {busy ? "Saving…" : "Save"}
         </button>
         <button

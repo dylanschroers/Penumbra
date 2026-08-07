@@ -20,8 +20,21 @@ import type {
 // its own configuration and passes it in.
 
 /** Cap generation so a small model can't run away (Qwen3 thinking can
- *  otherwise emit thousands of tokens). */
-const DEFAULT_MAX_TOKENS = 512;
+ *  otherwise emit thousands of tokens). Tier 0's default, and the floor the
+ *  whole setting is calibrated against. */
+export const AGENT_MAX_TOKENS_LOCAL = 512;
+
+/** Tier 1's default. A larger model, the full tool registry, and questions
+ *  whose honest answer runs to a paragraph per tool — 512 truncated those
+ *  mid-word. */
+export const AGENT_MAX_TOKENS_SERVER = 2048;
+
+/** What the setting will accept. The floor is low enough to be a deliberate
+ *  "keep it terse" and high enough to finish a sentence; the ceiling exists
+ *  because this is a *runaway* guard first, and an unbounded one guards
+ *  nothing. */
+export const AGENT_MAX_TOKENS_MIN = 128;
+export const AGENT_MAX_TOKENS_MAX = 8192;
 /** How many tool rounds one turn may take, unless a tier raises it. */
 const DEFAULT_MAX_TOOL_STEPS = 4;
 /** The status probe is a liveness check, so it fails fast. */
@@ -70,7 +83,15 @@ export interface OpenAiEngineConfig {
   /** Names this backend in error messages ("local model responded 500"). */
   label?: string;
   maxToolSteps?: number;
-  maxTokens?: number;
+  /**
+   * Reply-length cap, or a function returning it.
+   *
+   * A function because the value is user-editable and this engine may be built
+   * once and used for the rest of the session (Tier 0 is), so a number captured
+   * at construction would pin the cap to whatever it was at page load. Same
+   * reason `ToolBindings.system` is read through a getter.
+   */
+  maxTokens?: number | (() => number);
   statusTimeoutMs?: number;
   /** Ceiling on one completion. Raise it for a slow backend; it is a deadlock
    *  guard, not a latency target. */
@@ -98,7 +119,7 @@ export class OpenAiEngine implements Engine {
   protected readonly headers: Record<string, string>;
   protected readonly label: string;
   protected readonly maxToolSteps: number;
-  protected readonly maxTokens: number;
+  private readonly resolveMaxTokens: () => number;
   protected readonly statusTimeoutMs: number;
   protected readonly requestTimeoutMs: number;
 
@@ -109,10 +130,17 @@ export class OpenAiEngine implements Engine {
     this.headers = config.headers ?? {};
     this.label = config.label ?? "model";
     this.maxToolSteps = config.maxToolSteps ?? DEFAULT_MAX_TOOL_STEPS;
-    this.maxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS;
+    const cap = config.maxTokens ?? AGENT_MAX_TOKENS_LOCAL;
+    this.resolveMaxTokens = typeof cap === "function" ? cap : () => cap;
     this.statusTimeoutMs = config.statusTimeoutMs ?? DEFAULT_STATUS_TIMEOUT_MS;
     this.requestTimeoutMs =
       config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  }
+
+  /** The cap in force for the next request. Resolved per call, so an edit
+   *  reaches the next turn without rebuilding anything. */
+  protected get maxTokens(): number {
+    return this.resolveMaxTokens();
   }
 
   /** Backend readiness for the status pill. Never throws; reports a state. */
@@ -156,7 +184,7 @@ export class OpenAiEngine implements Engine {
     ];
 
     for (let step = 0; step < this.maxToolSteps; step++) {
-      const msg = await this.complete(convo, tools, signal);
+      const { finish, ...msg } = await this.complete(convo, tools, signal);
       const calls = msg.tool_calls ?? [];
 
       if (calls.length === 0) {
@@ -170,7 +198,11 @@ export class OpenAiEngine implements Engine {
           .replace(/[ \t]{2,}/g, " ")
           .replace(/[ \t]+$/gm, "")
           .trim();
-        yield { kind: "answer", text };
+        // "length" means the cap cut it off mid-thought. Passed on so the UI can
+        // say so: the text itself just ends, which reads as a finished answer.
+        yield finish === "length"
+          ? { kind: "answer", text, truncated: true }
+          : { kind: "answer", text };
         return;
       }
 
@@ -224,7 +256,12 @@ export class OpenAiEngine implements Engine {
     convo: WireMessage[],
     tools: ToolBindings["tools"],
     signal?: AbortSignal,
-  ): Promise<{ content?: string | null; tool_calls?: ToolCall[] }> {
+  ): Promise<{
+    content?: string | null;
+    tool_calls?: ToolCall[];
+    /** Why generation stopped — "length" when the cap truncated it. */
+    finish?: string;
+  }> {
     // The caller's abort and our own deadline, composed by hand rather than with
     // AbortSignal.any: this runs in the OS webview too, and WebKitGTK is exactly
     // the platform where that is missing. Which of the two fired has to be
@@ -276,8 +313,10 @@ export class OpenAiEngine implements Engine {
     const body = (await res.json()) as {
       choices?: Array<{
         message?: { content?: string | null; tool_calls?: ToolCall[] };
+        finish_reason?: string;
       }>;
     };
-    return body.choices?.[0]?.message ?? {};
+    const choice = body.choices?.[0];
+    return { ...choice?.message, finish: choice?.finish_reason };
   }
 }

@@ -13,11 +13,12 @@ import type {
   ToolBindings,
 } from "@penumbra/shared";
 import {
+  AGENT_MAX_TOKENS_LOCAL,
   composeSystem,
   migrateStorageKey,
   STORAGE_NAMESPACE,
 } from "@penumbra/shared";
-import { cachedPersona } from "../agent/prompt";
+import { cachedMaxTokens, cachedPersona } from "../agent/prompt";
 import { runTool, toolSpecs } from "../agent/tools";
 import { LocalEngine } from "./LocalEngine";
 import { RemoteEngine } from "./RemoteEngine";
@@ -147,7 +148,13 @@ function loadProvider(): ProviderKind {
 }
 
 function createEngine(): SwitchableEngine {
-  const local = new LocalEngine({ bindings: clientBindings });
+  const local = new LocalEngine({
+    bindings: clientBindings,
+    // A function, not a value: this engine is built once at module load, so a
+    // cap read here would be whatever it was at page load forever. Same reason
+    // `system` above is a getter.
+    maxTokens: () => cachedMaxTokens() ?? AGENT_MAX_TOKENS_LOCAL,
+  });
   // No address or bearer passed: both come from ../serverAddress, read per
   // request, so the status pill moves Tier-1 chat along with everything else.
   const server = new RemoteEngine();

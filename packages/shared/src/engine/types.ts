@@ -52,7 +52,20 @@ export type AgentEvent =
       args: Record<string, unknown>;
       result: string;
     }
-  | { kind: "answer"; text: string };
+  | {
+      kind: "answer";
+      text: string;
+      /**
+       * The reply stopped because it hit the token cap, not because the model
+       * had finished.
+       *
+       * Carried rather than dropped because a truncated answer is indetectable
+       * from the outside: it ends mid-sentence and looks like the assistant
+       * chose to stop. The backend says so in `finish_reason`, and that was the
+       * one place it was known.
+       */
+      truncated?: boolean;
+    };
 
 /**
  * The tool surface a turn runs against: the specs the model is shown, the

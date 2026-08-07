@@ -22,6 +22,9 @@ import { api } from "../api";
 
 const PERSONA_KEY = `${STORAGE_NAMESPACE}.agent.persona.v1`;
 const LEGACY_PERSONA_KEY = "penumbra.agent.persona";
+/** The reply-length cap, mirrored for the same reason the persona is: Tier 0
+ *  must be able to read it with no server in reach. */
+const MAX_TOKENS_KEY = `${STORAGE_NAMESPACE}.agent.maxTokens.v1`;
 
 /** The server's view of the prompt. Mirrors PromptState on the server. */
 export interface PromptState {
@@ -30,6 +33,8 @@ export interface PromptState {
   policy: string;
   source: "default" | "settings";
   maxLength: number;
+  /** Reply-length cap, or null to let each tier use its own default. */
+  maxTokens: number | null;
 }
 
 /** The mirrored persona, or null when the server has never been reached. Null is
@@ -47,6 +52,19 @@ function storedPersona(): string | null {
 /** The persona to run with right now. Synchronous by design — see above. */
 export function cachedPersona(): string {
   return storedPersona() ?? AGENT_PERSONA_DEFAULT;
+}
+
+/** The mirrored reply cap, or null when none is set. Synchronous for the same
+ *  reason as the persona: the embedded engine reads it mid-turn. */
+export function cachedMaxTokens(): number | null {
+  try {
+    const raw = localStorage.getItem(MAX_TOKENS_KEY);
+    if (raw === null) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -73,37 +91,49 @@ export function localPrompt(): PromptState {
     // as an override.
     source: stored === null ? "default" : "settings",
     maxLength: AGENT_PERSONA_MAX,
+    maxTokens: cachedMaxTokens(),
   };
 }
 
-function remember(persona: string): void {
+function remember(state: PromptState): void {
   try {
-    localStorage.setItem(PERSONA_KEY, persona);
+    localStorage.setItem(PERSONA_KEY, state.persona);
+    if (state.maxTokens === null) localStorage.removeItem(MAX_TOKENS_KEY);
+    else localStorage.setItem(MAX_TOKENS_KEY, String(state.maxTokens));
   } catch {
-    // Non-fatal: the persona just won't survive a reload.
+    // Non-fatal: the settings just won't survive a reload.
   }
 }
 
 /** Read the prompt from the server and mirror it locally. */
 export async function fetchPrompt(): Promise<PromptState> {
   const state = await api<PromptState>("/agent/prompt");
-  remember(state.persona);
+  remember(state);
   return state;
 }
 
-/** Save a persona, then mirror what the server accepted — not what was sent. */
-export async function savePersona(persona: string): Promise<PromptState> {
+/**
+ * Save the editable settings, then mirror what the server accepted — not what
+ * was sent.
+ *
+ * Both travel together because they are one form. `maxTokens: null` clears the
+ * cap; omitting a field leaves it as it was.
+ */
+export async function savePrompt(patch: {
+  persona?: string;
+  maxTokens?: number | null;
+}): Promise<PromptState> {
   const state = await api<PromptState>("/agent/prompt", {
     method: "PUT",
-    body: JSON.stringify({ persona }),
+    body: JSON.stringify(patch),
   });
-  remember(state.persona);
+  remember(state);
   return state;
 }
 
 /** Drop the override and go back to the shipped default. */
 export async function resetPersona(): Promise<PromptState> {
   const state = await api<PromptState>("/agent/prompt", { method: "DELETE" });
-  remember(state.persona);
+  remember(state);
   return state;
 }
