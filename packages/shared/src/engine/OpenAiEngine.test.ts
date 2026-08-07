@@ -385,3 +385,60 @@ describe("configuration", () => {
     expect(mockFetch.mock.calls[0]?.[0]).toBe("http://studio/v1/models");
   });
 });
+
+// A backend that accepts the connection and then goes quiet — its GPU busy
+// training, its weights being evicted — used to leave `fetch` pending forever.
+// Nothing above ever learned the turn had stalled, so the UI sat on "still
+// working" with no error to show and no way to end it.
+/** A socket that is open and silent: it settles only when aborted, which is
+ *  what a real fetch does — including rejecting at once for a signal that was
+ *  already aborted before the call. */
+const silentBackend = (_url: string, init: RequestInit = {}) =>
+  new Promise((_resolve, reject) => {
+    const fail = () =>
+      reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    if (init.signal?.aborted) return fail();
+    init.signal?.addEventListener("abort", fail);
+  });
+
+describe("a backend that never answers", () => {
+  it("fails the turn instead of waiting forever", async () => {
+    // Never settles, exactly like a socket that is open and silent.
+    mockFetch.mockImplementation(silentBackend);
+
+    const slow = new OpenAiEngine({
+      bindings: { tools: [], system: "sys", runTool: vi.fn() },
+      baseURL: "http://test",
+      model: "m",
+      label: "test model",
+      statusTimeoutMs: 5,
+      requestTimeoutMs: 20,
+    });
+
+    await expect(collect(slow.runAgent([]))).rejects.toThrow(
+      /did not respond within/,
+    );
+  });
+
+  // The caller leaving and the backend stalling both surface as an AbortError,
+  // and they mean opposite things: one is the user, the other is the fault
+  // worth reporting. Reporting a deliberate stop as a timeout would blame the
+  // machine for something the person did.
+  it("does not report a caller's abort as a timeout", async () => {
+    mockFetch.mockImplementation(silentBackend);
+
+    const patient = new OpenAiEngine({
+      bindings: { tools: [], system: "sys", runTool: vi.fn() },
+      baseURL: "http://test",
+      model: "m",
+      label: "test model",
+      statusTimeoutMs: 5,
+      requestTimeoutMs: 60_000,
+    });
+
+    const controller = new AbortController();
+    const turn = collect(patient.runAgent([], controller.signal));
+    controller.abort();
+    await expect(turn).rejects.toThrow(/aborted/);
+  });
+});

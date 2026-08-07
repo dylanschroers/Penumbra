@@ -926,6 +926,39 @@ body {
   cursor: default;
 }
 
+/* The step's own result, beside its name. Truncated rather than wrapped: it is
+   a glance at what happened, and the full text is still the tooltip. */
+.agent__tool-result {
+  display: inline-block;
+  max-width: 100%;
+  margin-left: 0.4rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+
+/* A tool that refused. Coloured because the row is otherwise identical to a
+   step that worked, which is how a failure passes for progress. */
+.agent__tool--failed {
+  color: var(--danger);
+}
+
+.agent__elapsed {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The turn stopped. Deliberately unlike a message bubble: this is the shell
+   reporting a failure, not something the assistant said. */
+.agent__error {
+  border-left: 2px solid var(--danger);
+  color: var(--danger);
+  font-size: 0.82rem;
+  margin-top: 0.3rem;
+  padding: 0.2rem 0 0.2rem 0.5rem;
+}
+
 .agent__form {
   display: flex;
   gap: 0.4rem;

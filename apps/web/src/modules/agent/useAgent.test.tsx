@@ -11,12 +11,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let status: AgentStatus = { state: "ready", model: "m" };
 
+/** What the next turn does. Swapped per test so one mock covers an answer, a
+ *  failure, and a turn that never returns. */
+let turn: (
+  signal?: AbortSignal,
+) => AsyncGenerator<{ kind: string; text?: string }> = async function* () {
+  yield { kind: "answer", text: "hi" };
+};
+
 vi.mock("../../engine", () => ({
   engine: {
     getStatus: async () => status,
-    runAgent: async function* () {
-      yield { kind: "answer", text: "hi" };
-    },
+    runAgent: (_m: unknown, signal?: AbortSignal) => turn(signal),
   },
   getProvider: () => "server",
   setProvider: () => {},
@@ -53,6 +59,9 @@ async function reportStatus(next: AgentStatus) {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  turn = async function* () {
+    yield { kind: "answer", text: "hi" };
+  };
   status = {
     state: "ready",
     model: "m",
@@ -322,5 +331,89 @@ describe("history sent to the model", () => {
     expect(
       latest.messages.filter((m) => !m.notice).map((m) => m.content),
     ).not.toContain(notices()[0]?.content);
+  });
+});
+
+// A turn that breaks has to leave something on screen. The freeze this pins was
+// the whole complaint: a backend that stalled produced no answer, no error, and
+// no end to the busy state, which is indistinguishable from the app ignoring
+// the message entirely.
+describe("a turn that fails", () => {
+  /** A turn that breaks before producing anything — the shape of every backend
+   *  failure, since the engine throws rather than yielding an error event. */
+  const failing = (message: string) =>
+    async function* (): AsyncGenerator<{ kind: string; text?: string }> {
+      if (message) throw new Error(message);
+      yield { kind: "answer", text: "unreachable" };
+    };
+
+  it("reports the reason instead of ending in silence", async () => {
+    turn = failing("the server backend did not respond within 120s");
+    await mount();
+    await act(async () => {
+      await latest.send("hello");
+    });
+
+    const last = latest.messages[latest.messages.length - 1];
+    expect(last?.error).toContain("did not respond within");
+    // Its own field: an error is the shell reporting on the turn, and putting
+    // it in `content` made it look like the assistant had answered.
+    expect(last?.content).toBe("");
+    expect(latest.busy).toBe(false);
+  });
+
+  // A failed turn produced no assistant reply, so replaying it would feed the
+  // model an empty turn it never took.
+  it("is not replayed to the model as history", async () => {
+    turn = failing("boom");
+    await mount();
+    await act(async () => {
+      await latest.send("first");
+    });
+
+    let seen: unknown[] = [];
+    turn = async function* () {
+      yield { kind: "answer", text: "ok" };
+    };
+    const { engine } = await import("../../engine");
+    const spy = vi.spyOn(engine, "runAgent");
+    await act(async () => {
+      await latest.send("second");
+    });
+    seen = (spy.mock.calls[0]?.[0] ?? []) as unknown[];
+
+    expect(seen).toEqual([
+      { role: "user", content: "first" },
+      { role: "user", content: "second" },
+    ]);
+  });
+
+  it("marks a turn the user stopped as stopped, not as a fault", async () => {
+    turn = async function* (signal?: AbortSignal) {
+      await new Promise((_r, reject) =>
+        signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+      );
+      yield { kind: "answer", text: "never" };
+    };
+    await mount();
+    let sending: Promise<void>;
+    await act(async () => {
+      sending = latest.send("hello");
+      await Promise.resolve();
+    });
+    expect(latest.busy).toBe(true);
+    // Something is on screen to count up from, which is what tells a slow turn
+    // apart from a wedged one.
+    expect(latest.startedAt).not.toBeNull();
+
+    await act(async () => {
+      latest.stop();
+      await sending;
+    });
+
+    const last = latest.messages[latest.messages.length - 1];
+    expect(last?.error).toBe("Stopped.");
+    expect(latest.busy).toBe(false);
+    expect(latest.startedAt).toBeNull();
   });
 });
