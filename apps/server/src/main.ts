@@ -14,7 +14,7 @@ import { createTargetStore } from "./compute/targets";
 import { sqlite } from "./db";
 import { registerDeviceRoutes } from "./devices/routes";
 import { createDeviceStore } from "./devices/store";
-import { allowedOrigins } from "./http/cors";
+import { corsOptions } from "./http/cors";
 import { trustProxyFromEnv } from "./http/trustProxy";
 import { createLabStore } from "./lab/jobs";
 import { registerLabRoutes } from "./lab/routes";
@@ -46,9 +46,8 @@ app.addContentTypeParser(
 // Only the app's own origins, plus whatever PENUMBRA_ALLOWED_ORIGINS names. See
 // ./http/cors: reflecting any origin let a page the user merely *visited* drive
 // /agent/* and /lab/* through the loopback exemption in ./http/auth.
-await app.register(cors, {
-  origin: allowedOrigins(process.env.PENUMBRA_ALLOWED_ORIGINS),
-});
+// The methods list matters as much as the origins here; see ./http/cors.
+await app.register(cors, corsOptions(process.env.PENUMBRA_ALLOWED_ORIGINS));
 
 app.get("/health", async () => ({ status: "ok" }));
 
