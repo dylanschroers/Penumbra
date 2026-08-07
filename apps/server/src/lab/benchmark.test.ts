@@ -1,8 +1,15 @@
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { SuiteDefinition } from "@penumbra/shared";
 import { afterEach, describe, expect, it } from "vitest";
-import { lmEvalEnv, parseLmEvalResults, runBenchmark } from "./benchmark";
+import {
+  lmEvalEnv,
+  parseLmEvalResults,
+  runBenchmark,
+  watchProcess,
+} from "./benchmark";
 
 // The personal suite is driven against a real HTTP model server, so the request
 // shape and scoring are exercised end to end without a model. The general
@@ -168,6 +175,77 @@ describe("lmEvalEnv", () => {
     // lm_eval's OpenAI client refuses to start without one, and a local Studio
     // may legitimately have no key.
     expect(lmEvalEnv().OPENAI_API_KEY).toBe("dummy");
+  });
+});
+
+// A stand-in for a spawned child: stdout/stderr are emitters, and kill() ends it
+// the way a real process does — the OS delivers `close` shortly after — so the
+// watchdog can settle. `signals` records which signals it was sent.
+function fakeChild(): ChildProcess & { signals: string[] } {
+  const child = new EventEmitter() as ChildProcess & { signals: string[] };
+  child.stdout = new EventEmitter() as ChildProcess["stdout"];
+  child.stderr = new EventEmitter() as ChildProcess["stderr"];
+  child.signals = [];
+  child.kill = ((signal?: string) => {
+    child.signals.push(signal ?? "SIGTERM");
+    setTimeout(() => child.emit("close", null), 0);
+    return true;
+  }) as ChildProcess["kill"];
+  return child;
+}
+
+const frame = (pct: number, at: number, of: number) =>
+  Buffer.from(
+    `Requesting API: ${pct}%|#####     | ${at}/${of} [05:00<05:00, 3.3s/it]\n`,
+  );
+
+describe("watchProcess", () => {
+  // The reported hang: the bar reaches 100%, lm_eval then wedges before exiting,
+  // and the job used to sit at "running 100%" forever with the GPU still held.
+  // The watchdog kills it so the run can settle and free the host.
+  it("kills a child that goes silent past its budget", async () => {
+    const child = fakeChild();
+    const watched = watchProcess(child, { stallMs: 30 });
+    child.stderr?.emit("data", frame(100, 180, 180));
+    const outcome = await watched;
+    expect(outcome.stalled).toBe(true);
+    expect(outcome.progress).toBe(1);
+    expect(child.signals).toContain("SIGTERM");
+  });
+
+  // Any output restarts the clock, so a run that keeps emitting frames — even
+  // slowly — is never mistaken for a wedge.
+  it("keeps running while output keeps arriving", async () => {
+    const child = fakeChild();
+    const watched = watchProcess(child, { stallMs: 80 });
+    child.stderr?.emit("data", frame(50, 90, 180));
+    await new Promise((r) => setTimeout(r, 50));
+    child.stderr?.emit("data", frame(60, 108, 180)); // resets the silence clock
+    await new Promise((r) => setTimeout(r, 20));
+    child.emit("close", 0);
+    const outcome = await watched;
+    expect(outcome.stalled).toBe(false);
+    expect(child.signals).toHaveLength(0);
+  });
+
+  it("resolves cleanly when the child exits on its own", async () => {
+    const child = fakeChild();
+    const watched = watchProcess(child, { stallMs: 1000 });
+    child.stderr?.emit("data", frame(100, 5, 5));
+    child.emit("close", 0);
+    expect(await watched).toMatchObject({
+      code: 0,
+      stalled: false,
+      progress: 1,
+    });
+    expect(child.signals).toHaveLength(0);
+  });
+
+  it("rejects if the process fails to start", async () => {
+    const child = fakeChild();
+    const watched = watchProcess(child, { stallMs: 1000 });
+    child.emit("error", new Error("ENOENT"));
+    await expect(watched).rejects.toThrow("ENOENT");
   });
 });
 

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -230,6 +230,25 @@ export function parseLmEvalResults(raw: string): TaskScore[] {
 /** Path to the lm_eval binary, overridable for tests and for a venv install. */
 export const LM_EVAL_BIN = process.env.LM_EVAL_BIN ?? "lm_eval";
 
+/**
+ * How long the lm_eval child may fall silent before it is treated as wedged and
+ * killed. It prints a tqdm frame per completed request, so a healthy run is
+ * quiet only for the length of one request (a Studio at ~48s/it, measured, sits
+ * far inside this) or the gap between tasks — both well under five minutes.
+ *
+ * This is what catches lm_eval hanging *after* a finished run — it has done so
+ * on Windows at the summary-table step — which used to leave a job stuck at
+ * "running 100%" forever, holding the GPU with it and so timing out every chat
+ * turn and job_status check aimed at the same host.
+ *
+ * A single flat budget on purpose: shortening it once the bar hits 100% would
+ * catch that hang sooner, but a multi-task run shows a full bar at every task
+ * boundary, and a short budget there would kill a healthy run in the gap before
+ * the next task's first request. Overridable for a slow host or a snappier one.
+ */
+export const BENCHMARK_STALL_MS =
+  Number(process.env.BENCHMARK_STALL_MS) || 300_000;
+
 export async function lmEvalAvailable(): Promise<boolean> {
   return new Promise((resolve) => {
     const probe = spawn(LM_EVAL_BIN, ["--help"], { stdio: "ignore" });
@@ -264,6 +283,93 @@ export function lmEvalEnv(apiKey?: string): NodeJS.ProcessEnv {
   };
 }
 
+/** How a watched child process ended. A non-zero exit and a stall are outcomes,
+ *  not errors: the caller decides what each means, because a stalled run may
+ *  still have complete results on disk worth keeping. */
+export interface ProcessOutcome {
+  /** Exit code, or null when a signal (a kill) ended it. */
+  code: number | null;
+  /** The watchdog killed it for going silent past its budget. */
+  stalled: boolean;
+  /** Highest progress (0..1) the output reported. Gates salvage on a genuinely
+   *  finished run and names the stall point in the error. */
+  progress: number;
+  /** Last ~2 KB of stderr, where a failed run's traceback lives. */
+  stderrTail: string;
+}
+
+/**
+ * Relay a child's output as progress and settle when it ends, killing it if it
+ * goes silent for longer than `stallMs`. Any output at all restarts the clock,
+ * so a run that keeps printing tqdm frames is never touched; only true silence
+ * past the budget counts as a wedge.
+ *
+ * Rejects only if the process fails to start; every other ending resolves with
+ * a ProcessOutcome for the caller to interpret.
+ */
+export function watchProcess(
+  child: ChildProcess,
+  opts: {
+    stallMs: number;
+    onProgress?: (update: RunProgress) => void;
+  },
+): Promise<ProcessOutcome> {
+  return new Promise((resolve, reject) => {
+    let progress = 0;
+    let stalled = false;
+    let stderrTail = "";
+    let idle: NodeJS.Timeout | undefined;
+    let hardKill: NodeJS.Timeout | undefined;
+
+    const arm = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => {
+        // Silent past the budget: kill it so the job settles as failed instead
+        // of sitting at 100% forever, and the GPU it holds is freed. SIGKILL
+        // backs up SIGTERM if the wedged process ignores the first.
+        stalled = true;
+        child.kill("SIGTERM");
+        hardKill = setTimeout(() => child.kill("SIGKILL"), 2000);
+      }, opts.stallMs);
+    };
+
+    // lm_eval writes its progress bars to stderr and its tables to stdout, and a
+    // chunk from either can be several frames or half of one — so both go
+    // through the same reader, which reports only what is worth showing. Any
+    // output at all also means the child is alive, so it restarts the clock.
+    const relay = (chunk: string) => {
+      const update = readOutputChunk(chunk);
+      if (update) {
+        if (update.progress !== null) progress = update.progress;
+        opts.onProgress?.(update);
+      }
+      arm();
+    };
+
+    child.stdout?.on("data", (d: Buffer) => relay(d.toString()));
+    child.stderr?.on("data", (d: Buffer) => {
+      const line = d.toString();
+      // Kept whole and unparsed: this is what a failed run's message is built
+      // from, and a bar frame trimmed for display would lose the traceback.
+      stderrTail = `${stderrTail}${line}`.slice(-2000);
+      relay(line);
+    });
+    child.on("error", (err) => {
+      clearTimeout(idle);
+      clearTimeout(hardKill);
+      reject(err);
+    });
+    child.on("close", (code) => {
+      clearTimeout(idle);
+      clearTimeout(hardKill);
+      resolve({ code, stalled, progress, stderrTail });
+    });
+    // Arm before any output so a child that hangs from the very first byte is
+    // still caught.
+    arm();
+  });
+}
+
 async function runGeneralSuite(opts: BenchmarkOptions): Promise<TaskScore[]> {
   const outDir = await mkdtemp(join(tmpdir(), "penumbra-lmeval-"));
   const args = [
@@ -282,41 +388,47 @@ async function runGeneralSuite(opts: BenchmarkOptions): Promise<TaskScore[]> {
     outDir,
   ];
 
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(LM_EVAL_BIN, args, {
-      env: lmEvalEnv(opts.apiKey),
-    });
-    // A client abort must kill the subprocess, or a cancelled benchmark keeps
-    // burning GPU for hours.
-    const onAbort = () => child.kill("SIGTERM");
-    opts.signal?.addEventListener("abort", onAbort, { once: true });
+  const child = spawn(LM_EVAL_BIN, args, { env: lmEvalEnv(opts.apiKey) });
+  // A client abort must kill the subprocess, or a cancelled benchmark keeps
+  // burning GPU for hours.
+  const onAbort = () => child.kill("SIGTERM");
+  opts.signal?.addEventListener("abort", onAbort, { once: true });
 
-    // lm_eval writes its progress bars to stderr and its tables to stdout, and
-    // a chunk from either can be several frames or half of one — so both go
-    // through the same reader, which reports only what is worth showing.
-    const relay = (chunk: string) => {
-      const update = readOutputChunk(chunk);
-      if (update) opts.onProgress?.(update);
-    };
-
-    let stderrTail = "";
-    child.stdout.on("data", (d: Buffer) => relay(d.toString()));
-    child.stderr.on("data", (d: Buffer) => {
-      const line = d.toString();
-      // Kept whole and unparsed: this is what a failed run's message is built
-      // from, and a bar frame trimmed for display would lose the traceback.
-      stderrTail = `${stderrTail}${line}`.slice(-2000);
-      relay(line);
+  let outcome: ProcessOutcome;
+  try {
+    outcome = await watchProcess(child, {
+      stallMs: BENCHMARK_STALL_MS,
+      onProgress: opts.onProgress,
     });
-    child.on("error", (err) =>
-      reject(new Error(`lm_eval failed to start: ${err.message}`)),
+  } catch (err) {
+    throw new Error(
+      `lm_eval failed to start: ${err instanceof Error ? err.message : String(err)}`,
     );
-    child.on("close", (code) => {
-      opts.signal?.removeEventListener("abort", onAbort);
-      if (code === 0) resolve();
-      else reject(new Error(`lm_eval exited ${code}: ${stderrTail.trim()}`));
-    });
-  });
+  } finally {
+    opts.signal?.removeEventListener("abort", onAbort);
+  }
+
+  // Salvage a wedged-but-finished run. lm_eval has hung after the last request
+  // on Windows (the summary-table step it also once crashed on, see lmEvalEnv):
+  // the scores are already written, so a full bar plus a results.json on disk is
+  // a completed run whose process merely would not exit — not a partial one. Our
+  // args carry no --log_samples, so lm_eval writes results.json exactly once, at
+  // the very end, which is what makes the file's presence proof of completion.
+  // Without it, the stall is a real mid-run hang and must fail — carrying the
+  // stderr tail so the traceback that a stuck "running 100%" row hid is visible.
+  if (outcome.stalled) {
+    const salvage =
+      outcome.progress >= 0.999 ? await findResultsJson(outDir) : undefined;
+    if (salvage) return parseLmEvalResults(await readFile(salvage, "utf8"));
+    throw new Error(
+      `lm_eval stalled at ${Math.round(outcome.progress * 100)}% and was killed: ${outcome.stderrTail.trim()}`,
+    );
+  }
+  if (outcome.code !== 0) {
+    throw new Error(
+      `lm_eval exited ${outcome.code}: ${outcome.stderrTail.trim()}`,
+    );
+  }
 
   const results = await findResultsJson(outDir);
   if (!results) throw new Error("lm_eval wrote no results.json");
