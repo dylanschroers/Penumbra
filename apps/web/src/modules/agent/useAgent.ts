@@ -23,6 +23,16 @@ export type DisplayMessage = ChatMessage & {
    *  Shown in the thread, never replayed as history — it is a note *about* the
    *  conversation, and feeding it back would put it in the model's mouth. */
   notice?: boolean;
+  /**
+   * Why this turn stopped early, when it did.
+   *
+   * Its own field rather than text appended to `content`, because the two are
+   * not the same kind of thing: an error is the shell reporting on the turn, it
+   * needs to look like a failure rather than like an answer, and it must not be
+   * replayed to the model as something the assistant said. Appending it did all
+   * three wrong.
+   */
+  error?: string;
 };
 
 /** Who answered: a compute target and the model resident on it. */
@@ -76,6 +86,14 @@ export function useAgent() {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [status, setStatus] = useState<AgentStatus>({ state: "stopped" });
   const [busy, setBusy] = useState(false);
+  /**
+   * When the in-flight turn started, or null when none is.
+   *
+   * The UI counts up from this. A tool loop against a large model is minutes of
+   * silence between events, which is indistinguishable from a hang unless
+   * something on screen is visibly moving — the complaint this answers.
+   */
+  const [startedAt, setStartedAt] = useState<number | null>(null);
   const [provider, setProviderState] = useState<ProviderKind>(getProvider);
   const abortRef = useRef<AbortController | null>(null);
   /**
@@ -162,10 +180,14 @@ export function useAgent() {
       // History is role + content only; tool steps are display-only and never
       // replayed (each turn runs a fresh tool loop). Notices are dropped for a
       // stronger reason: they are the shell talking about the conversation, and
-      // replaying one would present it as something the assistant said.
+      // replaying one would present it as something the assistant said — and so
+      // is an error, which additionally left an empty assistant turn in the
+      // context when the failure was all a turn produced.
+      const spoken = (m: DisplayMessage) =>
+        !m.notice && !(m.error && !m.content.trim());
       const history: ChatMessage[] = [
         ...messages
-          .filter((m) => !m.notice)
+          .filter(spoken)
           .map(({ role, content }) => ({ role, content })),
         { role: "user", content: trimmed },
       ];
@@ -178,6 +200,7 @@ export function useAgent() {
       // change is measured against.
       answeredBy.current = identityOf(status);
       setBusy(true);
+      setStartedAt(Date.now());
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -204,12 +227,20 @@ export function useAgent() {
           }
         }
       } catch (err) {
-        if (!controller.signal.aborted) {
-          const note = `⚠️ ${err instanceof Error ? err.message : String(err)}`;
-          patch((m) => ({ ...m, content: `${m.content}\n\n${note}`.trim() }));
-        }
+        // An abort is the user's own doing, so it is reported as a stop rather
+        // than as a fault — but it is still reported. A turn that vanishes with
+        // the thread unchanged reads exactly like one that never ran.
+        patch((m) => ({
+          ...m,
+          error: controller.signal.aborted
+            ? "Stopped."
+            : err instanceof Error
+              ? err.message
+              : String(err),
+        }));
       } finally {
         setBusy(false);
+        setStartedAt(null);
         abortRef.current = null;
       }
     },
@@ -232,7 +263,28 @@ export function useAgent() {
     // A cleared thread has no last turn to measure a change against.
     answeredBy.current = null;
     setBusy(false);
+    setStartedAt(null);
   }, []);
 
-  return { messages, status, busy, send, clear, provider, setProvider };
+  /**
+   * Abandon the turn in flight, keeping the thread.
+   *
+   * `clear` could already do this, at the cost of the conversation — which made
+   * the only way out of a slow turn the one that also destroyed the context.
+   * Whatever the tools already did stands; the server stops its own loop when
+   * the stream closes (docs/AGENT_DESIGN.md §5).
+   */
+  const stop = useCallback(() => abortRef.current?.abort(), []);
+
+  return {
+    messages,
+    status,
+    busy,
+    startedAt,
+    send,
+    stop,
+    clear,
+    provider,
+    setProvider,
+  };
 }

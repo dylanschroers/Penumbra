@@ -28,6 +28,20 @@ const DEFAULT_MAX_TOOL_STEPS = 4;
 const DEFAULT_STATUS_TIMEOUT_MS = 1500;
 
 /**
+ * How long one completion may take before the turn is failed.
+ *
+ * Generous, because this is not a latency budget: a 12B model on an older card
+ * genuinely takes tens of seconds, and cutting a working answer short is worse
+ * than waiting. It exists because the alternative is unbounded — a backend that
+ * accepts the connection and then never answers (its GPU busy training, its
+ * weights being evicted) leaves `fetch` pending forever, and a UI whose only
+ * signal is "still working" cannot tell that from a slow reply. Every hang of
+ * that shape reached the user as a permanently frozen chat with nothing in it
+ * to report.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
+
+/**
  * Emoji, with the modifiers that ride along: skin tones, variation selectors,
  * and the zero-width joiners that fuse multi-part sequences.
  *
@@ -58,6 +72,9 @@ export interface OpenAiEngineConfig {
   maxToolSteps?: number;
   maxTokens?: number;
   statusTimeoutMs?: number;
+  /** Ceiling on one completion. Raise it for a slow backend; it is a deadlock
+   *  guard, not a latency target. */
+  requestTimeoutMs?: number;
 }
 
 /** One OpenAI chat message as it goes over the wire, including the tool roles
@@ -83,6 +100,7 @@ export class OpenAiEngine implements Engine {
   protected readonly maxToolSteps: number;
   protected readonly maxTokens: number;
   protected readonly statusTimeoutMs: number;
+  protected readonly requestTimeoutMs: number;
 
   constructor(config: OpenAiEngineConfig) {
     this.bindings = config.bindings;
@@ -93,6 +111,8 @@ export class OpenAiEngine implements Engine {
     this.maxToolSteps = config.maxToolSteps ?? DEFAULT_MAX_TOOL_STEPS;
     this.maxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.statusTimeoutMs = config.statusTimeoutMs ?? DEFAULT_STATUS_TIMEOUT_MS;
+    this.requestTimeoutMs =
+      config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   }
 
   /** Backend readiness for the status pill. Never throws; reports a state. */
@@ -205,19 +225,53 @@ export class OpenAiEngine implements Engine {
     tools: ToolBindings["tools"],
     signal?: AbortSignal,
   ): Promise<{ content?: string | null; tool_calls?: ToolCall[] }> {
-    const res = await fetch(`${this.baseURL}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...this.headers },
-      body: JSON.stringify({
-        model: this.model,
-        messages: convo,
-        tools,
-        tool_choice: "auto",
-        max_tokens: this.maxTokens,
-        temperature: 0,
-      }),
-      signal,
-    });
+    // The caller's abort and our own deadline, composed by hand rather than with
+    // AbortSignal.any: this runs in the OS webview too, and WebKitGTK is exactly
+    // the platform where that is missing. Which of the two fired has to be
+    // remembered, because both surface as the same AbortError and they mean
+    // opposite things — one is the user leaving, the other is the failure worth
+    // reporting.
+    const controller = new AbortController();
+    let expired = false;
+    const deadline = setTimeout(() => {
+      expired = true;
+      controller.abort();
+    }, this.requestTimeoutMs);
+    const relay = () => controller.abort();
+    signal?.addEventListener("abort", relay, { once: true });
+    // An abort that already happened fires no event. Without this a Stop
+    // pressed between two steps of a tool loop was dropped, and the next
+    // request ran to its full deadline against a caller that had already left.
+    if (signal?.aborted) relay();
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseURL}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...this.headers },
+        body: JSON.stringify({
+          model: this.model,
+          messages: convo,
+          tools,
+          tool_choice: "auto",
+          max_tokens: this.maxTokens,
+          temperature: 0,
+        }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (expired) {
+        throw new Error(
+          `the ${this.label} backend did not respond within ${Math.round(
+            this.requestTimeoutMs / 1000,
+          )}s — it may be loading a model, busy training, or wedged`,
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(deadline);
+      signal?.removeEventListener("abort", relay);
+    }
     if (!res.ok) throw new Error(`${this.label} responded ${res.status}`);
     const body = (await res.json()) as {
       choices?: Array<{
