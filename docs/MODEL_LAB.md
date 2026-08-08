@@ -187,11 +187,11 @@ results:
 
 ## Driving it from chat
 
-The Lab's screen is not the only way in: the Tier-1 agent binds five contracts —
-`list_models`, `list_datasets`, `start_finetune`, `run_benchmark`, `job_status` —
-so "what can this box run, and how did last night's fine-tune go" is a
-conversation rather than a form. Three things make that safe rather than a second
-implementation of the same feature:
+The Lab's screen is not the only way in: the Tier-1 agent binds six contracts —
+`list_models`, `list_datasets`, `start_finetune`, `run_benchmark`, `job_status`,
+`lab_history` — so "what can this box run, and how did last night's fine-tune go"
+is a conversation rather than a form. Three things make that safe rather than a
+second implementation of the same feature:
 
 - **One orchestration, not two.** `registerLabRoutes` returns the operations it
   registers, and the agent binds *that object*. The alternative — a second copy
@@ -206,7 +206,19 @@ implementation of the same feature:
   have always measured.
 - **A job id is the answer.** Starting work returns an id, never a result: a
   fine-tune outlives the turn by hours. `LAB_POLICY` says so in the prompt, and
-  says not to report a score `job_status` has not shown.
+  says not to report a score no tool has shown.
+
+Progress and results are two tools because they are two tables. A job row is a
+progress line, and a finished benchmark's is the last frame the harness printed,
+never the numbers — those go to `lab_scores`, and the runs a fine-tune leaves
+behind go to `lab_runs`. `job_status` reads jobs; `lab_history` reads the other
+two behind one `what` slot, because §7 of AGENT_DESIGN is a rule about tool
+count and "list past runs" and "list past scores" are one question to a user.
+Both are shaped for a reader who cannot check them: a percentage is dropped once
+a job has settled (a run that broke at 60% otherwise reads as "failed 60%"), a
+score is attributed to the model that actually answered rather than the one the
+request named, and every score list ends with the sentence saying it is a subset
+run.
 
 The arguments are the request schemas' own fields, so the suite ids the model may
 emit are `SUITES`, and the step and sample bounds are the ones the routes

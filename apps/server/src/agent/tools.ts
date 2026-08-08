@@ -1,6 +1,7 @@
 import {
   AGENT_SYSTEM,
   agentTools,
+  type BenchmarkResult,
   completeTaskTool,
   composeSystem,
   createTaskTool,
@@ -11,6 +12,8 @@ import {
   jobStatusTool,
   LAB_POLICY,
   type LabJob,
+  type LabRun,
+  labHistoryTool,
   labTools,
   listDatasetsTool,
   listModelsTool,
@@ -84,15 +87,131 @@ function roughSize(bytes: number): string {
 /** One job as a line to relay: what it is, where it got to, and why it stopped
  *  if it did. */
 function jobLine(job: LabJob): string {
+  // A percentage, but only while it still means something. A settled job's last
+  // progress figure says where it stopped reporting, not what it achieved, and
+  // runJob sets progress to 1 the moment a job is marked done — so carrying it
+  // onto a terminal row produces "failed 60%", or "cancelled 100%", which is
+  // the opposite of what happened.
+  const moving = job.state === "running" || job.state === "queued";
   const pct =
-    job.progress === null ? "" : ` ${Math.round(job.progress * 100)}%`;
-  const tail = job.error ?? job.detail;
-  return `${job.kind} ${job.id}: ${job.state}${pct}${tail ? ` — ${tail}` : ""}`;
+    moving && job.progress !== null
+      ? ` ${Math.round(job.progress * 100)}%`
+      : "";
+  // Whatever the underlying tool last wrote, and for a benchmark that is a tqdm
+  // frame with carriage returns in it. Flattened, or one row breaks the list it
+  // is part of.
+  const why = (job.error ?? job.detail)?.replace(/\s+/g, " ").trim();
+  return `${job.kind} ${job.id}: ${job.state}${pct}${why ? ` — ${why}` : ""}`;
 }
 
 /** How many recent jobs an unfiltered job_status reports. Enough to cover a
  *  pipeline's worth of stages, short enough to stay a readable answer. */
 const RECENT_JOBS = 5;
+
+/**
+ * How many rows any other list may show.
+ *
+ * Every one of these results is fed back into the conversation, where it
+ * competes with the prompt and the thread for the model's context. A live lab
+ * here already holds eight models and a dozen runs, so the lists are capped and
+ * say what they cut — which is more use to a reader than a truncated list that
+ * looks whole.
+ */
+const MAX_ROWS = 8;
+/** Metrics per score. A general suite carries twenty, which would drown the
+ *  other rows on its own. */
+const MAX_METRICS = 4;
+
+/** Rows worth reporting, and the note that says so when some were dropped. */
+function capped<T>(rows: T[], note = ""): [T[], string[]] {
+  const shown = rows.slice(0, MAX_ROWS);
+  return [
+    shown,
+    rows.length > shown.length
+      ? [`(showing ${shown.length} of ${rows.length}${note})`]
+      : [],
+  ];
+}
+
+/** Enough of a uuid to name a row without spending the context on all 36.
+ *  Full ids stay on jobs, which are the only ones a tool takes back. */
+function shortId(id: string): string {
+  return id.slice(0, 8);
+}
+
+/** The last path segment, for a dataset or checkpoint named by a long path.
+ *  Both separators: a run's paths come from whichever host trained it. */
+function basename(path: string): string {
+  const parts = path.split(/[/\\]/).filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
+/**
+ * The file an export produced, when it produced a named one.
+ *
+ * `ggufPath` is Studio's output path when it reports one and the save directory
+ * otherwise, so on most real runs the last segment is the literal word "gguf" —
+ * "exported to gguf" says nothing. A segment with no extension is a directory,
+ * and the fact that matters is already in the sentence without it.
+ */
+function artifactName(ggufPath: string): string | null {
+  const name = basename(ggufPath);
+  return name.includes(".") ? name : null;
+}
+
+/** Past fine-tunes, said in terms of what can be done with them next — which is
+ *  the only reason to ask. A run with no output dir produced no checkpoint and
+ *  cannot be exported. */
+function formatRuns(runs: LabRun[]): string {
+  if (!runs.length) return "No fine-tuning runs have finished yet.";
+  const [shown, note] = capped(runs, ", newest first");
+  const lines = shown.map((r) => {
+    const named = r.ggufPath ? artifactName(r.ggufPath) : null;
+    const artifact = r.ggufPath
+      ? `exported${named ? ` to ${named}` : ""}${
+          r.hubRepo ? `, pushed to ${r.hubRepo}` : ""
+        }`
+      : r.outputDir
+        ? "trained, not exported"
+        : "no checkpoint";
+    return `- ${shortId(r.id)}: ${r.baseModel} on ${basename(r.dataset)} — ${artifact} (${r.provider})`;
+  });
+  return [...lines, ...note].join("\n");
+}
+
+/** Recorded scores, with the two things that decide whether a number means what
+ *  it appears to mean: what actually answered, and how few samples it saw. */
+function formatScores(scores: BenchmarkResult[]): string {
+  if (!scores.length) return "No benchmark scores have been recorded yet.";
+  const [shown, note] = capped(scores, ", newest first");
+  const lines = shown.map((s) => {
+    const metrics = s.scores
+      .slice(0, MAX_METRICS)
+      .map((t) => `${t.task} ${t.metric} ${Number(t.value.toFixed(3))}`)
+      .join(", ");
+    const more =
+      s.scores.length > MAX_METRICS
+        ? ` (+${s.scores.length - MAX_METRICS} more metrics)`
+        : "";
+    // `servedModel` leads and `model` is named only when the two differ. Studio
+    // serves whatever is resident regardless of what a run asked for, so the
+    // requested id is a label and the served one is what the numbers describe —
+    // relaying the label alone is how a score gets read as measuring weights
+    // that never ran.
+    const what =
+      s.servedModel && s.servedModel !== s.model
+        ? `${s.servedModel} (requested ${s.model})`
+        : (s.servedModel ?? s.model);
+    return `- ${s.suite} on ${what} @ ${s.target}, ${s.samplesPerTask} samples, ${s.at.slice(0, 10)}: ${metrics}${more}`;
+  });
+  // Never omitted: a 20-sample score is not a leaderboard number and must not be
+  // relayed as one.
+  return [
+    ...lines,
+    ...note,
+    "Scores are subset runs at the sample count shown, not full-suite results.",
+  ].join("\n");
+}
 
 /**
  * Bind the Model Lab contracts to the lab running in this process.
@@ -108,12 +227,20 @@ function labBindings(lab: LabService): BoundTool[] {
   return [
     bind(listModelsTool, async () => {
       const { target, models, inventoryError } = await lab.models();
-      const lines = models.map(
+      const [shown, note] = capped(models);
+      const lines = shown.map(
         (m) =>
           `- ${m.id} [${m.format}, ${roughSize(m.sizeBytes)}]${
             m.loaded ? " — loaded" : ""
           }`,
       );
+      lines.push(...note);
+      // Which one is resident decides what a benchmark would actually measure,
+      // so its absence is worth saying rather than leaving to be inferred from
+      // the lack of a marker on any row.
+      if (models.length && !models.some((m) => m.loaded)) {
+        lines.push("Nothing is loaded, so a benchmark cannot run yet.");
+      }
       // An inventory that failed is reported rather than passed off as an empty
       // shelf: the two look identical here and need different fixes.
       if (inventoryError) {
@@ -128,11 +255,14 @@ function labBindings(lab: LabService): BoundTool[] {
 
     bind(listDatasetsTool, async () => {
       const files = await lab.datasets();
-      return files.length
-        ? files
-            .map((f) => `- ${f.name} (${roughSize(f.size)}) — ${f.path}`)
-            .join("\n")
-        : "No datasets have been uploaded to the training host yet.";
+      if (!files.length) {
+        return "No datasets have been uploaded to the training host yet.";
+      }
+      const [shown, note] = capped(files);
+      const lines = shown.map(
+        (f) => `- ${f.name} (${roughSize(f.size)}) — ${f.path}`,
+      );
+      return [...lines, ...note].join("\n");
     }),
 
     bind(startFinetuneTool, async (args) => {
@@ -159,7 +289,10 @@ function labBindings(lab: LabService): BoundTool[] {
         model: args.model,
       });
       return started.ok
-        ? `Started benchmark job ${started.jobId}: ${args.suite}, ${args.samplesPerTask} samples per task. It runs in the background — check job_status for the scores.`
+        ? // Two tools, because the job answers "is it finished" and only the
+          // score table answers "what did it get" — the job's own detail line at
+          // that point is the last progress frame the harness printed.
+          `Started benchmark job ${started.jobId}: ${args.suite}, ${args.samplesPerTask} samples per task. It runs in the background — check job_status for progress, then lab_history for the scores.`
         : `Cannot start the benchmark: ${started.message}.`;
     }),
 
@@ -173,6 +306,12 @@ function labBindings(lab: LabService): BoundTool[] {
         ? recent.map(jobLine).join("\n")
         : "No Model Lab jobs have run yet.";
     }),
+
+    bind(labHistoryTool, async (args) =>
+      args.what === "runs"
+        ? formatRuns(lab.runs())
+        : formatScores(lab.scores()),
+    ),
   ];
 }
 

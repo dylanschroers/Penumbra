@@ -1,5 +1,6 @@
 import {
   jobStatusTool,
+  labHistoryTool,
   listDatasetsTool,
   listModelsTool,
   runBenchmarkTool,
@@ -37,8 +38,9 @@ export const agentTools = [...taskTools, getWeatherTool] as const;
  * `agentTools` alone, which also keeps the eval harness and the personal
  * benchmark suite measuring the same five tools they always have.
  *
- * Reads first, then the two that start work, then the one that reports on it —
- * roughly the order a turn needs them.
+ * Reads first, then the two that start work, then the two that report back —
+ * one on work in flight, one on work that finished. Roughly the order a turn
+ * needs them.
  */
 export const labTools = [
   listModelsTool,
@@ -46,4 +48,5 @@ export const labTools = [
   startFinetuneTool,
   runBenchmarkTool,
   jobStatusTool,
+  labHistoryTool,
 ] as const;

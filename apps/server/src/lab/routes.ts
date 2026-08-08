@@ -2,12 +2,14 @@ import { join } from "node:path";
 import {
   type AvailableModel,
   type BenchmarkRequest,
+  type BenchmarkResult,
   benchmarkRequest,
   exportRequest,
   type FinetuneRequest,
   findSuite,
   finetuneRequest,
   type LabJob,
+  type LabRun,
   looksLocalPath,
   SUITES,
 } from "@penumbra/shared";
@@ -101,6 +103,13 @@ export interface LabService {
   benchmark(input: BenchmarkInput): Promise<LabStarted | LabRefused>;
   jobs(): LabJob[];
   job(id: string): LabJob | undefined;
+  /** Completed fine-tunes, newest first. The same rows `GET /lab/runs` serves:
+   *  a job says how the training went, a run says what it left behind. */
+  runs(): LabRun[];
+  /** Recorded benchmark results, newest first. Kept apart from the job that
+   *  produced them because a job row is a progress line and these are the
+   *  numbers — `GET /lab/scores` reads the same table. */
+  scores(): BenchmarkResult[];
 }
 
 /**
@@ -847,5 +856,7 @@ export function registerLabRoutes(
     benchmark,
     jobs: () => store.listJobs(),
     job: (id) => store.getJob(id),
+    runs: () => store.listRuns(),
+    scores: () => store.listScores(),
   };
 }

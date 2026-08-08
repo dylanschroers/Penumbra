@@ -97,6 +97,44 @@ export const jobStatusTool = {
 } satisfies ToolContract;
 
 /**
+ * What the lab has already finished, as opposed to what it is doing now.
+ *
+ * `job_status` reads job rows, and a job row is a progress line: on a finished
+ * benchmark it says "done" over whatever the harness last printed, never the
+ * scores, which are written to their own table. Without this the policy below
+ * asks the model to gate on evidence no tool could hand it.
+ *
+ * Two views on one tool rather than two tools, because §7 of
+ * docs/AGENT_DESIGN.md is a rule about tool *count*: a small model does better
+ * choosing a slot on a tool it has already picked than choosing between two
+ * whose descriptions both begin "list past". The pair also overlaps in the way
+ * that costs most — a run and the score of that run are one question to a user
+ * and two tables here.
+ */
+export const labHistoryTool = {
+  name: "lab_history",
+  description:
+    "Look at finished Model Lab work: past fine-tuning runs and where their " +
+    "artifacts ended up, or benchmark scores already recorded.",
+  permission: "read",
+  args: z.object({
+    what: z
+      // Terse on purpose. Every token of tool description competes with the
+      // ones already there on a 1.7B model, and these two words are the whole
+      // distinction.
+      .enum(["runs", "scores"])
+      .describe(
+        "runs = past fine-tunes and their artifacts; " +
+          "scores = recorded benchmark results",
+      )
+      // The slot is filled reliably when the question is specific, so the
+      // default only has to cover the vague "what has this lab done" — which is
+      // a question about runs.
+      .default("runs"),
+  }),
+} satisfies ToolContract;
+
+/**
  * The tool policy for the tier that has a Model Lab, appended to AGENT_POLICY
  * by `composeSystem`.
  *
@@ -107,7 +145,7 @@ export const jobStatusTool = {
  *
  * It reads as an extension of the sentence that scopes the tools rather than a
  * correction of it. A policy that said "only tasks and weather" and then
- * offered five lab tools would be a contradiction, and a small model resolves
+ * offered six lab tools would be a contradiction, and a small model resolves
  * those by picking one at random.
  */
 export const LAB_POLICY =
@@ -117,4 +155,6 @@ export const LAB_POLICY =
   "list_datasets over guessing a name. Starting a fine-tune or a benchmark " +
   "returns a job id rather than a result, because the work runs for minutes " +
   "to hours: report the id, and use job_status to say where a run got to. " +
-  "Only report a score or a finished model that job_status has shown you.";
+  "Use lab_history for work that already finished — what has been fine-tuned, " +
+  "and what a benchmark scored. Only report a score or a finished model that " +
+  "job_status or lab_history has shown you.";
