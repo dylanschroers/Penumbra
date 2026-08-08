@@ -1,4 +1,10 @@
-import { LAB_POLICY, type LabJob, type ToolBindings } from "@penumbra/shared";
+import {
+  type BenchmarkResult,
+  LAB_POLICY,
+  type LabJob,
+  type LabRun,
+  type ToolBindings,
+} from "@penumbra/shared";
 import Database from "better-sqlite3";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { LabService } from "../lab/routes";
@@ -124,9 +130,37 @@ function fakeLab(over: Partial<LabService> = {}): LabService {
     benchmark: async () => ({ ok: true, jobId: "job-2" }),
     jobs: () => [],
     job: () => undefined,
+    runs: () => [],
+    scores: () => [],
     ...over,
   };
 }
+
+const trained = (over: Partial<LabRun> = {}): LabRun => ({
+  id: "1f0a2b3c-dead-beef-0000-000000000000",
+  jobId: "job-1",
+  baseModel: "unsloth/Qwen3-1.7B",
+  dataset: "/uploads/datasets/train.jsonl",
+  outputDir: "/studio/runs/1",
+  ggufPath: null,
+  hubRepo: null,
+  provider: "local",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  ...over,
+});
+
+const score = (over: Partial<BenchmarkResult> = {}): BenchmarkResult => ({
+  suite: "penumbra-tools-v1",
+  suiteKind: "personal",
+  model: "qwen3-1.7b",
+  servedModel: "qwen3-1.7b",
+  target: "local",
+  samplesPerTask: 20,
+  at: "2026-01-02T00:00:00.000Z",
+  durationMs: 1000,
+  scores: [{ task: "tool_selection", metric: "acc", value: 0.923456 }],
+  ...over,
+});
 
 function labRun(lab: LabService = fakeLab()): ToolBindings["runTool"] {
   return createServerTools(store, lab).runTool;
@@ -147,7 +181,7 @@ const job = (over: Partial<LabJob> = {}): LabJob => ({
 
 describe("lab tools", () => {
   // The lab tools and the prompt that says when to use them travel together: a
-  // tier advertising the tools with no policy behind them has five actuators
+  // tier advertising the tools with no policy behind them has six actuators
   // and nothing telling the model they are in scope.
   it("advertises them, with their policy, only when a lab is wired", () => {
     const withLab = createServerTools(store, fakeLab());
@@ -162,6 +196,7 @@ describe("lab tools", () => {
       "start_finetune",
       "run_benchmark",
       "job_status",
+      "lab_history",
     ]);
     expect(withLab.system).toContain(LAB_POLICY);
 
@@ -324,5 +359,127 @@ describe("lab tools", () => {
       "finetune job-1: failed — OOM",
     );
     expect(await labRun()("job_status", {})).toContain("No Model Lab jobs");
+  });
+
+  // A settled job keeps whatever progress it last reported, and runJob writes 1
+  // on success — so an unguarded percentage says "failed 60%" about a run that
+  // did not finish, and "cancelled 100%" about one that was stopped.
+  it("drops the percentage once a job has settled", async () => {
+    const lab = fakeLab({
+      jobs: () => [
+        job({ id: "a", state: "failed", progress: 0.6, error: "OOM" }),
+        job({ id: "b", state: "done", progress: 1, detail: "step 60/60" }),
+        job({ id: "c", state: "queued", progress: null, detail: null }),
+      ],
+    });
+    expect(await labRun(lab)("job_status", {})).toBe(
+      [
+        "finetune a: failed — OOM",
+        "finetune b: done — step 60/60",
+        "finetune c: queued",
+      ].join("\n"),
+    );
+  });
+
+  // The detail line is written by the benchmark harness, and a tqdm frame
+  // carries carriage returns. One of those in a multi-job answer breaks the
+  // list it is part of.
+  it("flattens a progress frame so it stays one line", async () => {
+    const lab = fakeLab({
+      job: () => job({ detail: "case 3/20:\r  30%|███  | 3/20\n" }),
+    });
+    expect(await labRun(lab)("job_status", { jobId: "job-1" })).toBe(
+      "finetune job-1: running 50% — case 3/20: 30%|███ | 3/20",
+    );
+  });
+
+  // Nothing resident means a benchmark would measure nothing, which the absence
+  // of a "loaded" marker states only by implication.
+  it("says when no model is loaded", async () => {
+    const lab = fakeLab({
+      models: async () => ({
+        target: "local",
+        inventoryError: null,
+        models: [
+          {
+            id: "a",
+            label: "a",
+            format: "gguf",
+            sizeBytes: 2e9,
+            requiresVariant: false,
+            loaded: false,
+          },
+        ],
+      }),
+    });
+    expect(await labRun(lab)("list_models", {})).toContain(
+      "Nothing is loaded, so a benchmark cannot run yet.",
+    );
+  });
+
+  // The result goes back into the conversation, where it competes with the
+  // thread for context. A cut list has to say it was cut.
+  it("caps a long list and says what it dropped", async () => {
+    const lab = fakeLab({
+      datasets: async () =>
+        Array.from({ length: 12 }, (_, i) => ({
+          name: `d${i}.jsonl`,
+          path: `/uploads/datasets/d${i}.jsonl`,
+          size: 1e6,
+        })),
+    });
+    const result = await labRun(lab)("list_datasets", {});
+    expect(result.split("\n")).toHaveLength(9);
+    expect(result).toContain("(showing 8 of 12)");
+  });
+
+  // What a run left behind is the only reason to ask about it: a checkpoint can
+  // be exported, an export can be benchmarked, and neither is true of a run
+  // that produced no output dir.
+  it("says what each fine-tune left behind", async () => {
+    const lab = fakeLab({
+      runs: () => [
+        trained({ ggufPath: "/studio/runs/1/gguf", hubRepo: "me/qwen-tools" }),
+        trained({
+          id: "22222222-x",
+          ggufPath: "/studio/runs/2/model-Q4_K_M.gguf",
+        }),
+        trained({ id: "33333333-x", outputDir: null, provider: "colab" }),
+        trained({ id: "44444444-x" }),
+      ],
+    });
+    expect(await labRun(lab)("lab_history", { what: "runs" })).toBe(
+      [
+        // A path ending in the literal word "gguf" is the save directory, and
+        // "exported to gguf" would say nothing.
+        "- 1f0a2b3c: unsloth/Qwen3-1.7B on train.jsonl — exported, pushed to me/qwen-tools (local)",
+        "- 22222222: unsloth/Qwen3-1.7B on train.jsonl — exported to model-Q4_K_M.gguf (local)",
+        "- 33333333: unsloth/Qwen3-1.7B on train.jsonl — no checkpoint (colab)",
+        "- 44444444: unsloth/Qwen3-1.7B on train.jsonl — trained, not exported (local)",
+      ].join("\n"),
+    );
+    expect(await labRun()("lab_history", {})).toContain(
+      "No fine-tuning runs have finished yet",
+    );
+  });
+
+  // Studio answers with whatever is resident whatever the request named, so a
+  // score reported under the requested id alone reads as measuring weights that
+  // never ran. And a 20-sample subset is not a leaderboard number.
+  it("reports scores against what actually answered, with the caveat", async () => {
+    const lab = fakeLab({
+      scores: () => [score({ servedModel: "qwen3-4b" }), score()],
+    });
+    const result = await labRun(lab)("lab_history", { what: "scores" });
+    expect(result).toBe(
+      [
+        "- penumbra-tools-v1 on qwen3-4b (requested qwen3-1.7b) @ local, 20 samples, 2026-01-02: tool_selection acc 0.923",
+        "- penumbra-tools-v1 on qwen3-1.7b @ local, 20 samples, 2026-01-02: tool_selection acc 0.923",
+        "Scores are subset runs at the sample count shown, not full-suite results.",
+      ].join("\n"),
+    );
+    expect(await labRun()("lab_history", { what: "scores" })).toContain(
+      "No benchmark scores have been recorded yet",
+    );
   });
 });
