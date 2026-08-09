@@ -35,6 +35,25 @@ export const AGENT_MAX_TOKENS_SERVER = 2048;
  *  nothing. */
 export const AGENT_MAX_TOKENS_MIN = 128;
 export const AGENT_MAX_TOKENS_MAX = 8192;
+
+/**
+ * Hold a cap inside the range before it becomes a request.
+ *
+ * The server range-checks an edit and refuses one that is out of bounds, which
+ * is right for something a person just typed. This is the other half: the value
+ * also arrives from places no one is checking at the time it is used — a
+ * client's localStorage mirror, written by an older build or edited by hand —
+ * and Tier 0 hands it straight to `max_tokens`. A ceiling that only some paths
+ * respect is not a runaway guard, so it is applied where the number is spent
+ * rather than at each place it can come from.
+ */
+export function clampMaxTokens(value: number): number {
+  if (!Number.isFinite(value)) return AGENT_MAX_TOKENS_LOCAL;
+  return Math.min(
+    AGENT_MAX_TOKENS_MAX,
+    Math.max(AGENT_MAX_TOKENS_MIN, Math.round(value)),
+  );
+}
 /** How many tool rounds one turn may take, unless a tier raises it. */
 const DEFAULT_MAX_TOOL_STEPS = 4;
 /** The status probe is a liveness check, so it fails fast. */
@@ -138,9 +157,10 @@ export class OpenAiEngine implements Engine {
   }
 
   /** The cap in force for the next request. Resolved per call, so an edit
-   *  reaches the next turn without rebuilding anything. */
+   *  reaches the next turn without rebuilding anything, and clamped here
+   *  because a resolver reads a store this class does not control. */
   protected get maxTokens(): number {
-    return this.resolveMaxTokens();
+    return clampMaxTokens(this.resolveMaxTokens());
   }
 
   /** Backend readiness for the status pill. Never throws; reports a state. */
@@ -281,9 +301,14 @@ export class OpenAiEngine implements Engine {
     // request ran to its full deadline against a caller that had already left.
     if (signal?.aborted) relay();
 
-    let res: Response;
+    // The deadline has to outlive the fetch itself. `fetch` settles on headers,
+    // so releasing it there left the body read unguarded — and a backend that
+    // answers 200 and then stalls mid-body is the same wedge this exists to
+    // catch, only one step later. Reading the body is inside the guard for the
+    // same reason: `controller` owns that stream too, so it is what a Stop
+    // pressed while the reply is arriving actually cancels.
     try {
-      res = await fetch(`${this.baseURL}/v1/chat/completions`, {
+      const res = await fetch(`${this.baseURL}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...this.headers },
         body: JSON.stringify({
@@ -296,6 +321,15 @@ export class OpenAiEngine implements Engine {
         }),
         signal: controller.signal,
       });
+      if (!res.ok) throw new Error(`${this.label} responded ${res.status}`);
+      const body = (await res.json()) as {
+        choices?: Array<{
+          message?: { content?: string | null; tool_calls?: ToolCall[] };
+          finish_reason?: string;
+        }>;
+      };
+      const choice = body.choices?.[0];
+      return { ...choice?.message, finish: choice?.finish_reason };
     } catch (err) {
       if (expired) {
         throw new Error(
@@ -309,14 +343,5 @@ export class OpenAiEngine implements Engine {
       clearTimeout(deadline);
       signal?.removeEventListener("abort", relay);
     }
-    if (!res.ok) throw new Error(`${this.label} responded ${res.status}`);
-    const body = (await res.json()) as {
-      choices?: Array<{
-        message?: { content?: string | null; tool_calls?: ToolCall[] };
-        finish_reason?: string;
-      }>;
-    };
-    const choice = body.choices?.[0];
-    return { ...choice?.message, finish: choice?.finish_reason };
   }
 }

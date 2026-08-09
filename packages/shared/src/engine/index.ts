@@ -4,6 +4,7 @@ export {
   AGENT_MAX_TOKENS_MAX,
   AGENT_MAX_TOKENS_MIN,
   AGENT_MAX_TOKENS_SERVER,
+  clampMaxTokens,
   OpenAiEngine,
   type OpenAiEngineConfig,
 } from "./OpenAiEngine";

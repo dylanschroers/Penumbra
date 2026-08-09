@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { OpenAiEngine } from "./OpenAiEngine";
+import {
+  AGENT_MAX_TOKENS_LOCAL,
+  AGENT_MAX_TOKENS_MAX,
+  AGENT_MAX_TOKENS_MIN,
+  OpenAiEngine,
+} from "./OpenAiEngine";
 import type { AgentEvent } from "./types";
 
 // The engine's only outside contact is HTTP to the model server, so a mocked
@@ -401,6 +406,31 @@ const silentBackend = (_url: string, init: RequestInit = {}) =>
     init.signal?.addEventListener("abort", fail);
   });
 
+/**
+ * A backend that answers 200 and then stalls partway through the body.
+ *
+ * `fetch` settles on headers, so this is the half of the wedge a deadline
+ * released at that point cannot see: the response object arrives, and reading
+ * it never finishes. Modelled the way a real one behaves — the body stream
+ * belongs to the same signal, so aborting is what ends it.
+ */
+const stallingBody = async (url: string, init: RequestInit = {}) => {
+  if (String(url).includes("/v1/models")) {
+    return res({ data: [{ id: "m", loaded: true }] });
+  }
+  return {
+    ok: true,
+    status: 200,
+    json: () =>
+      new Promise((_resolve, reject) => {
+        const fail = () =>
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        if (init.signal?.aborted) return fail();
+        init.signal?.addEventListener("abort", fail);
+      }),
+  } as unknown as Response;
+};
+
 describe("a backend that never answers", () => {
   it("fails the turn instead of waiting forever", async () => {
     // Never settles, exactly like a socket that is open and silent.
@@ -438,6 +468,52 @@ describe("a backend that never answers", () => {
 
     const controller = new AbortController();
     const turn = collect(patient.runAgent([], controller.signal));
+    controller.abort();
+    await expect(turn).rejects.toThrow(/aborted/);
+  });
+
+  // The deadline covers reading the reply, not just getting a response object.
+  // Releasing it once `fetch` settled left this shape unguarded, which is the
+  // same hang one step later: 200, then silence, then nothing above ever
+  // learns the turn is dead.
+  it("fails a turn whose body never arrives", async () => {
+    mockFetch.mockImplementation(stallingBody);
+
+    const slow = new OpenAiEngine({
+      bindings: { tools: [], system: "sys", runTool: vi.fn() },
+      baseURL: "http://test",
+      model: "m",
+      label: "test model",
+      statusTimeoutMs: 5,
+      requestTimeoutMs: 20,
+    });
+
+    await expect(
+      collect(slow.runAgent([{ role: "user", content: "hi" }])),
+    ).rejects.toThrow(/did not respond within/);
+  });
+
+  // Same reason the listener is registered at all: a Stop is only real if it
+  // reaches whatever the turn is currently blocked on.
+  it("lets a caller stop a turn while the body is still arriving", async () => {
+    mockFetch.mockImplementation(stallingBody);
+
+    const patient = new OpenAiEngine({
+      bindings: { tools: [], system: "sys", runTool: vi.fn() },
+      baseURL: "http://test",
+      model: "m",
+      label: "test model",
+      statusTimeoutMs: 5,
+      requestTimeoutMs: 60_000,
+    });
+
+    const controller = new AbortController();
+    const turn = collect(
+      patient.runAgent([{ role: "user", content: "hi" }], controller.signal),
+    );
+    // Let the fetch settle and the read begin before stopping, so this is the
+    // body phase rather than the request phase.
+    await new Promise((r) => setTimeout(r, 10));
     controller.abort();
     await expect(turn).rejects.toThrow(/aborted/);
   });
@@ -502,6 +578,32 @@ describe("an adjustable reply cap", () => {
 
     expect(JSON.parse(mockFetch.mock.calls[1]?.[1]?.body).max_tokens).toBe(
       1234,
+    );
+  });
+
+  // The server refuses an out-of-range edit, but the cap also arrives from a
+  // client's localStorage mirror, which nothing checks at the moment it is
+  // read. A ceiling only some paths respect does not bound anything.
+  it.each([
+    [999_999, AGENT_MAX_TOKENS_MAX],
+    [1, AGENT_MAX_TOKENS_MIN],
+    [Number.NaN, AGENT_MAX_TOKENS_LOCAL],
+  ])("holds a resolver's %j inside the range", async (given, sent) => {
+    mockFetch.mockReset();
+    mockFetch
+      .mockResolvedValueOnce(res({ data: [{ id: "m" }] }))
+      .mockResolvedValueOnce(answerReply("hi"));
+
+    const rogue = new OpenAiEngine({
+      bindings: { tools: [], system: "sys", runTool: vi.fn() },
+      baseURL: "http://test",
+      model: "m",
+      maxTokens: () => given,
+    });
+    await collect(rogue.runAgent([]));
+
+    expect(JSON.parse(mockFetch.mock.calls[1]?.[1]?.body).max_tokens).toBe(
+      sent,
     );
   });
 
