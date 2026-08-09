@@ -71,7 +71,9 @@ The lab tools are Tier 1 only, and deliberately: running one needs the job
 store, the compute targets, and a Studio on that host, so a browser could
 only advertise them and fail every call. Grammar-constrained decoding does the
 heavy lifting on the small model, which is why the tool set is kept short and
-shallow. `pnpm tool-eval` is the regression check when it changes.
+shallow. `pnpm tool-eval` measures the five a browser ships and
+`TIER=1 pnpm tool-eval` the eleven the server does, scoring the same base
+utterances under both so the cost of the extra tools is visible.
 
 **One compute plane.** Chat and the Model Lab do not each hold their own idea of
 where the GPU is. The server keeps a set of targets (`local`, `colab`) and

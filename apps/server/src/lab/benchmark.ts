@@ -7,7 +7,12 @@ import {
   agentTools,
   type BenchmarkResult,
   type CaseOutcome,
+  composeSystem,
   evalCases,
+  LAB_POLICY,
+  LAB_TOOL_SUITES,
+  labEvalCases,
+  labTools,
   type SuiteDefinition,
   scoreCase,
   summarize,
@@ -84,6 +89,7 @@ async function ask(
   text: string,
   opts: BenchmarkOptions,
   tools: ReturnType<typeof toToolSpec>[],
+  system: string,
 ): Promise<CaseOutcome> {
   const t0 = Date.now();
   const res = await fetch(`${opts.baseURL}/v1/chat/completions`, {
@@ -95,7 +101,7 @@ async function ask(
     body: JSON.stringify({
       model: opts.model,
       messages: [
-        { role: "system", content: AGENT_SYSTEM },
+        { role: "system", content: system },
         { role: "user", content: text },
       ],
       tools,
@@ -141,16 +147,52 @@ async function ask(
   };
 }
 
+/** `n` items spread evenly across the set, in order. Deterministic, so two runs
+ *  at the same sample count score the same cases and stay comparable. */
+function spread<T>(items: T[], n: number): T[] {
+  if (n >= items.length) return items;
+  const step = items.length / n;
+  return Array.from({ length: n }, (_, i) => items[Math.floor(i * step)] as T);
+}
+
 async function runPersonalSuite(opts: BenchmarkOptions): Promise<TaskScore[]> {
-  const tools = agentTools.map(toToolSpec);
+  // Which tools are advertised and which prompt frames them move together, from
+  // the suite id alone (LAB_TOOL_SUITES). A lab run measures the configuration
+  // the server actually serves: eleven contracts behind the policy that says
+  // when the lab half of them applies.
+  const withLab = LAB_TOOL_SUITES.has(opts.suite.id);
+  const tools = (withLab ? [...agentTools, ...labTools] : agentTools).map(
+    toToolSpec,
+  );
+  const system = withLab ? composeSystem(undefined, LAB_POLICY) : AGENT_SYSTEM;
+  // The lab suite runs the base cases too, and that is its whole reason to
+  // exist: docs/AGENT_DESIGN.md §7 claims tool count costs selection accuracy,
+  // and the only way to see the cost is to put the same utterances in front of
+  // both lists. Its base rows against penumbra-tools-v1's are the comparison.
+  const all = withLab ? [...evalCases, ...labEvalCases] : evalCases;
   // samplesPerTask caps the run so a smoke check stays quick; the full set is
   // small enough that the cap is usually the whole thing.
-  const cases = evalCases.slice(0, opts.samplesPerTask);
+  //
+  // The lab set is sampled across its length rather than from the front, and it
+  // has to be: both case sets are grouped by tool with the negatives last, so a
+  // prefix of the 67 combined cases at the default 20 would be entirely base
+  // cases — a lab suite measuring no lab tool at all. Spreading also means the
+  // sample always contains negatives, without which a false-positive rate can
+  // only ever report zero.
+  //
+  // penumbra-tools-v1 keeps its prefix deliberately. It has recorded history,
+  // and changing which cases a capped run picks would move every future number
+  // against it with nothing in the row saying why. Its own prefix has the flaw
+  // described above; that is worth fixing on purpose, as a new suite id, rather
+  // than silently here.
+  const cases = withLab
+    ? spread(all, opts.samplesPerTask)
+    : all.slice(0, opts.samplesPerTask);
   const scored = [];
 
   for (const [i, c] of cases.entries()) {
     opts.signal?.throwIfAborted();
-    scored.push(scoreCase(c, await ask(c.text, opts, tools)));
+    scored.push(scoreCase(c, await ask(c.text, opts, tools, system)));
     opts.onProgress?.(caseProgress(i + 1, cases.length, c.text));
   }
 

@@ -48,10 +48,53 @@ LLM_URL=http://gpu-host:8888 MODEL=gpt-oss-20b API_KEY=sk-unsloth-… \
 | `API_KEY` | — | Sent as a bearer token when set |
 | `LABEL` | — | Names the run in the results log |
 | `BENCH_DIR` | `bench` | Where artifacts are written (git-ignored) |
+| `TIER` | `0` | Which tool set to advertise. `1` adds the Model Lab contracts |
 
 Each run **appends** to `bench/results.jsonl`. The value of a benchmark is the
 trend across models and finetunes, not one number, so runs are never
-overwritten.
+overwritten. The tier is recorded in the row's label, because the two are not
+comparable and an unmarked mixed file draws a trend that is really just a record
+of which command someone last ran.
+
+### The two tool sets
+
+`TIER=0` advertises the five contracts both tiers bind and scores `evalCases`.
+That set is pinned: the `penumbra-tools-v1` suite has history behind it, and
+changing the case mix would move every future number against the past with
+nothing in the row saying why.
+
+`TIER=1` advertises those five *plus* the six Model Lab contracts, under the
+prompt the server actually composes (`AGENT_POLICY` + `LAB_POLICY`), and scores
+`evalCases` **and** `labEvalCases`.
+
+Running the base cases again under the larger tool list is the whole reason the
+second set exists. [AGENT_DESIGN.md](AGENT_DESIGN.md) §7 claims that a small
+model degrades as tools are added, and that the cost lands on the tools that
+were already working. The only way to see that is to put the same utterances in
+front of both lists: compare the Tier-1 run's base rows against the Tier-0 run's.
+A lab tool that scores well while `create_task` slips four points has not paid
+for itself.
+
+`labEvalCases` is built for where a two-domain tool set actually fails, not for
+where it obviously works:
+
+- **Positives**, at least one per lab tool. `eval.test.ts` fails the build if a
+  lab tool has no case, so a tool cannot ship unmeasured.
+- **Crossovers into the base tools** — "add a task to benchmark the new model"
+  must reach `create_task`, not `run_benchmark`. Lab vocabulary next to six new
+  actuators is the false-positive shape that matters.
+- **Crossovers between lab tools** — "what models have I trained?" against "what
+  models are available?", and "did the job finish?" against "what did it score?".
+  Both pairs read alike and only one of each is about the past.
+- **Negatives from the lab's own subject matter.** "What is LoRA?" is a far
+  better trap than "Good morning!", because every content word in it matches a
+  tool description.
+
+Arguments are asserted only where the utterance states them, and only where the
+contract's default would be wrong. `lab_history` defaults `what` to `runs`, so a
+model that omits the slot on a runs question still behaves correctly and is not
+scored as wrong; omitting it on a scores question produces the wrong list, so
+those cases assert it.
 
 ### A recorded baseline
 
@@ -110,6 +153,28 @@ A useful property of this half: because scoring is pure TypeScript in
 `@penumbra/shared`, the server can run it **in-process** as a Model Lab job. No
 Python, no subprocess, and no way for the benchmark to drift from the tool specs
 the app actually ships.
+
+Two personal suites, matching the two tool sets above:
+
+| Suite | Advertises | Scores |
+|---|---|---|
+| `penumbra-tools-v1` | the 5 base contracts | `evalCases` |
+| `penumbra-lab-v1` | those 5 plus the 6 lab contracts, under `LAB_POLICY` | `evalCases` + `labEvalCases` |
+
+Which tools go on the wire and which prompt frames them are decided together
+from the suite id (`LAB_TOOL_SUITES`), because a run that advertises the lab
+tools under a prompt that never mentions them is measuring a configuration the
+app does not ship.
+
+One sampling difference is worth knowing before reading a capped run.
+`samplesPerTask` truncates the case list, and both sets are grouped by tool with
+the negatives last. `penumbra-lab-v1` therefore samples *across* its combined
+list, so a default 20-case run still reaches lab cases and still contains
+negatives. `penumbra-tools-v1` keeps taking a prefix, which is a deliberate
+choice to protect its recorded history rather than an endorsement: a capped run
+of it contains no negatives, so its false-positive rate is zero by construction
+at any sample count below the full set. Read that row as "not measured", not as
+"none found", and run the full set when the number matters.
 
 ## 5. Running the general suite
 
