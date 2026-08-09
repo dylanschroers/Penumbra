@@ -144,7 +144,10 @@ required to run locally.
 | `PORT` | `3000` | HTTP port. |
 | `DB_PATH` | `server.db` | SQLite file. |
 | `UNSLOTH_BASE_URL` / `UNSLOTH_API_KEY` | none | The local Studio's address and bearer. Anything set through the compute panel outranks these and persists. |
+| `UNSLOTH_MODEL` | none | Model id sent in Tier-1 chat requests. A label: Studio serves whatever is resident regardless. |
 | `UNSLOTH_LAUNCH_CMD` / `UNSLOTH_STOP_CMD` | `unsloth studio` / `unsloth studio stop` | What the panel's Launch and Stop buttons run. Empty hides the button. |
+| `LM_EVAL_BIN` | `lm_eval` | The lm_eval executable. Point it inside a venv when it is not on PATH. |
+| `BENCHMARK_STALL_MS` | `300000` | How long a benchmark may print nothing before it is killed as wedged. Any output restarts the clock. |
 | `PENUMBRA_AGENT_TOKEN` | none | Shared-secret bearer for the gated routes. See below. |
 | `PENUMBRA_ALLOWED_ORIGINS` | app origins only | Extra browser origins allowed to call the server. |
 | `PENUMBRA_TRUST_PROXY` | off | Names the reverse proxy in front, if any. Required there: see below. |
