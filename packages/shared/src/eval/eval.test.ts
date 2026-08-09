@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { SUITES } from "../lab";
-import { agentTools } from "../tools";
+import { agentTools, labTools } from "../tools";
 import { type EvalCase, evalCases } from "./cases";
+import { labEvalCases } from "./labCases";
 import { type CaseOutcome, scoreCase, summarize } from "./scoring";
 import { toJsonl, toTrainingExamples } from "./trainset";
 
@@ -27,6 +28,51 @@ describe("cases", () => {
 
   it("keeps negative cases in the set, since false positives are the risk", () => {
     expect(evalCases.filter((c) => c.tool === null).length).toBeGreaterThan(0);
+  });
+
+  // The base set is graded against agentTools alone and is pinned, so a lab
+  // utterance landing in it would both fail the check above and silently change
+  // what every past penumbra-tools-v1 score means.
+  it("keeps lab utterances out of the pinned base set", () => {
+    const lab = new Set(labTools.map((t) => t.name));
+    for (const c of evalCases) {
+      if (c.tool !== null) expect(lab.has(c.tool)).toBe(false);
+    }
+  });
+});
+
+describe("lab cases", () => {
+  const serverNames = new Set([...agentTools, ...labTools].map((t) => t.name));
+
+  it("only expects tools the server tier actually advertises", () => {
+    for (const c of labEvalCases) {
+      if (c.tool !== null) expect(serverNames).toContain(c.tool);
+    }
+  });
+
+  // The point of the set. A lab tool added with no case is a tool nobody has
+  // measured, and the tool count is the thing §7 says to re-measure — so the
+  // omission fails here rather than being noticed after a regression ships.
+  it("covers every lab tool with at least one case", () => {
+    const covered = new Set(labEvalCases.map((c) => c.tool));
+    for (const tool of labTools) expect(covered).toContain(tool.name);
+  });
+
+  // Crossovers are what a two-domain tool set gets wrong, and they only count
+  // if the expected answer is a *base* tool: an utterance full of lab words
+  // that must not reach an actuator.
+  it("keeps crossovers into the base tools", () => {
+    const base = new Set(agentTools.map((t) => t.name));
+    const crossovers = labEvalCases.filter(
+      (c) => c.tool !== null && base.has(c.tool),
+    );
+    expect(crossovers.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps negatives drawn from the lab's own subject matter", () => {
+    expect(labEvalCases.filter((c) => c.tool === null).length).toBeGreaterThan(
+      2,
+    );
   });
 });
 

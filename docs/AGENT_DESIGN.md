@@ -234,6 +234,15 @@ Verdict: ship it, keep the tool set small, and re-measure as it grows.
 it consumes the shared contracts, so a new tool is automatically part of what
 it exercises (cases still need writing by hand).
 
+The table above is a record of one run against the four task tools, not a
+current reading. Tier 0 has since gained `get_weather`, and the server tier
+carries six Model Lab contracts on top of that — eleven advertised where this
+measured four. Growing the set is exactly what this section says to re-measure,
+so the two are now measured separately: `pnpm tool-eval` for Tier 0's five, and
+`TIER=1 pnpm tool-eval` for the server's eleven, which scores the same base
+utterances under the larger list so the cost of the extra tools is visible
+rather than assumed. See [EVAL.md](EVAL.md) §2.
+
 ---
 
 ## 8. Autonomous / background mode (planned)

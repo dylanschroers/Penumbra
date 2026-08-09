@@ -2,7 +2,12 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { SuiteDefinition } from "@penumbra/shared";
+import {
+  evalCases,
+  labEvalCases,
+  labTools,
+  type SuiteDefinition,
+} from "@penumbra/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   lmEvalEnv,
@@ -22,6 +27,13 @@ const personalSuite: SuiteDefinition = {
   label: "Penumbra tool calling",
   description: "",
   tasks: [],
+};
+
+/** The same family, but the id that puts the Model Lab contracts on the wire. */
+const labSuite: SuiteDefinition = {
+  ...personalSuite,
+  id: "penumbra-lab-v1",
+  label: "Penumbra tool calling, with the Model Lab",
 };
 
 /** A model server that answers every request the same way. */
@@ -92,6 +104,108 @@ describe("personal suite", () => {
     for (const s of result.scores) {
       if (s.metric !== "avg_ms") expect(s.value).toBeLessThanOrEqual(1);
     }
+  });
+
+  // The lab suite exists to measure the configuration the server serves, so the
+  // two things that define it — the tools on the wire and the policy framing
+  // them — have to travel together with the id.
+  it("advertises the lab contracts, behind the lab policy", async () => {
+    const seen: Record<string, unknown>[] = [];
+    model = startFakeModel((body) => {
+      seen.push(body);
+      return { choices: [{ message: { content: "ok" } }] };
+    });
+    const baseURL = await model.listen();
+
+    await runBenchmark({
+      model: "fake",
+      servedModel: "fake",
+      target: "local",
+      suite: labSuite,
+      samplesPerTask: 4,
+      baseURL,
+    });
+
+    const first = seen[0] as {
+      tools: Array<{ function: { name: string } }>;
+      messages: Array<{ role: string; content: string }>;
+    };
+    const names = first.tools.map((t) => t.function.name);
+    expect(names).toContain("create_task");
+    expect(names).toContain("lab_history");
+    expect(names).toContain("start_finetune");
+    // Advertising the lab tools under a prompt that never mentions them is a
+    // configuration the app does not ship, so it must not be what gets scored.
+    expect(first.messages[0]?.content).toContain("Model Lab");
+  });
+
+  it("keeps the base suite on the base tools", async () => {
+    const seen: Record<string, unknown>[] = [];
+    model = startFakeModel((body) => {
+      seen.push(body);
+      return { choices: [{ message: { content: "ok" } }] };
+    });
+    const baseURL = await model.listen();
+
+    await runBenchmark({
+      model: "fake",
+      servedModel: "fake",
+      target: "local",
+      suite: personalSuite,
+      samplesPerTask: 2,
+      baseURL,
+    });
+
+    const first = seen[0] as {
+      tools: Array<{ function: { name: string } }>;
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(first.tools.map((t) => t.function.name)).not.toContain(
+      "lab_history",
+    );
+    expect(first.messages[0]?.content).not.toContain("Model Lab");
+  });
+
+  // Both case sets are grouped by tool with the negatives last, so a prefix of
+  // the combined set at the default sample count would be entirely base cases:
+  // a lab suite measuring no lab tool, and a false-positive rate computed over
+  // no negatives. The sample is spread instead.
+  it("samples lab cases and negatives at the default cap", async () => {
+    const asked: string[] = [];
+    model = startFakeModel((body) => {
+      const messages = (body as { messages: Array<{ content: string }> })
+        .messages;
+      asked.push(messages[1]?.content ?? "");
+      return { choices: [{ message: { content: "ok" } }] };
+    });
+    const baseURL = await model.listen();
+
+    await runBenchmark({
+      model: "fake",
+      servedModel: "fake",
+      target: "local",
+      suite: labSuite,
+      samplesPerTask: 20,
+      baseURL,
+    });
+
+    expect(asked).toHaveLength(20);
+
+    // Checked against the case sets themselves rather than by matching words,
+    // so rewording a case cannot quietly turn this green.
+    const sampled = new Set(asked);
+    const picked = [...evalCases, ...labEvalCases].filter((c) =>
+      sampled.has(c.text),
+    );
+    const labToolNames = new Set(labTools.map((t) => t.name));
+
+    // Reached the lab half at all: a prefix of this set would not have.
+    expect(
+      picked.some((c) => c.tool !== null && labToolNames.has(c.tool)),
+    ).toBe(true);
+    // And carried negatives, without which a false-positive rate is 0 by
+    // construction rather than by measurement.
+    expect(picked.some((c) => c.tool === null)).toBe(true);
   });
 
   it("credits a correct tool call", async () => {

@@ -87,9 +87,18 @@ Zod argument schema:
   system prompt, so it measures exactly what ships.
 
 Implementations are deliberately platform-bound: the client binds contracts to
-its local store; the server agent later binds the same contracts to its own.
-The `permission` field (`read | write | act`) is recorded but not yet enforced
-— it is the hook for the planned audit log and autonomous-mode scopes.
+its local store; the server agent binds the same contracts to its own. The
+`permission` field (`read | write | act`) is recorded but not yet enforced — it
+is the hook for the planned audit log and autonomous-mode scopes.
+
+There are two lists, not one. `agentTools` is what both tiers bind. `labTools`
+is the Model Lab's six, which only the server can run: one needs the job store,
+the compute targets, and a Studio on that host, so a browser could only
+advertise them and fail every call. The split is why the eval harness has a tier
+switch — the default run measures the five a browser ships, and `TIER=1`
+measures the eleven the server does. A run of one is not a reading on the other,
+which is the trap the second list creates and [EVAL.md](EVAL.md) §2 exists to
+keep out of.
 
 ### The web shell: launcher + module dock
 
