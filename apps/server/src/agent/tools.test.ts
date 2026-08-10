@@ -329,9 +329,9 @@ describe("lab tools", () => {
         return { ok: true, jobId: "job-2" };
       },
     });
-    await labRun(lab)("run_benchmark", { suite: "penumbra-tools-v1" });
+    await labRun(lab)("run_benchmark", { suite: "penumbra-tools-v2" });
     expect(seen).toEqual({
-      suite: "penumbra-tools-v1",
+      suite: "penumbra-tools-v2",
       samplesPerTask: 20,
       model: undefined,
     });

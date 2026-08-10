@@ -202,7 +202,7 @@ second implementation of the same feature:
   (`labTools`), not additions to `agentTools`. Running one needs the job store,
   the compute targets, and a Studio on this host, so Tier 0 could only advertise
   them and fail every call — and leaving `agentTools` alone is also what keeps
-  the tool eval and the `penumbra-tools-v1` suite measuring the tool set they
+  the tool eval and the `penumbra-tools-v2` suite measuring the tool set they
   have always measured.
 - **A job id is the answer.** Starting work returns an id, never a result: a
   fine-tune outlives the turn by hours. `LAB_POLICY` says so in the prompt, and
