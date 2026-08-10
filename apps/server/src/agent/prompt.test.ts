@@ -1,4 +1,6 @@
 import {
+  AGENT_MAX_TOKENS_MAX,
+  AGENT_MAX_TOKENS_MIN,
   AGENT_PERSONA_DEFAULT,
   AGENT_PERSONA_MAX,
   AGENT_POLICY,
@@ -104,5 +106,44 @@ describe("composeSystem", () => {
     expect(AGENT_SYSTEM).toBe(composeSystem());
     expect(AGENT_SYSTEM).not.toContain("BANANA");
     expect(AGENT_SYSTEM).toContain(AGENT_PERSONA_DEFAULT);
+  });
+});
+
+// The reply cap. Stored beside the persona because it is the same kind of
+// setting, but it is an integer with a range rather than free text, and the
+// "unset" case is load-bearing: the two tiers want different defaults, so no
+// override is the only value that lets each keep its own.
+describe("reply-length cap", () => {
+  it("is unset by default, so each tier keeps its own", () => {
+    expect(store.current().maxTokens).toBeNull();
+  });
+
+  it("stores a value in range and reads it back", () => {
+    expect(store.setMaxTokens(1024)?.maxTokens).toBe(1024);
+    expect(store.current().maxTokens).toBe(1024);
+  });
+
+  it("refuses a value outside the range", () => {
+    expect(store.setMaxTokens(AGENT_MAX_TOKENS_MAX + 1)).toBeNull();
+    expect(store.setMaxTokens(AGENT_MAX_TOKENS_MIN - 1)).toBeNull();
+    // A cap that guards nothing is worse than none, so nothing is written.
+    expect(store.current().maxTokens).toBeNull();
+  });
+
+  it("refuses a fraction of a token", () => {
+    expect(store.setMaxTokens(512.5)).toBeNull();
+  });
+
+  it("clears back to the per-tier defaults", () => {
+    store.setMaxTokens(1024);
+    expect(store.setMaxTokens(null)?.maxTokens).toBeNull();
+  });
+
+  // The two are independent settings that share one form; saving a cap must not
+  // disturb a persona somebody spent time on.
+  it("leaves the persona alone", () => {
+    store.set("Answer in one sentence.");
+    store.setMaxTokens(1024);
+    expect(store.current().persona).toBe("Answer in one sentence.");
   });
 });

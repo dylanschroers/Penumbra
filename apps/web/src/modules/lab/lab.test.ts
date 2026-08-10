@@ -1,12 +1,6 @@
-import { looksLocalPath } from "@penumbra/shared";
+import { looksLocalPath, toDatasetSource } from "@penumbra/shared";
 import { describe, expect, it } from "vitest";
-import {
-  formatWhen,
-  OFFLINE_TAB,
-  SERVER_TABS,
-  TABS,
-  toDatasetSource,
-} from "./LabModule";
+import { formatWhen, OFFLINE_TAB, SERVER_TABS, TABS } from "./LabModule";
 
 // A new tab is classified by omission: leaving it out of SERVER_TABS silently
 // declares it works with no server, and the failure is a tab that stays clickable
@@ -56,6 +50,38 @@ describe("toDatasetSource", () => {
       path: "trainset.jsonl",
     });
     expect(toDatasetSource("data.parquet")).toMatchObject({ kind: "local" });
+  });
+
+  // The shape every path on a Windows host has, and the one the extension list
+  // cannot catch: `list_datasets` reports whatever was uploaded, not only the
+  // four extensions below, so a corpus directory or a .txt reached Studio as a
+  // repo id.
+  it("treats a Windows or UNC path as local, extension or not", () => {
+    for (const p of [
+      String.raw`C:\Users\me\.penumbra\uploads\datasets\corpus`,
+      String.raw`C:\datasets\corpus.txt`,
+      "C:/datasets/corpus",
+      String.raw`\\nas\share\corpus`,
+      String.raw`\\?\F:\datasets\corpus`,
+    ]) {
+      expect(toDatasetSource(p)).toMatchObject({ kind: "local", path: p });
+    }
+  });
+
+  // The two predicates are not independent: anything one calls a path the other
+  // must call a file, or a value skips the upload on the client and is then
+  // read as a repo id on the server.
+  it("never calls a path that looksLocalPath accepts a repo id", () => {
+    for (const p of [
+      "/data/corpus",
+      "~/corpus",
+      String.raw`C:\datasets\corpus`,
+      String.raw`\\nas\share\corpus`,
+      "/data/train.jsonl",
+    ]) {
+      expect(looksLocalPath(p)).toBe(true);
+      expect(toDatasetSource(p).kind).toBe("local");
+    }
   });
 
   it("trims whitespace from a pasted value", () => {

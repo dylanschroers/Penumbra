@@ -237,6 +237,22 @@ export type StudioReachability =
 const PROBE_TIMEOUT_MS = 4000;
 
 /**
+ * The default ceiling on an ordinary Studio call.
+ *
+ * Wide, because these are not latency budgets: `/api/hub/local` walks the models
+ * dir, the HuggingFace cache, LM Studio and Ollama, and a big cache legitimately
+ * takes many seconds. It is here because the alternative was unbounded — an
+ * agent turn calling one of these had no way to end, so a Studio that accepted
+ * the connection and went quiet froze the chat with no event and no error. The
+ * calls that really can run for minutes (a checkpoint load, a quantization, a
+ * multi-gigabyte upload) pass SLOW_CALL_TIMEOUT_MS instead.
+ */
+const REQUEST_TIMEOUT_MS = 60_000;
+
+/** For the handful of calls whose work is measured in minutes. */
+const SLOW_CALL_TIMEOUT_MS = 15 * 60_000;
+
+/**
  * What one probe learned.
  *
  * The model rides along because it costs nothing: readiness is decided by
@@ -270,20 +286,30 @@ export class StudioClient {
   private async json<T>(
     path: string,
     init: RequestInit = {},
-    signal?: AbortSignal,
+    signal: AbortSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   ): Promise<T> {
     // A multipart body carries its own content type with the boundary in it;
     // declaring JSON over the top makes Studio reject the upload as malformed.
     const multipart = init.body instanceof FormData;
-    const res = await fetch(`${this.baseURL}${path}`, {
-      ...init,
-      headers: {
-        ...(multipart ? {} : { "Content-Type": "application/json" }),
-        ...this.headers,
-        ...init.headers,
-      },
-      signal,
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseURL}${path}`, {
+        ...init,
+        headers: {
+          ...(multipart ? {} : { "Content-Type": "application/json" }),
+          ...this.headers,
+          ...init.headers,
+        },
+        signal,
+      });
+    } catch (err) {
+      // A bare TimeoutError names neither the call nor the wait, and these run
+      // inside an agent turn where the message *is* what the user is told.
+      if (err instanceof Error && err.name === "TimeoutError") {
+        throw new Error(`studio ${path} did not respond in time`);
+      }
+      throw err;
+    }
     if (!res.ok) {
       // Include the body. Studio answers a malformed request with a 422 whose
       // detail names the offending field; without it the caller sees only
@@ -474,9 +500,12 @@ export class StudioClient {
    * is detected here and raised as a distinct, catchable error.
    */
   async startTraining(body: TrainingStart): Promise<void> {
+    // Slow: Studio loads the base model before it answers, so a first run on a
+    // cold cache legitimately sits here for minutes.
     const result = await this.json<{ status?: string; message?: string }>(
       "/api/train/start",
       { method: "POST", body: JSON.stringify(body) },
+      AbortSignal.timeout(SLOW_CALL_TIMEOUT_MS),
     );
     if (result.status === "error") {
       throw new TrainingBusyError(result.message ?? "studio refused to start");
@@ -502,6 +531,8 @@ export class StudioClient {
     const res = await this.json<{ stored_path?: string; filename?: string }>(
       "/api/datasets/upload",
       { method: "POST", body: form },
+      // A multi-gigabyte dataset to a tunnelled Studio is minutes of transfer.
+      AbortSignal.timeout(SLOW_CALL_TIMEOUT_MS),
     );
     if (!res.stored_path) {
       throw new Error("studio accepted the dataset but returned no path");
@@ -537,10 +568,15 @@ export class StudioClient {
   }
 
   async loadCheckpoint(checkpointPath: string): Promise<void> {
-    await this.json("/api/export/load-checkpoint", {
-      method: "POST",
-      body: JSON.stringify({ checkpoint_path: checkpointPath }),
-    });
+    await this.json(
+      "/api/export/load-checkpoint",
+      {
+        method: "POST",
+        body: JSON.stringify({ checkpoint_path: checkpointPath }),
+      },
+      // Reads a checkpoint off disk into memory before answering.
+      AbortSignal.timeout(SLOW_CALL_TIMEOUT_MS),
+    );
   }
 
   /**
@@ -558,23 +594,29 @@ export class StudioClient {
     quantization: string,
     hub?: HubTarget,
   ): Promise<void> {
-    await this.json("/api/export/export/gguf", {
-      method: "POST",
-      body: JSON.stringify({
-        save_directory: saveDirectory,
-        quantization_method: quantization,
-        // Studio ignores repo_id/hf_token unless push_to_hub is set, so the
-        // flag and the target always travel together.
-        ...(hub
-          ? {
-              push_to_hub: true,
-              repo_id: hub.repoId,
-              ...(hub.hfToken ? { hf_token: hub.hfToken } : {}),
-              ...(hub.private === undefined ? {} : { private: hub.private }),
-            }
-          : {}),
-      }),
-    });
+    await this.json(
+      "/api/export/export/gguf",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          save_directory: saveDirectory,
+          quantization_method: quantization,
+          // Studio ignores repo_id/hf_token unless push_to_hub is set, so the
+          // flag and the target always travel together.
+          ...(hub
+            ? {
+                push_to_hub: true,
+                repo_id: hub.repoId,
+                ...(hub.hfToken ? { hf_token: hub.hfToken } : {}),
+                ...(hub.private === undefined ? {} : { private: hub.private }),
+              }
+            : {}),
+        }),
+      },
+      // Quantization routinely outlives its own request; the caller's polling
+      // loop is what settles the outcome either way.
+      AbortSignal.timeout(SLOW_CALL_TIMEOUT_MS),
+    );
   }
 
   async exportStatus(): Promise<ExportStatus> {

@@ -16,7 +16,30 @@ const TOOL_LABEL: Record<string, string> = {
   list_tasks: "Listed tasks",
   complete_task: "Completed task",
   delete_task: "Deleted task",
+  get_weather: "Checked the weather",
+  list_models: "Listed models",
+  list_datasets: "Listed datasets",
+  start_finetune: "Started fine-tuning",
+  run_benchmark: "Started a benchmark",
+  job_status: "Checked job status",
 };
+
+/**
+ * Whether a tool's result reads as a refusal rather than an answer.
+ *
+ * Matched on the openings the runners actually use, which are few and fixed
+ * (../../../../packages/shared/src/tools, apps/server/src/agent/tools.ts): a
+ * tool reports failure by *returning* a sentence, because the model has to be
+ * able to read and correct it. That leaves the UI nothing typed to key on, and
+ * a failed step rendered identically to a successful one is how "it silently
+ * did nothing" happens. Mis-classifying only changes an icon.
+ */
+const FAILED_RESULT =
+  /^(Cannot |Invalid arguments|Tool \S+ failed|Unknown tool|No task matching|There is no job)/;
+
+/** How long a turn may run before the wait itself is worth remarking on. Past
+ *  this the counter is the only evidence anything is still happening. */
+const SLOW_TURN_MS = 15_000;
 
 const STATUS_LABEL: Record<AgentStatus["state"], string> = {
   ready: "Ready",
@@ -38,8 +61,10 @@ function statusLabel(status: AgentStatus): string {
 
 function StatusPill({ status }: { status: AgentStatus }) {
   return (
-    <span className={`agent__pill agent__pill--${status.state}`}>
-      {statusLabel(status)}
+    <span
+      className={`agent__pill agent__pill--${status.state} agent__pill--status`}
+    >
+      <span className="agent__pill-label">{statusLabel(status)}</span>
     </span>
   );
 }
@@ -60,9 +85,38 @@ function emptyHint(status: AgentStatus, provider: string): string {
   return `${where} is not answering. Open the pill above to check where it is pointed.`;
 }
 
+/** Seconds a turn has been running, ticking while one is. Its own component so
+ *  the interval re-renders the counter and not the whole transcript. */
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const seconds = Math.max(0, Math.round((now - since) / 1000));
+  return (
+    <span className="agent__elapsed">
+      {seconds < 60
+        ? `${seconds}s`
+        : `${Math.floor(seconds / 60)}m ${seconds % 60}s`}
+      {now - since > SLOW_TURN_MS ? " · still working" : ""}
+    </span>
+  );
+}
+
 export function AgentModule() {
-  const { messages, status, busy, send, clear, provider, setProvider } =
-    useAgent();
+  const {
+    messages,
+    status,
+    busy,
+    startedAt,
+    send,
+    stop,
+    clear,
+    provider,
+    setProvider,
+  } = useAgent();
   const [draft, setDraft] = useState("");
   // Two panels, one at a time: they open from adjacent controls and overlap.
   const [panel, setPanel] = useState<"targets" | "prompt" | null>(null);
@@ -97,74 +151,82 @@ export function AgentModule() {
   return (
     <div className="agent">
       <div className="agent__status">
-        <div className="agent__providers">
-          {/* Each button is individually labelled + aria-pressed; a wrapper role
-              would only trip useSemanticElements for little a11y gain. */}
-          {PROVIDERS.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              className={`agent__provider${
-                provider === p.id ? " agent__provider--active" : ""
-              }`}
-              onClick={() => setProvider(p.id)}
-              disabled={!p.available}
-              aria-pressed={provider === p.id}
-              title={p.hint}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
+        {/* The controls live inside a plain block, not directly in the flex
+            column: a wrapping flex row measured as a column child under-reserves
+            its height (Chromium sizes it at one line), so a wrapped second row
+            would overlap the transcript. The block measures the bar at its real
+            width, and the pill grows to fill a wide row so it truncates on one
+            line rather than forcing the wrap in the first place. */}
+        <div className="agent__status-bar">
+          <div className="agent__providers">
+            {/* Each button is individually labelled + aria-pressed; a wrapper role
+                would only trip useSemanticElements for little a11y gain. */}
+            {PROVIDERS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className={`agent__provider${
+                  provider === p.id ? " agent__provider--active" : ""
+                }`}
+                onClick={() => setProvider(p.id)}
+                disabled={!p.available}
+                aria-pressed={provider === p.id}
+                title={p.hint}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
 
-        {canConfigure ? (
+          {canConfigure ? (
+            <button
+              type="button"
+              className={`agent__pill agent__pill--${status.state} agent__pill--status agent__pill--action`}
+              onClick={() => setPanel(targetsOpen ? null : "targets")}
+              aria-haspopup="dialog"
+              aria-expanded={targetsOpen}
+              title="Configure compute targets"
+            >
+              <span className="agent__pill-label">{statusLabel(status)}</span>
+              <span className="agent__pill-caret" aria-hidden="true">
+                ▾
+              </span>
+            </button>
+          ) : (
+            <StatusPill status={status} />
+          )}
+
+          {/* The transcript is the model's context, so a thread that has gone
+              wrong stays wrong: every turn replays it, and a small model copies
+              its own earlier answer over the system prompt. Discarding it is the
+              only way out, which makes this a control and not a convenience. */}
           <button
             type="button"
-            className={`agent__pill agent__pill--${status.state} agent__pill--action`}
-            onClick={() => setPanel(targetsOpen ? null : "targets")}
-            aria-haspopup="dialog"
-            aria-expanded={targetsOpen}
-            title="Configure compute targets"
+            className="agent__pill agent__pill--action"
+            onClick={clear}
+            disabled={messages.length === 0}
+            title="Discard this conversation and start a fresh one"
           >
-            {statusLabel(status)}
+            Clear
+          </button>
+
+          {/* Beside the pill because the two belong together: which model answers,
+              and what it is told to do. Available on every tier — the prompt is
+              shared, so editing it from a Tier-0 chat is not a category error. */}
+          <button
+            type="button"
+            className="agent__pill agent__pill--action"
+            onClick={() => setPanel(panel === "prompt" ? null : "prompt")}
+            aria-haspopup="dialog"
+            aria-expanded={panel === "prompt"}
+            title="View and edit the system prompt"
+          >
+            Prompt
             <span className="agent__pill-caret" aria-hidden="true">
               ▾
             </span>
           </button>
-        ) : (
-          <StatusPill status={status} />
-        )}
-
-        {/* The transcript is the model's context, so a thread that has gone
-            wrong stays wrong: every turn replays it, and a small model copies
-            its own earlier answer over the system prompt. Discarding it is the
-            only way out, which makes this a control and not a convenience. */}
-        <button
-          type="button"
-          className="agent__pill agent__pill--action"
-          onClick={clear}
-          disabled={messages.length === 0}
-          title="Discard this conversation and start a fresh one"
-        >
-          Clear
-        </button>
-
-        {/* Beside the pill because the two belong together: which model answers,
-            and what it is told to do. Available on every tier — the prompt is
-            shared, so editing it from a Tier-0 chat is not a category error. */}
-        <button
-          type="button"
-          className="agent__pill agent__pill--action"
-          onClick={() => setPanel(panel === "prompt" ? null : "prompt")}
-          aria-haspopup="dialog"
-          aria-expanded={panel === "prompt"}
-          title="View and edit the system prompt"
-        >
-          Prompt
-          <span className="agent__pill-caret" aria-hidden="true">
-            ▾
-          </span>
-        </button>
+        </div>
 
         {panel && (
           <>
@@ -208,12 +270,25 @@ export function AgentModule() {
             ) : (
               // biome-ignore lint/suspicious/noArrayIndexKey: append-only chat log, never reordered or removed
               <div key={i} className={`agent__msg agent__msg--${m.role}`}>
-                {m.steps?.map((s, j) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: a message's tool steps are fixed once rendered
-                  <div key={j} className="agent__tool" title={s.result}>
-                    🔧 {TOOL_LABEL[s.name] ?? s.name}
-                  </div>
-                ))}
+                {m.steps?.map((s, j) => {
+                  const failed = FAILED_RESULT.test(s.result);
+                  return (
+                    <div
+                      // biome-ignore lint/suspicious/noArrayIndexKey: a message's tool steps are fixed once rendered
+                      key={j}
+                      className={`agent__tool${failed ? " agent__tool--failed" : ""}`}
+                      title={s.result}
+                    >
+                      {failed ? "⚠" : "🔧"} {TOOL_LABEL[s.name] ?? s.name}
+                      {/* The result inline, not only as a tooltip: a tool that
+                          refused said why in this string, and a hover target is
+                          not somewhere a person looks when nothing happened. */}
+                      <span className="agent__tool-result">
+                        {s.result.split("\n")[0]}
+                      </span>
+                    </div>
+                  );
+                })}
                 {m.content.trim() ? (
                   <div className="agent__bubble">
                     {m.role === "assistant" ? (
@@ -223,8 +298,19 @@ export function AgentModule() {
                     )}
                   </div>
                 ) : busy && i === messages.length - 1 ? (
-                  <div className="agent__bubble agent__bubble--pending">…</div>
+                  <div className="agent__bubble agent__bubble--pending">
+                    Working…{" "}
+                    {startedAt !== null && <Elapsed since={startedAt} />}
+                  </div>
                 ) : null}
+                {/* Rendered as a failure rather than as an answer: the turn
+                    stopped, and the thread has to say so instead of ending in
+                    silence. */}
+                {m.error && (
+                  <div className="agent__error" role="status">
+                    {m.error}
+                  </div>
+                )}
               </div>
             ),
           )
@@ -240,13 +326,22 @@ export function AgentModule() {
           disabled={!ready || busy}
           aria-label="Message the assistant"
         />
-        <button
-          type="submit"
-          className="btn btn--primary"
-          disabled={!ready || busy || !draft.trim()}
-        >
-          Send
-        </button>
+        {/* Replaces Send while a turn runs, rather than sitting beside it: the
+            input is disabled anyway, so Send has nothing to do, and a turn that
+            is taking too long needs one obvious way out that is not Clear. */}
+        {busy ? (
+          <button type="button" className="btn" onClick={stop}>
+            Stop
+          </button>
+        ) : (
+          <button
+            type="submit"
+            className="btn btn--primary"
+            disabled={!ready || !draft.trim()}
+          >
+            Send
+          </button>
+        )}
       </form>
     </div>
   );

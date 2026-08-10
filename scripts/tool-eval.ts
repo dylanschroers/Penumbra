@@ -13,6 +13,14 @@
 //   API_KEY=sk-unsloth-…               when the server wants one
 //   LABEL=baseline                     names the run in the benchmark log
 //   BENCH_DIR=bench                    where results and trainsets are written
+//   TIER=0 | 1                         which tool set to advertise (default 0)
+//
+// TIER=1 is the measurement worth running after touching the tool set. It
+// advertises the Model Lab contracts alongside the base ones, with the prompt
+// the server actually composes, and scores the base cases *and* the lab ones.
+// The base rows are the point: §7 is a claim about what tool count costs, and
+// the only way to see that cost is to run the same utterances against both
+// lists. Tier 0 stays the default so the pinned number keeps its meaning.
 
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -20,7 +28,11 @@ import {
   AGENT_SYSTEM,
   agentTools,
   type CaseOutcome,
+  composeSystem,
   evalCases,
+  LAB_POLICY,
+  labEvalCases,
+  labTools,
   scoreCase,
   summarize,
   toJsonl,
@@ -35,8 +47,17 @@ const MODEL = process.env.MODEL ?? "qwen3-1.7b";
 const API_KEY = process.env.API_KEY;
 const LABEL = process.env.LABEL;
 const BENCH_DIR = process.env.BENCH_DIR ?? "bench";
+const TIER = process.env.TIER === "1" ? 1 : 0;
 
-const tools = agentTools.map(toToolSpec);
+// Both halves come from the shipped definitions, so this cannot measure a tool
+// set the app does not have. The Tier-1 prompt is composed the way main.ts
+// composes it, because a policy that never mentions the lab is not the prompt
+// those tools ship behind.
+const tools = (TIER === 1 ? [...agentTools, ...labTools] : agentTools).map(
+  toToolSpec,
+);
+const system = TIER === 1 ? composeSystem(undefined, LAB_POLICY) : AGENT_SYSTEM;
+const cases = TIER === 1 ? [...evalCases, ...labEvalCases] : evalCases;
 
 async function ask(text: string): Promise<CaseOutcome> {
   const t0 = Date.now();
@@ -49,7 +70,7 @@ async function ask(text: string): Promise<CaseOutcome> {
     body: JSON.stringify({
       model: MODEL,
       messages: [
-        { role: "system", content: AGENT_SYSTEM },
+        { role: "system", content: system },
         { role: "user", content: text },
       ],
       tools,
@@ -121,7 +142,7 @@ const main = async (): Promise<void> => {
   console.log("-".repeat(84));
 
   const scored = [];
-  for (const c of evalCases) {
+  for (const c of cases) {
     const s = scoreCase(c, await ask(c.text));
     scored.push(s);
 
@@ -164,16 +185,28 @@ const main = async (): Promise<void> => {
 
   // Append rather than overwrite: the value of a benchmark is the trend across
   // models and finetunes, not one number.
+  //
+  // The tier rides in the label because both tiers write to this one file, and
+  // the rows are not comparable: Tier 1 answers more cases against more tools.
+  // An unmarked mixed file is worse than no file — the trend it draws is an
+  // artifact of which command someone last ran.
   mkdirSync(BENCH_DIR, { recursive: true });
-  const record = toRecord(summary, MODEL, LABEL);
+  const tierTag = `tier${TIER}`;
+  const record = toRecord(
+    summary,
+    MODEL,
+    LABEL ? `${LABEL} (${tierTag})` : tierTag,
+  );
   appendFileSync(
     join(BENCH_DIR, "results.jsonl"),
     `${JSON.stringify(record)}\n`,
   );
 
   // The same run doubles as a finetuning seed set — only the turns the model
-  // got right (see @penumbra/shared → eval/trainset).
-  const { examples, skipped } = toTrainingExamples(scored, AGENT_SYSTEM);
+  // got right (see @penumbra/shared → eval/trainset). Seeded with the prompt
+  // the turns actually ran under: an example that pairs a lab tool call with a
+  // system prompt that never mentioned the lab teaches the wrong thing.
+  const { examples, skipped } = toTrainingExamples(scored, system);
   writeFileSync(join(BENCH_DIR, "trainset.jsonl"), `${toJsonl(examples)}\n`);
   console.log(
     `\nRecorded to ${BENCH_DIR}/results.jsonl — trainset: ${examples.length} examples, ${skipped.length} to label`,
