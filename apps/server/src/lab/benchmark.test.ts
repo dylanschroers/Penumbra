@@ -22,7 +22,7 @@ import {
 // binary probe in benchmark.lmeval.test.ts.
 
 const personalSuite: SuiteDefinition = {
-  id: "penumbra-tools-v1",
+  id: "penumbra-tools-v2",
   kind: "personal",
   label: "Penumbra tool calling",
   description: "",
@@ -96,9 +96,14 @@ describe("personal suite", () => {
 
     const by = (task: string) =>
       result.scores.find((s) => s.task === task)?.value;
-    // First 8 cases are all create_task/list_tasks, so all are misses.
-    expect(by("tool_selection")).toBe(0);
-    expect(by("false_negatives")).toBe(1);
+    // That a prose-only model scores anything at all is the point. The set is
+    // grouped by tool with the negatives last, so the old prefix of 8 from 33
+    // was entirely create_task and list_tasks: selection came out 0, and the
+    // false-positive rate was computed over no negative case at all. A spread
+    // sample reaches them, so the correct refusals count and the 0 below is a
+    // measurement rather than an artifact of where the cut fell.
+    expect(by("tool_selection")).toBeGreaterThan(0);
+    expect(by("false_negatives")).toBeLessThan(1);
     expect(by("false_positives")).toBe(0);
     // Rates are 0..1 so a short run compares against a long one.
     for (const s of result.scores) {
@@ -217,7 +222,10 @@ describe("personal suite", () => {
       servedModel: "fake",
       target: "local",
       suite: personalSuite,
-      samplesPerTask: 2, // both create_task cases
+      // One case, so the sample is the first and is a create_task utterance.
+      // A larger cap now spreads across the set and would pick cases this
+      // fixed reply is wrong for, which is a different thing to assert.
+      samplesPerTask: 1,
       baseURL,
     });
     expect(result.scores.find((s) => s.task === "tool_selection")?.value).toBe(

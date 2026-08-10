@@ -5,7 +5,7 @@ import type { EvalCase } from "./cases";
 //
 // Separate from `evalCases` because the two are graded against different tool
 // lists. `evalCases` is scored against `agentTools` alone and is pinned — the
-// `penumbra-tools-v1` suite has history behind it, and changing the case mix
+// `penumbra-tools-v2` suite is a recorded measurement, and changing the case mix
 // would make every past score incomparable with nothing in the row saying why.
 // These are scored against `agentTools` *and* `labTools`, which is the set the
 // server actually advertises.
@@ -59,9 +59,9 @@ export const labEvalCases: EvalCase[] = [
 
   // --- run_benchmark ---
   {
-    text: "Run the penumbra-tools-v1 benchmark",
+    text: "Run the penumbra-tools-v2 benchmark",
     tool: "run_benchmark",
-    args: { suite: "penumbra-tools-v1" },
+    args: { suite: "penumbra-tools-v2" },
   },
   { text: "Benchmark the loaded model", tool: "run_benchmark" },
   {

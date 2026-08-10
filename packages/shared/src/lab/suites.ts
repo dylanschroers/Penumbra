@@ -42,8 +42,22 @@ export const SUITES: SuiteDefinition[] = [
     // for the same reason.
     tasks: ["gsm8k", "leaderboard_ifeval", "leaderboard_math_hard"],
   },
+  // v2, and the bump is the whole reason this is not still v1.
+  //
+  // A capped run used to take the first `samplesPerTask` cases. The set is
+  // grouped by tool with the negatives last, so the default 20 of 33 contained
+  // no negative case at all: `false_positives` could only ever report 0, and
+  // every recorded row reading "0" meant "not measured", not "none found". The
+  // sample is now spread across the set, which is a different measurement of
+  // the same questions — so it gets a different id rather than quietly
+  // rewriting what a v1 row said.
+  //
+  // v1 rows keep their meaning and still display, because a score row carries
+  // its own suite string rather than looking one up here. They are simply not
+  // comparable to v2 rows on the false-positive and selection numbers, which is
+  // exactly what an id bump is for.
   {
-    id: "penumbra-tools-v1",
+    id: "penumbra-tools-v2",
     kind: "personal",
     label: "Penumbra tool calling",
     description:
@@ -55,7 +69,7 @@ export const SUITES: SuiteDefinition[] = [
     kind: "personal",
     label: "Penumbra tool calling, with the Model Lab",
     description:
-      "The same questions plus the Model Lab's, against every tool the server advertises. Compare its base-tool rows against penumbra-tools-v1 to see what the extra tools cost.",
+      "The same questions plus the Model Lab's, against every tool the server advertises. Compare its base-tool rows against penumbra-tools-v2 to see what the extra tools cost.",
     tasks: [],
   },
 ];
