@@ -569,15 +569,32 @@ body {
   gap: 0.6rem;
   height: 100%;
   min-height: 0;
+  /* Cap the column to its card. A flex item keeps its content's min-width by
+     default, so one unbreakable child (a long status label) would otherwise
+     force the whole column past the card's edge and off the screen. */
+  min-width: 0;
 }
 
+/* A plain block, not the flex row itself. A wrapping flex container measured
+   directly as a flex-column child under-reserves its height in Chromium (it
+   sizes at max-content — one line), so its wrapped second row overlaps the
+   transcript below. The block measures the bar at its real width instead. */
 .agent__status {
+  min-width: 0;
+  /* Anchors .agent__popover, which hangs off the status pill. */
+  position: relative;
+}
+
+.agent__status-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  /* Anchors .agent__popover, which hangs off the status pill. */
-  position: relative;
+  /* Wrap only as a last resort on a very narrow column; the status pill grows
+     to absorb a wide row (see .agent__pill--status) so the row stays one line
+     when there is room, and the pill truncates rather than forcing a wrap. */
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 /* The pill becomes a control on the server tier: the fix for "key rejected" or
@@ -676,6 +693,25 @@ body {
   resize: vertical;
 }
 
+/* Same box as the persona field, sized for a number rather than a paragraph.
+   The placeholder carries the per-tier defaults, so an empty field says what
+   leaving it empty actually does. */
+.prompt__number {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.prompt__number::placeholder {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .prompt__meta {
   display: flex;
   justify-content: space-between;
@@ -758,12 +794,34 @@ body {
 }
 
 .agent__pill {
+  display: inline-flex;
+  align-items: center;
+  /* Shrink instead of forcing the row wide; the label truncates within. */
+  min-width: 0;
+  max-width: 100%;
   font-size: 0.85rem;
   padding: 0.35rem 0.75rem;
   border-radius: 999px;
   border: 1px solid var(--border);
   color: var(--muted);
   background: var(--bg);
+}
+
+/* The pill's text (target · state · model). Truncated rather than allowed to
+   push the row wide when the model name is long — the full text is still the
+   pill itself, and the compute panel it opens names the target in full. */
+.agent__pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The status/target pill fills the bar's leftover width (basis 0, so it never
+   forces a wrap) and truncates a long model name, keeping the row on one line
+   whenever the fixed controls beside it fit. */
+.agent__pill--status {
+  flex: 1 1 0;
 }
 
 .agent__pill--ready {
@@ -783,6 +841,7 @@ body {
 .agent__messages {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -884,6 +943,39 @@ body {
   color: var(--muted);
   padding: 0.15rem 0;
   cursor: default;
+}
+
+/* The step's own result, beside its name. Truncated rather than wrapped: it is
+   a glance at what happened, and the full text is still the tooltip. */
+.agent__tool-result {
+  display: inline-block;
+  max-width: 100%;
+  margin-left: 0.4rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+
+/* A tool that refused. Coloured because the row is otherwise identical to a
+   step that worked, which is how a failure passes for progress. */
+.agent__tool--failed {
+  color: var(--danger);
+}
+
+.agent__elapsed {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The turn stopped. Deliberately unlike a message bubble: this is the shell
+   reporting a failure, not something the assistant said. */
+.agent__error {
+  border-left: 2px solid var(--danger);
+  color: var(--danger);
+  font-size: 0.82rem;
+  margin-top: 0.3rem;
+  padding: 0.2rem 0 0.2rem 0.5rem;
 }
 
 .agent__form {

@@ -3,12 +3,13 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { finetuneRequest } from "@penumbra/shared";
 import Database from "better-sqlite3";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTargetStore, type TargetStore } from "../compute/targets";
 import { createLabStore, type LabStore } from "./jobs";
-import { registerLabRoutes } from "./routes";
+import { type LabService, registerLabRoutes } from "./routes";
 import type { HubTarget, StudioClient, TrainingStart } from "./studio";
 
 /** Studio stand-in; only the methods a given test exercises are supplied.
@@ -71,6 +72,10 @@ function configureColab(baseURL = "https://tunnel.example") {
   targets.set("colab", { baseURL, apiKey: "colab-secret" });
 }
 
+/** The in-process handle the routes hand back, for the tests that exercise it.
+ *  Set by every `build`, since it is the same object the routes call. */
+let lab: LabService;
+
 async function build(
   studio = fakeStudio(),
   token?: string,
@@ -78,7 +83,7 @@ async function build(
   inferenceURL?: string,
 ) {
   app = Fastify();
-  registerLabRoutes(app, {
+  lab = registerLabRoutes(app, {
     store,
     targets,
     token,
@@ -1368,5 +1373,66 @@ describe("POST /lab/models/plan", () => {
     expect(res.statusCode).toBe(507);
     expect(res.json().error).toBe("insufficient_space");
     expect(res.json().free).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// The handle the routes return is the same orchestration the routes use, not a
+// second copy. That matters beyond tidiness: `inFlight` decides what can be
+// cancelled and the job rows are what the UI polls, so a lab started from a
+// conversation must land in exactly the places the Lab's own screen reads.
+describe("the in-process service", () => {
+  it("starts runs the HTTP surface then reports", async () => {
+    const app = await build();
+    const started = await lab.finetune(
+      finetuneRequest.parse({
+        baseModel: "unsloth/Qwen3-1.7B",
+        dataset: { kind: "hf", id: "tatsu-lab/alpaca" },
+      }),
+    );
+    if (!started.ok) throw new Error(started.message);
+
+    const jobs = await app.inject({ method: "GET", url: "/lab/jobs" });
+    expect(jobs.json().map((j: { id: string }) => j.id)).toContain(
+      started.jobId,
+    );
+    const runs = await app.inject({ method: "GET", url: "/lab/runs" });
+    expect(runs.json().map((r: { id: string }) => r.id)).toContain(
+      started.runId,
+    );
+    // Both readers agree because there is only one store behind them.
+    expect(lab.jobs().map((j) => j.id)).toEqual(
+      jobs.json().map((j: { id: string }) => j.id),
+    );
+  });
+
+  // The route requires a model name; the service does not, because Studio
+  // serves what is resident whatever the request says. An unnamed one must be
+  // filled with what will actually answer, or the scores carry no label at all.
+  it("labels an unnamed benchmark with the model that will answer", async () => {
+    fakeModel = startFakeModel();
+    const baseURL = await fakeModel.listen();
+    const app = await build(fakeStudio(), undefined, undefined, baseURL);
+
+    const started = await lab.benchmark({
+      suite: "penumbra-tools-v1",
+      samplesPerTask: 1,
+    });
+    if (!started.ok) throw new Error(started.message);
+
+    expect((await settle(started.jobId))?.state).toBe("done");
+    const scores = await app.inject({ method: "GET", url: "/lab/scores" });
+    expect(scores.json()[0].model).toBe("loaded-model");
+    expect(scores.json()[0].servedModel).toBe("loaded-model");
+  });
+
+  it("refuses rather than throwing when there is nowhere to run", async () => {
+    await build();
+    expect(
+      await lab.benchmark({ suite: "made-up", samplesPerTask: 1 }),
+    ).toEqual({
+      ok: false,
+      error: "unknown_suite",
+      message: 'there is no suite called "made-up"',
+    });
   });
 });

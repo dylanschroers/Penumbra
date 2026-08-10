@@ -1,14 +1,19 @@
 import { join } from "node:path";
 import {
+  type AvailableModel,
+  type BenchmarkRequest,
+  type BenchmarkResult,
   benchmarkRequest,
   exportRequest,
+  type FinetuneRequest,
   findSuite,
   finetuneRequest,
   type LabJob,
+  type LabRun,
   looksLocalPath,
   SUITES,
 } from "@penumbra/shared";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import type {
   TargetCredentials,
   TargetId,
@@ -27,10 +32,12 @@ import {
 } from "./studio";
 import {
   computeNeed,
+  type DatasetFile,
   dirFileSizes,
   freeSpace,
   isLocalFile,
   isOutOfSpace,
+  listDatasets,
   resolveDest,
   uploadRoot,
   writeChunk,
@@ -55,6 +62,87 @@ function runKey(run: StudioRun): string {
 
 /** Quantizing a large model is slow, but not unbounded. */
 const EXPORT_TIMEOUT_MS = 60 * 60 * 1000;
+
+/** Background work started: the job to watch, and the run it created if it
+ *  created one. */
+export interface LabStarted {
+  ok: true;
+  jobId: string;
+  runId?: string;
+}
+
+/** Work refused before anything started. `error` is the stable code a route
+ *  turns into a status; `message` is the sentence a caller can relay. */
+export interface LabRefused {
+  ok: false;
+  error: string;
+  message: string;
+}
+
+/**
+ * What the Model Lab can do, for callers inside this process.
+ *
+ * Returned by `registerLabRoutes` rather than built as a separate module
+ * because both callers must share one piece of job orchestration: `inFlight`
+ * is what decides whether a job can be cancelled, so a second copy would leave
+ * a benchmark the agent started running with the Lab's Cancel button unable to
+ * reach it. The agent binds this (../agent/tools.ts) instead of calling this
+ * server's own HTTP surface, which would mean holding the bearer to talk to
+ * itself.
+ */
+export interface LabService {
+  /** What the benchmark target can serve, and which of it is resident. */
+  models(): Promise<{
+    target: TargetId;
+    models: AvailableModel[];
+    inventoryError: string | null;
+  }>;
+  /** Datasets already uploaded to this host. */
+  datasets(): Promise<DatasetFile[]>;
+  finetune(input: FinetuneRequest): Promise<LabStarted | LabRefused>;
+  benchmark(input: BenchmarkInput): Promise<LabStarted | LabRefused>;
+  jobs(): LabJob[];
+  job(id: string): LabJob | undefined;
+  /** Completed fine-tunes, newest first. The same rows `GET /lab/runs` serves:
+   *  a job says how the training went, a run says what it left behind. */
+  runs(): LabRun[];
+  /** Recorded benchmark results, newest first. Kept apart from the job that
+   *  produced them because a job row is a progress line and these are the
+   *  numbers — `GET /lab/scores` reads the same table. */
+  scores(): BenchmarkResult[];
+}
+
+/**
+ * A benchmark to run.
+ *
+ * `model` is optional here where the wire schema requires it, because it is
+ * only a label: Studio serves whatever is resident regardless of what the
+ * request names. An omitted one is filled with the model that will actually
+ * answer, which is the value that should have been sent anyway.
+ */
+export type BenchmarkInput = Omit<BenchmarkRequest, "model"> & {
+  model?: string;
+};
+
+/** Refusals that mean the request was wrong rather than the compute being
+ *  unable — the rest describe the state of a machine, which is a 409. */
+const BAD_REQUEST = new Set(["unknown_suite"]);
+
+/** Render a service result as the response the route contract promises. */
+function sendStarted(
+  reply: FastifyReply,
+  result: LabStarted | LabRefused,
+): FastifyReply {
+  if (!result.ok) {
+    return reply
+      .code(BAD_REQUEST.has(result.error) ? 400 : 409)
+      .send({ error: result.error, message: result.message });
+  }
+  return reply.code(202).send({
+    jobId: result.jobId,
+    ...(result.runId ? { runId: result.runId } : {}),
+  });
+}
 
 export interface LabRouteOptions {
   store: LabStore;
@@ -84,7 +172,7 @@ export function registerLabRoutes(
     token = process.env.PENUMBRA_AGENT_TOKEN,
     devices,
   }: LabRouteOptions,
-): void {
+): LabService {
   const preHandler = requireAuth({ token, devices });
 
   /** The Studio for a target, or null when it has no address yet. Built per
@@ -343,7 +431,7 @@ export function registerLabRoutes(
    * the inventory does not list it, since otherwise the form hides the only
    * model this target can score.
    */
-  app.get("/lab/models", { preHandler }, async () => {
+  const models: LabService["models"] = async () => {
     const id = targets.effective("benchmark");
     const client = clientFor(id);
     if (!client) return { target: id, models: [], inventoryError: null };
@@ -351,7 +439,9 @@ export function registerLabRoutes(
     // Same read the compute panel's list goes through, so the two views of one
     // inventory cannot disagree about a model's name or which is resident.
     return { target: id, ...(await readInventory(client)) };
-  });
+  };
+
+  app.get("/lab/models", { preHandler }, () => models());
 
   app.get<{ Params: { id: string } }>(
     "/lab/jobs/:id",
@@ -400,19 +490,11 @@ export function registerLabRoutes(
     },
   );
 
-  app.post("/lab/finetune", { preHandler }, async (req, reply) => {
-    const parsed = finetuneRequest.safeParse(req.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: "bad_request" });
-    }
-    const input = parsed.data;
-
+  const finetune: LabService["finetune"] = async (input) => {
     // Decide where this trains before creating a job, so a request with no
     // usable trainer fails fast with a clear code instead of a dead job row.
     const pick = await pickTrainer(input.provider);
-    if (!pick.ok) {
-      return reply.code(409).send({ error: pick.error, message: pick.message });
-    }
+    if (!pick.ok) return pick;
     const trainer = pick.client;
 
     // A model path means something only on the machine holding the file. Colab
@@ -422,11 +504,12 @@ export function registerLabRoutes(
     // pushed to the trainer before the run — but there is no upload endpoint
     // for a model, so say plainly what's needed instead.
     if (pick.via === "colab" && looksLocalPath(input.baseModel)) {
-      return reply.code(409).send({
+      return {
+        ok: false,
         error: "remote_model_path",
         message:
           "the Colab trainer runs on another machine and cannot read a path from this one — give the base model as a HuggingFace id",
-      });
+      };
     }
 
     const job = store.createJob("finetune");
@@ -543,7 +626,13 @@ export function registerLabRoutes(
       }
     });
 
-    return reply.code(202).send({ jobId: job.id, runId: run.id });
+    return { ok: true, jobId: job.id, runId: run.id };
+  };
+
+  app.post("/lab/finetune", { preHandler }, async (req, reply) => {
+    const parsed = finetuneRequest.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
+    return sendStarted(reply, await finetune(parsed.data));
   });
 
   app.post("/lab/export", { preHandler }, async (req, reply) => {
@@ -673,17 +762,21 @@ export function registerLabRoutes(
     return reply.code(202).send({ jobId: job.id });
   });
 
-  app.post("/lab/benchmark", { preHandler }, async (req, reply) => {
-    const parsed = benchmarkRequest.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
-
-    const suite = findSuite(parsed.data.suite);
-    if (!suite) return reply.code(400).send({ error: "unknown_suite" });
+  const benchmark: LabService["benchmark"] = async (input) => {
+    const suite = findSuite(input.suite);
+    if (!suite) {
+      return {
+        ok: false,
+        error: "unknown_suite",
+        message: `there is no suite called "${input.suite}"`,
+      };
+    }
     if (suite.kind === "general" && !(await lmEvalAvailable())) {
-      return reply.code(409).send({
+      return {
+        ok: false,
         error: "lm_eval_missing",
         message: "pip install 'lm-eval[api]' to run general suites",
-      });
+      };
     }
 
     // Resolved before the job exists, so a run with nowhere to go fails fast
@@ -699,11 +792,16 @@ export function registerLabRoutes(
       ?.loadedModel()
       .catch(() => null);
     if (!served) {
-      return reply.code(409).send({
+      return {
+        ok: false,
         error: "no_model_loaded",
         message: `${targetId} has no model loaded — a benchmark would score whatever answered, or nothing`,
-      });
+      };
     }
+
+    // Nothing named means the scores are labeled with what will answer, which
+    // is the only label that can be right (see BenchmarkInput).
+    const model = input.model ?? served;
 
     const job = store.createJob("benchmark");
     // A benchmark is the one job worth stopping mid-flight: the wrong suite or
@@ -715,19 +813,19 @@ export function registerLabRoutes(
       async (report) => {
         report({
           detail:
-            served === parsed.data.model
+            served === model
               ? `benchmarking ${served} on ${targetId}`
-              : `benchmarking ${served} on ${targetId} (requested ${parsed.data.model})`,
+              : `benchmarking ${served} on ${targetId} (requested ${model})`,
         });
         // The scores describe `served`, wherever it ran. Carried into the record
         // rather than only into a job line, because the comparison these feed is
         // the whole point of keeping them.
         const result = await runBenchmark({
-          model: parsed.data.model,
+          model,
           servedModel: served,
           target: targetId,
           suite,
-          samplesPerTask: parsed.data.samplesPerTask,
+          samplesPerTask: input.samplesPerTask,
           baseURL: inferenceURL ?? via.baseURL,
           apiKey: via.apiKey,
           signal: controller.signal,
@@ -742,6 +840,23 @@ export function registerLabRoutes(
       controller,
     );
 
-    return reply.code(202).send({ jobId: job.id });
+    return { ok: true, jobId: job.id };
+  };
+
+  app.post("/lab/benchmark", { preHandler }, async (req, reply) => {
+    const parsed = benchmarkRequest.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
+    return sendStarted(reply, await benchmark(parsed.data));
   });
+
+  return {
+    models,
+    datasets: listDatasets,
+    finetune,
+    benchmark,
+    jobs: () => store.listJobs(),
+    job: (id) => store.getJob(id),
+    runs: () => store.listRuns(),
+    scores: () => store.listScores(),
+  };
 }

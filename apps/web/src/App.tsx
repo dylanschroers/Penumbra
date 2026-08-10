@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import "./app.css";
 import { AppShell } from "./shell/AppShell";
+import { useTextScale } from "./shell/useTextScale";
 import { startSync } from "./sync/SyncClient";
 
 // UI-overhaul prototype: the app now boots into the launcher shell (logo →
@@ -10,6 +11,8 @@ export function App() {
   // Sync runs only here: App mounts inside SingleTabGuard, so this is the one
   // tab that owns the local store. The cleanup stops the loop on unmount.
   useEffect(() => startSync(), []);
+  // Ctrl/Cmd +/-/0 scales the whole UI (the chat included), persisted.
+  useTextScale();
 
   return <AppShell />;
 }

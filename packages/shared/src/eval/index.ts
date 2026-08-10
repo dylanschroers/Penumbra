@@ -1,4 +1,5 @@
 export { type EvalCase, evalCases } from "./cases";
+export { labEvalCases } from "./labCases";
 export {
   type BenchmarkRecord,
   type CaseOutcome,

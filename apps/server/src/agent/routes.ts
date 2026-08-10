@@ -25,7 +25,14 @@ const chatBody = z.object({
   ),
 });
 
-const promptBody = z.object({ persona: z.string() });
+// Both optional and applied independently: the panel saves the cap and the
+// persona from one form, and a request carrying only one of them must not blank
+// the other. `null` on maxTokens is meaningful — it clears the override and
+// hands each tier back its own default.
+const promptBody = z.object({
+  persona: z.string().optional(),
+  maxTokens: z.number().int().nullable().optional(),
+});
 
 export interface AgentRouteOptions {
   engine: Engine;
@@ -64,10 +71,19 @@ export function registerAgentRoutes(
       if (!parsed.success) {
         return reply.code(400).send({ error: "bad_request" });
       }
-      const next = prompts.set(parsed.data.persona);
-      // Length is the one rule here. The prompt shares a context window with
-      // the conversation, and a persona that fills it starves the turn.
-      return next ?? reply.code(400).send({ error: "too_long" });
+      // Length is the one rule for the persona. The prompt shares a context
+      // window with the conversation, and one that fills it starves the turn.
+      if (parsed.data.persona !== undefined) {
+        if (!prompts.set(parsed.data.persona)) {
+          return reply.code(400).send({ error: "too_long" });
+        }
+      }
+      if (parsed.data.maxTokens !== undefined) {
+        if (!prompts.setMaxTokens(parsed.data.maxTokens)) {
+          return reply.code(400).send({ error: "out_of_range" });
+        }
+      }
+      return prompts.current();
     });
 
     // Reset. Worth a route of its own: a user who has edited the persona has no

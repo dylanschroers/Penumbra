@@ -50,7 +50,28 @@ export const SUITES: SuiteDefinition[] = [
       "Does the model call the right Penumbra tool with the right arguments, and stay quiet during chit-chat. Runs in-process against the shipped tool contracts.",
     tasks: [],
   },
+  {
+    id: "penumbra-lab-v1",
+    kind: "personal",
+    label: "Penumbra tool calling, with the Model Lab",
+    description:
+      "The same questions plus the Model Lab's, against every tool the server advertises. Compare its base-tool rows against penumbra-tools-v1 to see what the extra tools cost.",
+    tasks: [],
+  },
 ];
+
+/**
+ * Suites that advertise the Model Lab contracts as well as the base ones.
+ *
+ * A set rather than a field on the definition because it decides two things at
+ * once — which tools go on the wire and which system prompt frames them — and
+ * those must not be settable independently. A run advertising the lab tools
+ * under a prompt that never mentions them measures a configuration the app does
+ * not ship.
+ */
+export const LAB_TOOL_SUITES: ReadonlySet<string> = new Set([
+  "penumbra-lab-v1",
+]);
 
 export function findSuite(id: string): SuiteDefinition | undefined {
   return SUITES.find((s) => s.id === id);

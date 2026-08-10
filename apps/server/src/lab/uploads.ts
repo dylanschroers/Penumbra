@@ -128,6 +128,31 @@ export async function dirFileSizes(
   return sizes;
 }
 
+/** A dataset sitting on this host, ready to train from. */
+export interface DatasetFile {
+  /** Path relative to the dataset root, which is what the client uploaded it as. */
+  name: string;
+  /** Absolute path — what a run passes Studio. */
+  path: string;
+  size: number;
+}
+
+/**
+ * The datasets already uploaded here.
+ *
+ * Unfiltered by extension on purpose: `resolveDest` is what decides that
+ * something may be written under `datasets/`, so anything here was uploaded as
+ * a dataset, and second-guessing that would hide a file whose name this
+ * happened not to recognize. An absent root simply lists nothing.
+ */
+export async function listDatasets(): Promise<DatasetFile[]> {
+  const dir = join(uploadRoot(), "datasets");
+  const sizes = await dirFileSizes(dir);
+  return Object.entries(sizes)
+    .map(([name, size]) => ({ name, path: join(dir, name), size }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /**
  * Write one chunk of an upload at `offset`. The first chunk (offset 0) creates
  * or truncates the file, so a re-upload starts clean; later chunks write at

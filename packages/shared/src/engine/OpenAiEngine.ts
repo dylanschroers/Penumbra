@@ -20,12 +20,58 @@ import type {
 // its own configuration and passes it in.
 
 /** Cap generation so a small model can't run away (Qwen3 thinking can
- *  otherwise emit thousands of tokens). */
-const DEFAULT_MAX_TOKENS = 512;
+ *  otherwise emit thousands of tokens). Tier 0's default, and the floor the
+ *  whole setting is calibrated against. */
+export const AGENT_MAX_TOKENS_LOCAL = 512;
+
+/** Tier 1's default. A larger model, the full tool registry, and questions
+ *  whose honest answer runs to a paragraph per tool — 512 truncated those
+ *  mid-word. */
+export const AGENT_MAX_TOKENS_SERVER = 2048;
+
+/** What the setting will accept. The floor is low enough to be a deliberate
+ *  "keep it terse" and high enough to finish a sentence; the ceiling exists
+ *  because this is a *runaway* guard first, and an unbounded one guards
+ *  nothing. */
+export const AGENT_MAX_TOKENS_MIN = 128;
+export const AGENT_MAX_TOKENS_MAX = 8192;
+
+/**
+ * Hold a cap inside the range before it becomes a request.
+ *
+ * The server range-checks an edit and refuses one that is out of bounds, which
+ * is right for something a person just typed. This is the other half: the value
+ * also arrives from places no one is checking at the time it is used — a
+ * client's localStorage mirror, written by an older build or edited by hand —
+ * and Tier 0 hands it straight to `max_tokens`. A ceiling that only some paths
+ * respect is not a runaway guard, so it is applied where the number is spent
+ * rather than at each place it can come from.
+ */
+export function clampMaxTokens(value: number): number {
+  if (!Number.isFinite(value)) return AGENT_MAX_TOKENS_LOCAL;
+  return Math.min(
+    AGENT_MAX_TOKENS_MAX,
+    Math.max(AGENT_MAX_TOKENS_MIN, Math.round(value)),
+  );
+}
 /** How many tool rounds one turn may take, unless a tier raises it. */
 const DEFAULT_MAX_TOOL_STEPS = 4;
 /** The status probe is a liveness check, so it fails fast. */
 const DEFAULT_STATUS_TIMEOUT_MS = 1500;
+
+/**
+ * How long one completion may take before the turn is failed.
+ *
+ * Generous, because this is not a latency budget: a 12B model on an older card
+ * genuinely takes tens of seconds, and cutting a working answer short is worse
+ * than waiting. It exists because the alternative is unbounded — a backend that
+ * accepts the connection and then never answers (its GPU busy training, its
+ * weights being evicted) leaves `fetch` pending forever, and a UI whose only
+ * signal is "still working" cannot tell that from a slow reply. Every hang of
+ * that shape reached the user as a permanently frozen chat with nothing in it
+ * to report.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 
 /**
  * Emoji, with the modifiers that ride along: skin tones, variation selectors,
@@ -56,8 +102,19 @@ export interface OpenAiEngineConfig {
   /** Names this backend in error messages ("local model responded 500"). */
   label?: string;
   maxToolSteps?: number;
-  maxTokens?: number;
+  /**
+   * Reply-length cap, or a function returning it.
+   *
+   * A function because the value is user-editable and this engine may be built
+   * once and used for the rest of the session (Tier 0 is), so a number captured
+   * at construction would pin the cap to whatever it was at page load. Same
+   * reason `ToolBindings.system` is read through a getter.
+   */
+  maxTokens?: number | (() => number);
   statusTimeoutMs?: number;
+  /** Ceiling on one completion. Raise it for a slow backend; it is a deadlock
+   *  guard, not a latency target. */
+  requestTimeoutMs?: number;
 }
 
 /** One OpenAI chat message as it goes over the wire, including the tool roles
@@ -81,8 +138,9 @@ export class OpenAiEngine implements Engine {
   protected readonly headers: Record<string, string>;
   protected readonly label: string;
   protected readonly maxToolSteps: number;
-  protected readonly maxTokens: number;
+  private readonly resolveMaxTokens: () => number;
   protected readonly statusTimeoutMs: number;
+  protected readonly requestTimeoutMs: number;
 
   constructor(config: OpenAiEngineConfig) {
     this.bindings = config.bindings;
@@ -91,8 +149,18 @@ export class OpenAiEngine implements Engine {
     this.headers = config.headers ?? {};
     this.label = config.label ?? "model";
     this.maxToolSteps = config.maxToolSteps ?? DEFAULT_MAX_TOOL_STEPS;
-    this.maxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS;
+    const cap = config.maxTokens ?? AGENT_MAX_TOKENS_LOCAL;
+    this.resolveMaxTokens = typeof cap === "function" ? cap : () => cap;
     this.statusTimeoutMs = config.statusTimeoutMs ?? DEFAULT_STATUS_TIMEOUT_MS;
+    this.requestTimeoutMs =
+      config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  }
+
+  /** The cap in force for the next request. Resolved per call, so an edit
+   *  reaches the next turn without rebuilding anything, and clamped here
+   *  because a resolver reads a store this class does not control. */
+  protected get maxTokens(): number {
+    return clampMaxTokens(this.resolveMaxTokens());
   }
 
   /** Backend readiness for the status pill. Never throws; reports a state. */
@@ -136,7 +204,7 @@ export class OpenAiEngine implements Engine {
     ];
 
     for (let step = 0; step < this.maxToolSteps; step++) {
-      const msg = await this.complete(convo, tools, signal);
+      const { finish, ...msg } = await this.complete(convo, tools, signal);
       const calls = msg.tool_calls ?? [];
 
       if (calls.length === 0) {
@@ -150,7 +218,11 @@ export class OpenAiEngine implements Engine {
           .replace(/[ \t]{2,}/g, " ")
           .replace(/[ \t]+$/gm, "")
           .trim();
-        yield { kind: "answer", text };
+        // "length" means the cap cut it off mid-thought. Passed on so the UI can
+        // say so: the text itself just ends, which reads as a finished answer.
+        yield finish === "length"
+          ? { kind: "answer", text, truncated: true }
+          : { kind: "answer", text };
         return;
       }
 
@@ -204,26 +276,72 @@ export class OpenAiEngine implements Engine {
     convo: WireMessage[],
     tools: ToolBindings["tools"],
     signal?: AbortSignal,
-  ): Promise<{ content?: string | null; tool_calls?: ToolCall[] }> {
-    const res = await fetch(`${this.baseURL}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...this.headers },
-      body: JSON.stringify({
-        model: this.model,
-        messages: convo,
-        tools,
-        tool_choice: "auto",
-        max_tokens: this.maxTokens,
-        temperature: 0,
-      }),
-      signal,
-    });
-    if (!res.ok) throw new Error(`${this.label} responded ${res.status}`);
-    const body = (await res.json()) as {
-      choices?: Array<{
-        message?: { content?: string | null; tool_calls?: ToolCall[] };
-      }>;
-    };
-    return body.choices?.[0]?.message ?? {};
+  ): Promise<{
+    content?: string | null;
+    tool_calls?: ToolCall[];
+    /** Why generation stopped — "length" when the cap truncated it. */
+    finish?: string;
+  }> {
+    // The caller's abort and our own deadline, composed by hand rather than with
+    // AbortSignal.any: this runs in the OS webview too, and WebKitGTK is exactly
+    // the platform where that is missing. Which of the two fired has to be
+    // remembered, because both surface as the same AbortError and they mean
+    // opposite things — one is the user leaving, the other is the failure worth
+    // reporting.
+    const controller = new AbortController();
+    let expired = false;
+    const deadline = setTimeout(() => {
+      expired = true;
+      controller.abort();
+    }, this.requestTimeoutMs);
+    const relay = () => controller.abort();
+    signal?.addEventListener("abort", relay, { once: true });
+    // An abort that already happened fires no event. Without this a Stop
+    // pressed between two steps of a tool loop was dropped, and the next
+    // request ran to its full deadline against a caller that had already left.
+    if (signal?.aborted) relay();
+
+    // The deadline has to outlive the fetch itself. `fetch` settles on headers,
+    // so releasing it there left the body read unguarded — and a backend that
+    // answers 200 and then stalls mid-body is the same wedge this exists to
+    // catch, only one step later. Reading the body is inside the guard for the
+    // same reason: `controller` owns that stream too, so it is what a Stop
+    // pressed while the reply is arriving actually cancels.
+    try {
+      const res = await fetch(`${this.baseURL}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...this.headers },
+        body: JSON.stringify({
+          model: this.model,
+          messages: convo,
+          tools,
+          tool_choice: "auto",
+          max_tokens: this.maxTokens,
+          temperature: 0,
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`${this.label} responded ${res.status}`);
+      const body = (await res.json()) as {
+        choices?: Array<{
+          message?: { content?: string | null; tool_calls?: ToolCall[] };
+          finish_reason?: string;
+        }>;
+      };
+      const choice = body.choices?.[0];
+      return { ...choice?.message, finish: choice?.finish_reason };
+    } catch (err) {
+      if (expired) {
+        throw new Error(
+          `the ${this.label} backend did not respond within ${Math.round(
+            this.requestTimeoutMs / 1000,
+          )}s — it may be loading a model, busy training, or wedged`,
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(deadline);
+      signal?.removeEventListener("abort", relay);
+    }
   }
 }

@@ -1,8 +1,20 @@
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { SuiteDefinition } from "@penumbra/shared";
+import {
+  evalCases,
+  labEvalCases,
+  labTools,
+  type SuiteDefinition,
+} from "@penumbra/shared";
 import { afterEach, describe, expect, it } from "vitest";
-import { lmEvalEnv, parseLmEvalResults, runBenchmark } from "./benchmark";
+import {
+  lmEvalEnv,
+  parseLmEvalResults,
+  runBenchmark,
+  watchProcess,
+} from "./benchmark";
 
 // The personal suite is driven against a real HTTP model server, so the request
 // shape and scoring are exercised end to end without a model. The general
@@ -15,6 +27,13 @@ const personalSuite: SuiteDefinition = {
   label: "Penumbra tool calling",
   description: "",
   tasks: [],
+};
+
+/** The same family, but the id that puts the Model Lab contracts on the wire. */
+const labSuite: SuiteDefinition = {
+  ...personalSuite,
+  id: "penumbra-lab-v1",
+  label: "Penumbra tool calling, with the Model Lab",
 };
 
 /** A model server that answers every request the same way. */
@@ -85,6 +104,108 @@ describe("personal suite", () => {
     for (const s of result.scores) {
       if (s.metric !== "avg_ms") expect(s.value).toBeLessThanOrEqual(1);
     }
+  });
+
+  // The lab suite exists to measure the configuration the server serves, so the
+  // two things that define it — the tools on the wire and the policy framing
+  // them — have to travel together with the id.
+  it("advertises the lab contracts, behind the lab policy", async () => {
+    const seen: Record<string, unknown>[] = [];
+    model = startFakeModel((body) => {
+      seen.push(body);
+      return { choices: [{ message: { content: "ok" } }] };
+    });
+    const baseURL = await model.listen();
+
+    await runBenchmark({
+      model: "fake",
+      servedModel: "fake",
+      target: "local",
+      suite: labSuite,
+      samplesPerTask: 4,
+      baseURL,
+    });
+
+    const first = seen[0] as {
+      tools: Array<{ function: { name: string } }>;
+      messages: Array<{ role: string; content: string }>;
+    };
+    const names = first.tools.map((t) => t.function.name);
+    expect(names).toContain("create_task");
+    expect(names).toContain("lab_history");
+    expect(names).toContain("start_finetune");
+    // Advertising the lab tools under a prompt that never mentions them is a
+    // configuration the app does not ship, so it must not be what gets scored.
+    expect(first.messages[0]?.content).toContain("Model Lab");
+  });
+
+  it("keeps the base suite on the base tools", async () => {
+    const seen: Record<string, unknown>[] = [];
+    model = startFakeModel((body) => {
+      seen.push(body);
+      return { choices: [{ message: { content: "ok" } }] };
+    });
+    const baseURL = await model.listen();
+
+    await runBenchmark({
+      model: "fake",
+      servedModel: "fake",
+      target: "local",
+      suite: personalSuite,
+      samplesPerTask: 2,
+      baseURL,
+    });
+
+    const first = seen[0] as {
+      tools: Array<{ function: { name: string } }>;
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(first.tools.map((t) => t.function.name)).not.toContain(
+      "lab_history",
+    );
+    expect(first.messages[0]?.content).not.toContain("Model Lab");
+  });
+
+  // Both case sets are grouped by tool with the negatives last, so a prefix of
+  // the combined set at the default sample count would be entirely base cases:
+  // a lab suite measuring no lab tool, and a false-positive rate computed over
+  // no negatives. The sample is spread instead.
+  it("samples lab cases and negatives at the default cap", async () => {
+    const asked: string[] = [];
+    model = startFakeModel((body) => {
+      const messages = (body as { messages: Array<{ content: string }> })
+        .messages;
+      asked.push(messages[1]?.content ?? "");
+      return { choices: [{ message: { content: "ok" } }] };
+    });
+    const baseURL = await model.listen();
+
+    await runBenchmark({
+      model: "fake",
+      servedModel: "fake",
+      target: "local",
+      suite: labSuite,
+      samplesPerTask: 20,
+      baseURL,
+    });
+
+    expect(asked).toHaveLength(20);
+
+    // Checked against the case sets themselves rather than by matching words,
+    // so rewording a case cannot quietly turn this green.
+    const sampled = new Set(asked);
+    const picked = [...evalCases, ...labEvalCases].filter((c) =>
+      sampled.has(c.text),
+    );
+    const labToolNames = new Set(labTools.map((t) => t.name));
+
+    // Reached the lab half at all: a prefix of this set would not have.
+    expect(
+      picked.some((c) => c.tool !== null && labToolNames.has(c.tool)),
+    ).toBe(true);
+    // And carried negatives, without which a false-positive rate is 0 by
+    // construction rather than by measurement.
+    expect(picked.some((c) => c.tool === null)).toBe(true);
   });
 
   it("credits a correct tool call", async () => {
@@ -168,6 +289,77 @@ describe("lmEvalEnv", () => {
     // lm_eval's OpenAI client refuses to start without one, and a local Studio
     // may legitimately have no key.
     expect(lmEvalEnv().OPENAI_API_KEY).toBe("dummy");
+  });
+});
+
+// A stand-in for a spawned child: stdout/stderr are emitters, and kill() ends it
+// the way a real process does — the OS delivers `close` shortly after — so the
+// watchdog can settle. `signals` records which signals it was sent.
+function fakeChild(): ChildProcess & { signals: string[] } {
+  const child = new EventEmitter() as ChildProcess & { signals: string[] };
+  child.stdout = new EventEmitter() as ChildProcess["stdout"];
+  child.stderr = new EventEmitter() as ChildProcess["stderr"];
+  child.signals = [];
+  child.kill = ((signal?: string) => {
+    child.signals.push(signal ?? "SIGTERM");
+    setTimeout(() => child.emit("close", null), 0);
+    return true;
+  }) as ChildProcess["kill"];
+  return child;
+}
+
+const frame = (pct: number, at: number, of: number) =>
+  Buffer.from(
+    `Requesting API: ${pct}%|#####     | ${at}/${of} [05:00<05:00, 3.3s/it]\n`,
+  );
+
+describe("watchProcess", () => {
+  // The reported hang: the bar reaches 100%, lm_eval then wedges before exiting,
+  // and the job used to sit at "running 100%" forever with the GPU still held.
+  // The watchdog kills it so the run can settle and free the host.
+  it("kills a child that goes silent past its budget", async () => {
+    const child = fakeChild();
+    const watched = watchProcess(child, { stallMs: 30 });
+    child.stderr?.emit("data", frame(100, 180, 180));
+    const outcome = await watched;
+    expect(outcome.stalled).toBe(true);
+    expect(outcome.progress).toBe(1);
+    expect(child.signals).toContain("SIGTERM");
+  });
+
+  // Any output restarts the clock, so a run that keeps emitting frames — even
+  // slowly — is never mistaken for a wedge.
+  it("keeps running while output keeps arriving", async () => {
+    const child = fakeChild();
+    const watched = watchProcess(child, { stallMs: 80 });
+    child.stderr?.emit("data", frame(50, 90, 180));
+    await new Promise((r) => setTimeout(r, 50));
+    child.stderr?.emit("data", frame(60, 108, 180)); // resets the silence clock
+    await new Promise((r) => setTimeout(r, 20));
+    child.emit("close", 0);
+    const outcome = await watched;
+    expect(outcome.stalled).toBe(false);
+    expect(child.signals).toHaveLength(0);
+  });
+
+  it("resolves cleanly when the child exits on its own", async () => {
+    const child = fakeChild();
+    const watched = watchProcess(child, { stallMs: 1000 });
+    child.stderr?.emit("data", frame(100, 5, 5));
+    child.emit("close", 0);
+    expect(await watched).toMatchObject({
+      code: 0,
+      stalled: false,
+      progress: 1,
+    });
+    expect(child.signals).toHaveLength(0);
+  });
+
+  it("rejects if the process fails to start", async () => {
+    const child = fakeChild();
+    const watched = watchProcess(child, { stallMs: 1000 });
+    child.emit("error", new Error("ENOENT"));
+    await expect(watched).rejects.toThrow("ENOENT");
   });
 });
 

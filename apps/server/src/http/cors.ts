@@ -55,3 +55,34 @@ export function allowedOrigins(raw: string | undefined): string[] {
     .filter(Boolean);
   return [...BUILT_IN_ORIGINS, ...extra];
 }
+
+/**
+ * The methods the app actually uses.
+ *
+ * Spelled out because @fastify/cors defaults to `GET,HEAD,POST` — the three
+ * "simple" methods — and answers a preflight for anything else by simply
+ * leaving it out of `access-control-allow-methods`. The browser then refuses
+ * the request before it is sent, which reaches the user as "Failed to fetch"
+ * and leaves *nothing* in the server log, because no request was ever made.
+ *
+ * That took out every write the app makes with a verb other than POST: saving
+ * and resetting the system prompt, forgetting a compute target, and revoking a
+ * device. All four worked from curl, which ignores CORS, which is the trap —
+ * the failure is invisible from the side you would naturally test from.
+ */
+const ALLOWED_METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE"];
+
+/**
+ * The whole CORS policy, as @fastify/cors takes it.
+ *
+ * One object rather than options assembled at the registration site, because
+ * the test used to mirror that site by hand — and so faithfully reproduced the
+ * missing `methods` while proving the origin rules worked. A policy worth
+ * testing has to be the same value the server registers.
+ */
+export function corsOptions(raw: string | undefined): {
+  origin: string[];
+  methods: string[];
+} {
+  return { origin: allowedOrigins(raw), methods: ALLOWED_METHODS };
+}
