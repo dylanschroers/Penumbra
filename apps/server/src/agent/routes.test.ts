@@ -1,5 +1,6 @@
 import cors from "@fastify/cors";
 import {
+  AGENT_MAX_TOKENS_MAX,
   AGENT_PERSONA_DEFAULT,
   AGENT_PERSONA_MAX,
   AGENT_POLICY,
@@ -170,6 +171,34 @@ describe("/agent/prompt", () => {
       payload: { persona: 42 },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  // The panel saves both fields from one form, so a refusal has to leave the
+  // whole request unapplied. This used to store the persona and then answer 400
+  // for the cap, which is a status that says nothing happened over a request
+  // where something did.
+  it("stores neither field when one of them is refused", async () => {
+    const app = await buildWithPrompts();
+    await app.inject({
+      method: "PUT",
+      url: "/agent/prompt",
+      payload: { persona: "kept", maxTokens: 1024 },
+    });
+
+    const res = await app.inject({
+      method: "PUT",
+      url: "/agent/prompt",
+      payload: {
+        persona: "should not land",
+        maxTokens: AGENT_MAX_TOKENS_MAX + 1,
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "out_of_range" });
+    expect((await app.inject({ url: "/agent/prompt" })).json()).toMatchObject({
+      persona: "kept",
+      maxTokens: 1024,
+    });
   });
 
   it("resets to the default", async () => {

@@ -50,6 +50,18 @@ describe("GET /auth/context", () => {
     const res = await app.inject({ method: "GET", url: "/auth/context" });
     expect(res.json().requiresToken).toBe(true);
   });
+
+  // `PENUMBRA_AGENT_TOKEN=` with nothing after it is how a .env turns the shared
+  // secret off, and the gate reads it as unset. This route decided the same
+  // question for itself with `!== undefined` and answered the opposite, telling
+  // a client it needed a token to reach a server that wanted none.
+  it("reports no shared secret when the env var is set but empty", async () => {
+    await build("");
+    const res = await app.inject({ method: "GET", url: "/auth/context" });
+    expect(res.json().requiresToken).toBe(false);
+    // And the gate agrees: loopback is still served with no credential.
+    expect((await app.inject({ url: "/auth/devices" })).statusCode).toBe(200);
+  });
 });
 
 describe("enrolment is gated", () => {
