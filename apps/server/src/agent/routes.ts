@@ -71,19 +71,13 @@ export function registerAgentRoutes(
       if (!parsed.success) {
         return reply.code(400).send({ error: "bad_request" });
       }
-      // Length is the one rule for the persona. The prompt shares a context
-      // window with the conversation, and one that fills it starves the turn.
-      if (parsed.data.persona !== undefined) {
-        if (!prompts.set(parsed.data.persona)) {
-          return reply.code(400).send({ error: "too_long" });
-        }
-      }
-      if (parsed.data.maxTokens !== undefined) {
-        if (!prompts.setMaxTokens(parsed.data.maxTokens)) {
-          return reply.code(400).send({ error: "out_of_range" });
-        }
-      }
-      return prompts.current();
+      // One call, so a patch is all-or-nothing. Applying the fields in turn
+      // saved the persona before refusing the cap, and a 400 that has already
+      // changed something is a lie about the request.
+      const result = prompts.update(parsed.data);
+      return result.ok
+        ? result.state
+        : reply.code(400).send({ error: result.error });
     });
 
     // Reset. Worth a route of its own: a user who has edited the persona has no

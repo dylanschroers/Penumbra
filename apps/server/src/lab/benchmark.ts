@@ -168,26 +168,18 @@ async function runPersonalSuite(opts: BenchmarkOptions): Promise<TaskScore[]> {
   // The lab suite runs the base cases too, and that is its whole reason to
   // exist: docs/AGENT_DESIGN.md §7 claims tool count costs selection accuracy,
   // and the only way to see the cost is to put the same utterances in front of
-  // both lists. Its base rows against penumbra-tools-v1's are the comparison.
+  // both lists. Its base rows against penumbra-tools-v2's are the comparison.
   const all = withLab ? [...evalCases, ...labEvalCases] : evalCases;
   // samplesPerTask caps the run so a smoke check stays quick; the full set is
   // small enough that the cap is usually the whole thing.
   //
-  // The lab set is sampled across its length rather than from the front, and it
-  // has to be: both case sets are grouped by tool with the negatives last, so a
-  // prefix of the 67 combined cases at the default 20 would be entirely base
-  // cases — a lab suite measuring no lab tool at all. Spreading also means the
-  // sample always contains negatives, without which a false-positive rate can
-  // only ever report zero.
-  //
-  // penumbra-tools-v1 keeps its prefix deliberately. It has recorded history,
-  // and changing which cases a capped run picks would move every future number
-  // against it with nothing in the row saying why. Its own prefix has the flaw
-  // described above; that is worth fixing on purpose, as a new suite id, rather
-  // than silently here.
-  const cases = withLab
-    ? spread(all, opts.samplesPerTask)
-    : all.slice(0, opts.samplesPerTask);
+  // Spread rather than sliced from the front. Every case set here is grouped by
+  // tool with the negatives last, so a prefix systematically omits whichever
+  // kind of case sits at the end: at the default 20 the base set contributed no
+  // negative at all, making `false_positives` a metric that could only report 0,
+  // and a prefix of the combined lab set would have been entirely base cases.
+  // A truncated run is a sample, so it has to look like one.
+  const cases = spread(all, opts.samplesPerTask);
   const scored = [];
 
   for (const [i, c] of cases.entries()) {

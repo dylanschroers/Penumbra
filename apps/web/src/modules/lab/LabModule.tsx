@@ -701,7 +701,7 @@ export function LabModule() {
   const [format, setFormat] = useState<FormatType>("auto");
   const [maxSteps, setMaxSteps] = useState(60);
   const [benchModel, setBenchModel] = useState("");
-  const [suite, setSuite] = useState("penumbra-tools-v1");
+  const [suite, setSuite] = useState("penumbra-tools-v2");
   const benchModels = lab.available?.models ?? [];
   const benchLoaded = benchModels.find((m) => m.loaded);
   const [samples, setSamples] = useState(20);

@@ -1,3 +1,4 @@
+import { migrateStorageKey, STORAGE_NAMESPACE } from "@penumbra/shared";
 import { useEffect } from "react";
 
 // UI text scale, driven by Ctrl/Cmd +/-/0. Every size in the app is a rem, so
@@ -6,7 +7,11 @@ import { useEffect } from "react";
 // per-rule changes. The factor is written as a percentage on <html> (100% is
 // the initial 16px) and persisted so a reload keeps it.
 
-const STORAGE_KEY = "penumbra:text-scale";
+const STORAGE_KEY = `${STORAGE_NAMESPACE}.shell.text-scale.v1`;
+/** The key this shipped under before it joined the namespace every other
+ *  setting uses. Migrated rather than dropped: someone who has zoomed keeps
+ *  their zoom. */
+const LEGACY_STORAGE_KEY = "penumbra:text-scale";
 export const MIN_SCALE = 0.7;
 export const MAX_SCALE = 1.8;
 const STEP = 0.1;
@@ -28,9 +33,33 @@ export function scaleForKey(current: number, key: string): number | null {
   return null;
 }
 
+/**
+ * The stored scale, or 1× when there is none to read.
+ *
+ * Guarded like every other reader in the app: `localStorage` *throws* rather
+ * than returning null where storage is blocked (a locked-down webview, Safari
+ * private browsing), and this runs from App's first effect with no error
+ * boundary above it — an unguarded throw there blanks the whole app over a
+ * zoom preference.
+ */
 function read(): number {
-  const raw = Number(localStorage.getItem(STORAGE_KEY));
-  return Number.isFinite(raw) && raw > 0 ? clampScale(raw) : 1;
+  migrateStorageKey(LEGACY_STORAGE_KEY, STORAGE_KEY);
+  try {
+    const raw = Number(localStorage.getItem(STORAGE_KEY));
+    return Number.isFinite(raw) && raw > 0 ? clampScale(raw) : 1;
+  } catch {
+    return 1;
+  }
+}
+
+/** Persist the scale, or forget it at 1× so the stylesheet default stands. */
+function remember(scale: number): void {
+  try {
+    if (scale === 1) localStorage.removeItem(STORAGE_KEY);
+    else localStorage.setItem(STORAGE_KEY, String(scale));
+  } catch {
+    // Non-fatal: the zoom just won't survive a reload.
+  }
 }
 
 function apply(scale: number): void {
@@ -38,7 +67,10 @@ function apply(scale: number): void {
   // explicit 100% that would also override a user's own browser zoom.
   const root = document.documentElement;
   if (scale === 1) root.style.removeProperty("font-size");
-  else root.style.fontSize = `${scale * 100}%`;
+  // Rounded again on the way out. clampScale rounds the *factor* to whole
+  // percent, but multiplying it back up re-introduces the float error it just
+  // removed: one step from 1× wrote `font-size: 110.00000000000001%`.
+  else root.style.fontSize = `${Math.round(scale * 100)}%`;
 }
 
 export function useTextScale(): void {
@@ -55,8 +87,7 @@ export function useTextScale(): void {
       e.preventDefault();
       scale = next;
       apply(scale);
-      if (scale === 1) localStorage.removeItem(STORAGE_KEY);
-      else localStorage.setItem(STORAGE_KEY, String(scale));
+      remember(scale);
     };
 
     window.addEventListener("keydown", onKey);

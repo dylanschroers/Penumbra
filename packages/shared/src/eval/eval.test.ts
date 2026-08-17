@@ -32,7 +32,7 @@ describe("cases", () => {
 
   // The base set is graded against agentTools alone and is pinned, so a lab
   // utterance landing in it would both fail the check above and silently change
-  // what every past penumbra-tools-v1 score means.
+  // what every past penumbra-tools-v2 score means.
   it("keeps lab utterances out of the pinned base set", () => {
     const lab = new Set(labTools.map((t) => t.name));
     for (const c of evalCases) {
