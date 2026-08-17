@@ -59,9 +59,10 @@ of which command someone last ran.
 ### The two tool sets
 
 `TIER=0` advertises the five contracts both tiers bind and scores `evalCases`.
-That set is pinned: the `penumbra-tools-v1` suite has history behind it, and
-changing the case mix would move every future number against the past with
-nothing in the row saying why.
+That set is stable on purpose: it is what `penumbra-tools-v2` records, and
+changing the case mix moves every future number against the past. When it has to
+change, the suite id changes with it (see below) rather than the change being
+silent.
 
 `TIER=1` advertises those five *plus* the six Model Lab contracts, under the
 prompt the server actually composes (`AGENT_POLICY` + `LAB_POLICY`), and scores
@@ -158,7 +159,7 @@ Two personal suites, matching the two tool sets above:
 
 | Suite | Advertises | Scores |
 |---|---|---|
-| `penumbra-tools-v1` | the 5 base contracts | `evalCases` |
+| `penumbra-tools-v2` | the 5 base contracts | `evalCases` |
 | `penumbra-lab-v1` | those 5 plus the 6 lab contracts, under `LAB_POLICY` | `evalCases` + `labEvalCases` |
 
 Which tools go on the wire and which prompt frames them are decided together
@@ -166,15 +167,24 @@ from the suite id (`LAB_TOOL_SUITES`), because a run that advertises the lab
 tools under a prompt that never mentions them is measuring a configuration the
 app does not ship.
 
-One sampling difference is worth knowing before reading a capped run.
-`samplesPerTask` truncates the case list, and both sets are grouped by tool with
-the negatives last. `penumbra-lab-v1` therefore samples *across* its combined
-list, so a default 20-case run still reaches lab cases and still contains
-negatives. `penumbra-tools-v1` keeps taking a prefix, which is a deliberate
-choice to protect its recorded history rather than an endorsement: a capped run
-of it contains no negatives, so its false-positive rate is zero by construction
-at any sample count below the full set. Read that row as "not measured", not as
-"none found", and run the full set when the number matters.
+### Why the base suite is v2
+
+`samplesPerTask` caps a run, and a capped run used to take the first *n* cases.
+Every case set here is grouped by tool with the negatives last, so a prefix
+systematically drops whichever kind of case sits at the end. At the default 20
+of 33 the sample contained **no negative case at all**: `false_positives` could
+only ever come back 0, and every `penumbra-tools-v1` row reading 0 meant "not
+measured", not "none found".
+
+The sample is now spread across the set, so a capped run is a sample of the
+whole thing. That is a different measurement of the same questions, which is why
+it is a new suite id rather than a quiet change to what a v1 row said.
+
+**Reading old rows.** A score row carries its own suite string rather than
+looking one up, so v1 rows still display exactly as recorded. They are not
+comparable to v2 on `tool_selection` or `false_positives` — the case mix behind
+them differs — and their `false_positives` should be read as unmeasured wherever
+`samplesPerTask` was below the full set. The other metrics are unaffected.
 
 ## 5. Running the general suite
 

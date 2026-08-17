@@ -185,7 +185,7 @@ describe("GET /lab/status", () => {
     const body = (await app.inject({ url: "/lab/status" })).json();
 
     expect(body.suites.map((s: { id: string }) => s.id)).toContain(
-      "penumbra-tools-v1",
+      "penumbra-tools-v2",
     );
     expect(["installed", "missing"]).toContain(body.lmEval);
   });
@@ -899,7 +899,7 @@ describe("POST /lab/jobs/:id/cancel", () => {
       url: "/lab/benchmark",
       payload: {
         model: "loaded-model",
-        suite: "penumbra-tools-v1",
+        suite: "penumbra-tools-v2",
         samplesPerTask: 50,
       },
     });
@@ -1112,7 +1112,7 @@ describe("POST /lab/benchmark", () => {
     const res = await app.inject({
       method: "POST",
       url: "/lab/benchmark",
-      payload: { model: "q", suite: "penumbra-tools-v1", samplesPerTask: 1 },
+      payload: { model: "q", suite: "penumbra-tools-v2", samplesPerTask: 1 },
     });
     expect(res.statusCode).toBe(202);
   });
@@ -1125,7 +1125,7 @@ describe("POST /lab/benchmark", () => {
     const res = await app.inject({
       method: "POST",
       url: "/lab/benchmark",
-      payload: { model: "q", suite: "penumbra-tools-v1", samplesPerTask: 1 },
+      payload: { model: "q", suite: "penumbra-tools-v2", samplesPerTask: 1 },
     });
 
     expect(res.statusCode).toBe(409);
@@ -1148,7 +1148,7 @@ describe("POST /lab/benchmark", () => {
         url: "/lab/benchmark",
         payload: {
           model: "whatever-i-typed",
-          suite: "penumbra-tools-v1",
+          suite: "penumbra-tools-v2",
           samplesPerTask: 1,
         },
       })
@@ -1180,7 +1180,7 @@ describe("POST /lab/benchmark", () => {
       await app.inject({
         method: "POST",
         url: "/lab/benchmark",
-        payload: { model: "q", suite: "penumbra-tools-v1", samplesPerTask: 1 },
+        payload: { model: "q", suite: "penumbra-tools-v2", samplesPerTask: 1 },
       })
     ).json();
     expect((await settle(jobId))?.state).toBe("done");
@@ -1414,7 +1414,7 @@ describe("the in-process service", () => {
     const app = await build(fakeStudio(), undefined, undefined, baseURL);
 
     const started = await lab.benchmark({
-      suite: "penumbra-tools-v1",
+      suite: "penumbra-tools-v2",
       samplesPerTask: 1,
     });
     if (!started.ok) throw new Error(started.message);
