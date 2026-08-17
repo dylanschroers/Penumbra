@@ -1,6 +1,6 @@
 import { issueDeviceInput } from "@penumbra/shared";
 import type { FastifyInstance } from "fastify";
-import { isLoopback, requireAuth } from "../http/auth";
+import { isLoopback, requireAuth, sharedSecret } from "../http/auth";
 import type { DeviceStore } from "./store";
 
 // Managing which devices may call the gated routes.
@@ -27,10 +27,12 @@ export function registerDeviceRoutes(
   const preHandler = requireAuth({ token, devices });
 
   // Ungated on purpose: a device with no credential still needs to learn whether
-  // it can enrol one. Says only what the gate's own 401-vs-403 already would.
+  // it can enrol one. Says only what the gate's own 401-vs-403 already would —
+  // and says it by asking the gate's own helper, so an empty
+  // PENUMBRA_AGENT_TOKEN reads as no secret here exactly as it does there.
   app.get("/auth/context", async (req) => ({
     loopback: isLoopback(req.ip),
-    requiresToken: token !== undefined,
+    requiresToken: sharedSecret(token) !== undefined,
   }));
 
   app.get("/auth/devices", { preHandler }, async () => devices.list());

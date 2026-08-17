@@ -51,6 +51,38 @@ export interface PromptState {
   maxTokens: number | null;
 }
 
+/** An edit to the editable settings. An absent field is left as it was; a
+ *  `maxTokens` of null clears the override rather than leaving it. */
+export interface PromptPatch {
+  persona?: string;
+  maxTokens?: number | null;
+}
+
+/** Why an edit was refused. Named rather than boolean because the route turns
+ *  each into a different error code, and the caller cannot tell which field was
+ *  at fault from a bare failure. */
+export type PromptRefusal = "too_long" | "out_of_range";
+
+export type PromptUpdate =
+  | { ok: true; state: PromptState }
+  | { ok: false; error: PromptRefusal };
+
+/** Whether a persona would be accepted. The prompt shares a context window with
+ *  the conversation, and one that fills it starves the turn. */
+export function personaAccepted(persona: string): boolean {
+  return persona.length <= AGENT_PERSONA_MAX;
+}
+
+/** Whether a reply cap would be accepted. Null (no override) always is. */
+export function maxTokensAccepted(value: number | null): boolean {
+  return (
+    value === null ||
+    (Number.isInteger(value) &&
+      value >= AGENT_MAX_TOKENS_MIN &&
+      value <= AGENT_MAX_TOKENS_MAX)
+  );
+}
+
 export interface PromptStore {
   current(): PromptState;
   /** Store a persona. Returns the new state, or null when it is too long. */
@@ -58,6 +90,16 @@ export interface PromptStore {
   /** Store a reply-length cap, or null to go back to each tier's own default.
    *  Returns null when the value is out of range. */
   setMaxTokens(value: number | null): PromptState | null;
+  /**
+   * Apply an edit to both settings at once.
+   *
+   * Every field is checked before any of them is written, which is the whole
+   * reason this exists beside the two setters: the route used to call them in
+   * turn, so a form carrying a good persona and an out-of-range cap saved the
+   * persona and then answered 400. A rejected edit now changes nothing, which
+   * is what a caller reading that status will assume.
+   */
+  update(patch: PromptPatch): PromptUpdate;
   /** Forget the override and fall back to the shipped default. */
   clear(): PromptState;
 }
@@ -101,27 +143,43 @@ CREATE TABLE IF NOT EXISTS lab_settings (
     };
   }
 
+  /** The writes themselves, past validation. Shared by the setters and by
+   *  `update`, so there is one place a value reaches the table from. */
+  function writePersona(persona: string): void {
+    writeSetting.run({ key: KEY_PERSONA, value: persona });
+  }
+  function writeMaxTokens(value: number | null): void {
+    if (value === null) dropSetting.run(KEY_MAX_TOKENS);
+    else writeSetting.run({ key: KEY_MAX_TOKENS, value: String(value) });
+  }
+
   return {
     current,
     set(persona) {
-      if (persona.length > AGENT_PERSONA_MAX) return null;
-      writeSetting.run({ key: KEY_PERSONA, value: persona });
+      if (!personaAccepted(persona)) return null;
+      writePersona(persona);
       return current();
     },
     setMaxTokens(value) {
-      if (value === null) {
-        dropSetting.run(KEY_MAX_TOKENS);
-        return current();
+      if (!maxTokensAccepted(value)) return null;
+      writeMaxTokens(value);
+      return current();
+    },
+    update(patch) {
+      // Both checks first, then both writes. Split deliberately: interleaving
+      // them is exactly how half an edit lands.
+      if (patch.persona !== undefined && !personaAccepted(patch.persona)) {
+        return { ok: false, error: "too_long" };
       }
       if (
-        !Number.isInteger(value) ||
-        value < AGENT_MAX_TOKENS_MIN ||
-        value > AGENT_MAX_TOKENS_MAX
+        patch.maxTokens !== undefined &&
+        !maxTokensAccepted(patch.maxTokens)
       ) {
-        return null;
+        return { ok: false, error: "out_of_range" };
       }
-      writeSetting.run({ key: KEY_MAX_TOKENS, value: String(value) });
-      return current();
+      if (patch.persona !== undefined) writePersona(patch.persona);
+      if (patch.maxTokens !== undefined) writeMaxTokens(patch.maxTokens);
+      return { ok: true, state: current() };
     },
     clear() {
       dropSetting.run(KEY_PERSONA);

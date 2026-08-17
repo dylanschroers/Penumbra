@@ -48,6 +48,20 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(left, right);
 }
 
+/**
+ * The shared secret actually in force, or undefined when there is none.
+ *
+ * `PENUMBRA_AGENT_TOKEN=` with nothing after it is a set env var and an unset
+ * secret, and the gate below has always read it that way by testing for
+ * truthiness. Named and exported so everything that reports on the gate reaches
+ * the same verdict: /auth/context used to decide this for itself with
+ * `!== undefined`, and so told a client "this server requires a token" about a
+ * server that required none.
+ */
+export function sharedSecret(raw: string | undefined): string | undefined {
+  return raw || undefined;
+}
+
 export interface AuthOptions {
   /** PENUMBRA_AGENT_TOKEN, when one is set. */
   token?: string;
@@ -56,12 +70,13 @@ export interface AuthOptions {
 }
 
 export function requireAuth({ token, devices }: AuthOptions) {
+  const secret = sharedSecret(token);
   return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const bearer = bearerOf(req.headers.authorization);
 
     if (bearer) {
       if (devices?.verify(bearer)) return;
-      if (token && safeEqual(bearer, token)) return;
+      if (secret && safeEqual(bearer, secret)) return;
       // Something was presented and it was not good. Kept distinct from
       // presenting nothing: this is a credential to replace, not one to obtain.
       await reply.code(401).send({
@@ -74,7 +89,7 @@ export function requireAuth({ token, devices }: AuthOptions) {
     // Nothing presented. A server with a shared secret set requires it from
     // everyone, loopback included — unchanged from when that was the only
     // scheme.
-    if (token) {
+    if (secret) {
       await reply.code(401).send({
         error: "unauthorized",
         message: "This server requires an access token.",

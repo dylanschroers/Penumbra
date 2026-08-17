@@ -147,3 +147,67 @@ describe("reply-length cap", () => {
     expect(store.current().persona).toBe("Answer in one sentence.");
   });
 });
+
+// One form saves both, so one call applies both. The route used to apply them
+// in turn, which meant a refusal could arrive after half the edit had already
+// been written — and a 400 that has changed something is a lie about the
+// request.
+describe("update applies a patch or none of it", () => {
+  it("writes both fields together", () => {
+    const result = store.update({ persona: "Terse.", maxTokens: 1024 });
+    expect(result).toMatchObject({
+      ok: true,
+      state: { persona: "Terse.", maxTokens: 1024 },
+    });
+  });
+
+  it("leaves an absent field as it was", () => {
+    store.update({ persona: "Terse.", maxTokens: 1024 });
+    store.update({ maxTokens: 2048 });
+    expect(store.current()).toMatchObject({
+      persona: "Terse.",
+      maxTokens: 2048,
+    });
+  });
+
+  it("clears the cap on an explicit null without touching the persona", () => {
+    store.update({ persona: "Terse.", maxTokens: 1024 });
+    store.update({ maxTokens: null });
+    expect(store.current()).toMatchObject({
+      persona: "Terse.",
+      maxTokens: null,
+    });
+  });
+
+  // The case that used to leak a half-written edit: the persona is fine, the cap
+  // is not, and the persona was saved before the cap was checked.
+  it("writes no persona when the cap is out of range", () => {
+    store.update({ persona: "kept", maxTokens: 1024 });
+    expect(
+      store.update({
+        persona: "should not land",
+        maxTokens: AGENT_MAX_TOKENS_MAX + 1,
+      }),
+    ).toEqual({ ok: false, error: "out_of_range" });
+    expect(store.current()).toMatchObject({
+      persona: "kept",
+      maxTokens: 1024,
+    });
+  });
+
+  // And the mirror image, which was already safe by ordering alone. Pinned so it
+  // stays safe if the order ever changes.
+  it("writes no cap when the persona is too long", () => {
+    store.update({ persona: "kept", maxTokens: 1024 });
+    expect(
+      store.update({
+        persona: "x".repeat(AGENT_PERSONA_MAX + 1),
+        maxTokens: 2048,
+      }),
+    ).toEqual({ ok: false, error: "too_long" });
+    expect(store.current()).toMatchObject({
+      persona: "kept",
+      maxTokens: 1024,
+    });
+  });
+});
