@@ -34,6 +34,9 @@ export interface AgentStatus {
   state: AgentState;
   /** Loaded model id, present only when state is "ready". */
   model?: string;
+  /** The server software serving it ("llama.cpp"), as the backend names
+   *  itself. Present only when "ready" and the backend reports one. */
+  backend?: string;
   /**
    * Which compute target answered, when the backend has more than one to choose
    * from. Absent for Tier 0, which is always the embedded server.

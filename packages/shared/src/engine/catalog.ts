@@ -6,10 +6,32 @@
 // subtle enough that a second copy would eventually disagree with the first.
 
 /** One entry of a `/v1/models` response. `loaded` is Studio's; llama-server
- *  omits it. */
+ *  omits it. `owned_by` is the OpenAI field a server uses to name itself. */
 export interface ModelCatalogEntry {
   id?: string;
   loaded?: boolean;
+  owned_by?: string;
+}
+
+/** Display names for the `owned_by` values servers report about themselves. */
+const BACKEND_NAMES: Record<string, string> = { llamacpp: "llama.cpp" };
+
+/**
+ * The backend serving `model`, as the listing names it, or undefined when it
+ * names none.
+ *
+ * Read from the backend rather than configured, because configuration is what
+ * went stale: a Tier 1 engine labelled "unsloth studio" kept telling the model
+ * so after the server was pointed at a llama-server. An unrecognised name is
+ * passed through as given; only a missing one falls back to the caller's label.
+ */
+export function servingBackend(
+  entries: ModelCatalogEntry[],
+  model: string,
+): string | undefined {
+  const owner = entries.find((m) => m.id === model)?.owned_by?.trim();
+  if (!owner) return undefined;
+  return BACKEND_NAMES[owner] ?? owner;
 }
 
 /**
