@@ -1,0 +1,19 @@
+# Allowlist: the server image needs only the workspace manifests, the server,
+# and the shared package. Everything else (the desktop app's ~1.2 GB of models
+# and binaries, Rust targets, local databases) stays out of the build context.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.base.json
+!apps/*/package.json
+!packages/*/package.json
+!apps/server/
+!packages/shared/
+
+**/node_modules
+**/dist
+**/*.db
+**/*.db-*
+**/.env
+**/.env.*

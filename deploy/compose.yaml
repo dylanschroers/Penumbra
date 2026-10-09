@@ -1,0 +1,59 @@
+# The Penumbra server plus a GPU llama-server as its Tier 1 chat backend.
+#
+#   cp .env.example .env    # then set LLAMA_MODEL_FILE and MODELS_DIR
+#   docker compose up -d --build
+#
+# Only the server is published. llama-server is reachable solely from the server,
+# at http://llama:8080 on this project's network.
+name: penumbra
+
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: apps/server/Dockerfile
+    # Node as PID 1 ignores SIGTERM, so `docker stop` would wait out its timeout
+    # and kill it. init forwards the signal.
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${PENUMBRA_PORT:-3000}:3000"
+    environment:
+      # Tier 1 speaks the OpenAI-compatible API, which llama-server serves too.
+      UNSLOTH_BASE_URL: http://llama:8080
+      UNSLOTH_MODEL: ${LLAMA_ALIAS:-qwen3-14b}
+      PENUMBRA_AGENT_TOKEN: ${PENUMBRA_AGENT_TOKEN:-}
+      PENUMBRA_ALLOWED_ORIGINS: ${PENUMBRA_ALLOWED_ORIGINS:-}
+    volumes:
+      - penumbra-data:/data
+    depends_on:
+      - llama
+
+  llama:
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    restart: unless-stopped
+    # Mirrors the desktop sidecar's flags (apps/desktop/src-tauri/src/lib.rs):
+    # --jinja applies the chat template and enables tool calls; think tags stay
+    # inline because the client strips them.
+    command: >
+      --model /models/${LLAMA_MODEL_FILE:?set LLAMA_MODEL_FILE in .env}
+      --host 0.0.0.0
+      --port 8080
+      --jinja
+      --reasoning-format none
+      --reasoning-budget ${LLAMA_REASONING_BUDGET:-0}
+      -a ${LLAMA_ALIAS:-qwen3-14b}
+      -ngl 99
+      -c ${LLAMA_CTX:-8192}
+    volumes:
+      - ${MODELS_DIR:?set MODELS_DIR in .env}:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  penumbra-data:
