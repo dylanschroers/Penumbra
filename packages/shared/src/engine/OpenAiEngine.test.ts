@@ -164,6 +164,22 @@ describe("getStatus", () => {
     });
   });
 
+  // The backend names itself in `owned_by`; llama-server's raw "llamacpp" is
+  // given its usual spelling, and a name we do not know is passed through.
+  it.each([
+    ["llamacpp", "llama.cpp"],
+    ["vllm", "vllm"],
+  ])("reports the backend a listing names as %s", async (owner, backend) => {
+    mockFetch.mockResolvedValue(
+      res({ data: [{ id: "qwen3", owned_by: owner }] }),
+    );
+    expect(await engine.getStatus()).toEqual({
+      state: "ready",
+      model: "qwen3",
+      backend,
+    });
+  });
+
   it("reports stopped on a non-OK response", async () => {
     mockFetch.mockResolvedValue(res({}, false, 503));
     expect(await engine.getStatus()).toEqual({ state: "stopped" });
@@ -196,6 +212,19 @@ describe("identity in the system prompt", () => {
     expect(systemSent()).toContain("sys");
     expect(systemSent()).toContain('running as the model "test-model"');
     expect(systemSent()).toContain("test model backend");
+  });
+
+  // The configured label goes stale when the server is repointed: Tier 1
+  // labelled "unsloth studio" kept saying so while a llama-server answered.
+  it("names the backend the listing reports over the configured label", async () => {
+    mockFetch.mockImplementation(async (url: string) =>
+      String(url).includes("/v1/models")
+        ? res({ data: [{ id: "qwen3-8b", owned_by: "llamacpp" }] })
+        : answerReply("hi"),
+    );
+    await collect(engine.runAgent([{ role: "user", content: "x" }]));
+    expect(systemSent()).toContain("served by the llama.cpp backend");
+    expect(systemSent()).not.toContain("test model backend");
   });
 
   // The configured id is a placeholder for Studio ("unsloth"), so stating it

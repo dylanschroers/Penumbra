@@ -1,5 +1,9 @@
 import { normalizeBaseUrl } from "../net";
-import { type ModelCatalogEntry, pickLoadedModel } from "./catalog";
+import {
+  type ModelCatalogEntry,
+  pickLoadedModel,
+  servingBackend,
+} from "./catalog";
 import type {
   AgentEvent,
   AgentStatus,
@@ -178,11 +182,16 @@ export class OpenAiEngine implements Engine {
       }
       if (!res.ok) return { state: "stopped" };
       const body = (await res.json()) as { data?: ModelCatalogEntry[] };
+      const entries = body.data ?? [];
       // Which entry is actually servable is a rule with a trap in it; it lives
       // in ./catalog so the benchmark route reads the listing the same way.
-      const model = pickLoadedModel(body.data ?? []);
+      const model = pickLoadedModel(entries);
+      if (!model) return { state: "no_model" };
 
-      return model ? { state: "ready", model } : { state: "no_model" };
+      const backend = servingBackend(entries, model);
+      return backend
+        ? { state: "ready", model, backend }
+        : { state: "ready", model };
     } catch {
       return { state: "stopped" };
     }
@@ -259,6 +268,9 @@ export class OpenAiEngine implements Engine {
    * confident as a real one. So the served id is read from the backend and
    * stated, which is also the only honest source for it.
    *
+   * The backend's name comes from the same listing when it gives one, for the
+   * same reason: the configured label is only a fallback.
+   *
    * Costs one `/v1/models` GET per turn, not per token, against a backend the
    * status pill is already polling. When it cannot be resolved the line is left
    * out entirely rather than guessed at, and the prompt's standing instruction
@@ -268,7 +280,8 @@ export class OpenAiEngine implements Engine {
     const status = await this.getStatus();
     const model = status.state === "ready" ? status.model : undefined;
     if (!model) return system;
-    return `${system}\n\nYou are currently running as the model "${model}", served by the ${this.label} backend. If the user asks which model, backend, or version they are talking to, answer with exactly that and nothing invented.`;
+    const backend = status.backend ?? this.label;
+    return `${system}\n\nYou are currently running as the model "${model}", served by the ${backend} backend. If the user asks which model, backend, or version they are talking to, answer with exactly that and nothing invented.`;
   }
 
   /** One `/v1/chat/completions` round trip, returning the assistant message. */
