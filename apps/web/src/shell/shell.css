@@ -1625,3 +1625,93 @@
 .shell--desktop .file-sidebar--collapsed {
   padding-top: 2.8rem;
 }
+
+/* ---- macOS top row ------------------------------------------------------- */
+
+/* One compact row at the window's top, level with the traffic lights
+   (tauri.macos.conf.json puts their centre at 22px). The controls are borderless
+   icons, 12px from each edge. In a window the folder button clears the lights
+   (which end near 72px); full screen hides them, so it moves to the edge. */
+.shell--mac {
+  --topbar-height: 44px;
+  --topbar-center: 22px;
+  --topbar-btn: 28px;
+  --topbar-edge: 12px;
+  --topbar-left: 80px;
+}
+
+.shell--mac.shell--fullscreen {
+  --topbar-left: var(--topbar-edge);
+}
+
+/* The drag strip stops short of both button clusters and the open sidebar's
+   header, so it can't cover them. */
+.shell--mac .titlebar {
+  height: var(--topbar-height);
+  left: 116px;
+  right: 84px;
+}
+
+.shell--mac.shell--rail-wide .titlebar {
+  left: 240px;
+}
+
+/* The logo hangs below the row but overlaps the strip, so it stays above it. */
+.shell--mac.shell--app .shell-logo {
+  z-index: 101;
+}
+
+.shell--mac .server-status,
+.shell--mac .shell__chat-toggle {
+  top: var(--topbar-center);
+  transform: translateY(-50%);
+}
+
+.shell--mac .server-status {
+  right: var(--topbar-edge);
+}
+
+.shell--mac .shell__chat-toggle {
+  right: calc(var(--topbar-edge) + var(--topbar-btn) + 4px);
+}
+
+.shell--mac .file-sidebar--collapsed .file-sidebar__iconbtn {
+  position: fixed;
+  top: var(--topbar-center);
+  left: var(--topbar-left);
+  transform: translateY(-50%);
+  padding: 0;
+  /* In a window it sits past the rail's slot, over the stage, which would
+     otherwise take its clicks. */
+  z-index: 1;
+}
+
+.shell--mac .server-status__btn,
+.shell--mac .shell__chat-toggle,
+.shell--mac .file-sidebar--collapsed .file-sidebar__iconbtn {
+  width: var(--topbar-btn);
+  height: var(--topbar-btn);
+  background: transparent;
+  border-color: transparent;
+  border-radius: calc(var(--radius) - 3px);
+}
+
+.shell--mac .server-status__btn:hover,
+.shell--mac .shell__chat-toggle:hover,
+.shell--mac .file-sidebar--collapsed .file-sidebar__iconbtn:hover {
+  background: var(--surface);
+  border-color: transparent;
+}
+
+/* The open sidebar's header is part of the row: it starts at the window's top,
+   with its title clearing the traffic lights the same way the folder button does. */
+.shell--mac .file-sidebar {
+  padding-top: 0;
+}
+
+.shell--mac .file-sidebar__head {
+  height: var(--topbar-height);
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-left: var(--topbar-left);
+}
