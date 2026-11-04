@@ -14,6 +14,7 @@ import { MODULE_ICONS } from "./icons";
 import { Logo } from "./Logo";
 import { ModuleDock } from "./ModuleDock";
 import { ModuleSlot, type ModuleView } from "./ModuleSlot";
+import { isMac } from "./platform";
 import { ResizeHandles } from "./ResizeHandles";
 import { ServerStatus } from "./ServerStatus";
 import {
@@ -524,11 +525,12 @@ export function AppShell() {
     >
       {/* Desktop-only custom window chrome; the native decorations are off in
           tauri.conf.json, so both halves of the frame are ours: TitleBar is the
-          drag strip and min/max/close, ResizeHandles the edge grips. */}
+          drag strip and min/max/close, ResizeHandles the edge grips. macOS keeps
+          its native frame and resizes itself, so it skips the grips. */}
       {isFsAvailable && (
         <>
           <TitleBar />
-          <ResizeHandles />
+          {!isMac && <ResizeHandles />}
         </>
       )}
 

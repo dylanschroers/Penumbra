@@ -218,8 +218,9 @@
 
 /* ---- Desktop title bar --------------------------------------------------- */
 
-/* Replaces the native window chrome (decorations: false). The bar is Tauri's
-   drag region; the name is pointer-inert so drags land on the bar itself. */
+/* Replaces the native window chrome on Windows and Linux (decorations: false),
+   and sits under the native traffic lights on macOS. The bar is Tauri's drag
+   region; the name is pointer-inert so drags land on the bar itself. */
 .titlebar {
   position: fixed;
   top: 0;

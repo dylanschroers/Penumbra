@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Logo } from "./Logo";
+import { isMac } from "./platform";
 
 // Custom window chrome for the desktop build (native decorations are off in
 // tauri.conf.json). The bar itself is the drag region — Tauri's native drag
@@ -13,7 +14,14 @@ import { Logo } from "./Logo";
 // command on double-click, `internal_toggle_maximize`
 // (core:window:allow-internal-toggle-maximize). Drop either and half the
 // gesture set fails at runtime with a permission error.
+//
+// macOS is the exception: it keeps its native frame (tauri.macos.conf.json) and
+// draws the traffic lights over this bar, so there the bar is only a drag strip.
 export function TitleBar() {
+  if (isMac) {
+    return <header className="titlebar" data-tauri-drag-region="true" />;
+  }
+
   const win = getCurrentWindow();
   return (
     <header className="titlebar" data-tauri-drag-region="true">
