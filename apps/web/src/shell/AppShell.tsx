@@ -14,6 +14,7 @@ import { MODULE_ICONS } from "./icons";
 import { Logo } from "./Logo";
 import { ModuleDock } from "./ModuleDock";
 import { ModuleSlot, type ModuleView } from "./ModuleSlot";
+import { isMac, useIsFullscreen } from "./platform";
 import { ResizeHandles } from "./ResizeHandles";
 import { ServerStatus } from "./ServerStatus";
 import {
@@ -109,6 +110,8 @@ export function AppShell() {
   // Chat panel collapsed to a slim tab on the right edge, leaving the whole
   // desk to the windows. Independent of the logo's minimize.
   const [chatCollapsed, setChatCollapsed] = useState(false);
+  const macDesktop = isFsAvailable && isMac;
+  const fullscreen = useIsFullscreen(macDesktop);
   // Workspace minimized: the panels collapse to their most compact form (rail
   // closed, windows dropped to the dock, chat shrunk to just its input bar) but
   // everything stays mounted. The pre-minimize layout is snapshotted so a
@@ -520,15 +523,18 @@ export function AppShell() {
         deskActive ? " shell--focused" : ""
       }${launched && chatCollapsed ? " shell--chat-min" : ""}${
         isFsAvailable ? " shell--desktop" : ""
+      }${macDesktop ? " shell--mac" : ""}${
+        fullscreen ? " shell--fullscreen" : ""
       }`}
     >
       {/* Desktop-only custom window chrome; the native decorations are off in
           tauri.conf.json, so both halves of the frame are ours: TitleBar is the
-          drag strip and min/max/close, ResizeHandles the edge grips. */}
+          drag strip and min/max/close, ResizeHandles the edge grips. macOS keeps
+          its native frame and resizes itself, so it skips the grips. */}
       {isFsAvailable && (
         <>
           <TitleBar />
-          <ResizeHandles />
+          {!isMac && <ResizeHandles />}
         </>
       )}
 
