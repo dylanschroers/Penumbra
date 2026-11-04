@@ -803,6 +803,15 @@
   border-right-color: transparent;
 }
 
+/* The open rail's content. Its width stays fixed (the rail's 240px less its 1px
+   border) while the rail animates, so the rail's overflow clips it and text never
+   reflows at the in-between widths. */
+.file-sidebar__head,
+.file-sidebar__body {
+  width: 239px;
+  animation: shell-fade-in 0.25s ease both;
+}
+
 .file-sidebar__head {
   display: flex;
   align-items: center;
@@ -844,17 +853,28 @@
 }
 
 /* When collapsed, the lone button gets its own surface + border so it reads as a
-   standalone button floating over the canvas (the rail chrome is gone). */
+   standalone button floating over the canvas (the rail chrome is gone). It fades
+   in as the rail finishes closing, rather than popping in while the rail is still
+   wide around it. */
 .file-sidebar--collapsed .file-sidebar__iconbtn {
   color: var(--text);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0.4rem;
+  animation: shell-fade-in 0.2s ease 0.12s both;
 }
 
 .file-sidebar--collapsed .file-sidebar__iconbtn:hover {
   border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-sidebar__head,
+  .file-sidebar__body,
+  .file-sidebar--collapsed .file-sidebar__iconbtn {
+    animation: none;
+  }
 }
 
 /* The collapse chevron points left (the head one is a generic right chevron). */
