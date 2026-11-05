@@ -1,6 +1,7 @@
 mod db;
 mod dropper;
 mod fs;
+mod paint;
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
@@ -59,7 +60,8 @@ pub fn run() {
             fs::fs_list,
             fs::fs_move,
             fs::fs_read_head,
-            fs::fs_read_chunk
+            fs::fs_read_chunk,
+            paint::paint_save_png
         ])
         .setup(|app| {
             // Native persistence must come up before the webview asks for data;

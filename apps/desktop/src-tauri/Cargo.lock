@@ -2258,7 +2258,9 @@ name = "penumbra-desktop"
 version = "0.1.0"
 dependencies = [
  "ashpd",
+ "block2",
  "libc",
+ "objc2-app-kit",
  "rusqlite",
  "serde_json",
  "tauri",

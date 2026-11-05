@@ -1292,15 +1292,6 @@
   top: 0;
 }
 
-/* Small tools don't get a big default window: a centred window holding one
-   sizes to its content. Keyed off the module's own root class so the registry
-   stays geometry-free (the shell sizes modules from CSS). */
-.win--center:has(.color-picker) {
-  width: min(420px, calc(100% - 2 * var(--desk-gap)));
-  height: auto;
-  max-height: calc(100% - 2 * var(--desk-gap));
-}
-
 .win--closing {
   animation: win-close 0.2s ease both;
   pointer-events: none;

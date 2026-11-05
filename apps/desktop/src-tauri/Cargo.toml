@@ -40,6 +40,20 @@ windows = { version = "0.61", features = [
 ashpd = { version = "0.13.13", default-features = false, features = ["screenshot", "tokio"] }
 libc = "0.2"
 
+# NSColorSampler for the macOS screen dropper (src/dropper.rs). Both crates are
+# already in the tree through tauri's windowing stack; these only turn on the
+# AppKit classes used.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "objc2-core-foundation",
+    "NSColor",
+    "NSColorSampler",
+    "NSColorSpace",
+] }
+
 # Keep the debug `target/` dir smaller: emit line-tables only instead of full
 # debug info. Backtraces still resolve to file:line; the multi-hundred-MB DWARF
 # blobs go away. Drop this if you need full variable inspection in a debugger.

@@ -1,5 +1,7 @@
 import { AgentModule } from "../modules/agent/AgentModule";
 import { ColorPickerModule } from "../modules/color/ColorPickerModule";
+import { PaintExpanded } from "../modules/color/paint/PaintModule";
+import { PaintProvider } from "../modules/color/paint/PaintProvider";
 import { LabModule } from "../modules/lab/LabModule";
 import {
   TasksCompact,
@@ -17,8 +19,8 @@ import type { ModuleDefinition } from "./types";
 // An entry takes one of two shapes (see ./types): a single `Component` that the
 // shell moves between the dock and the centre, or the split `Provider` +
 // `Compact` + `Expanded`, which keeps a live dock summary alongside the
-// expanded module. Tasks is the worked example of the split; the rest are still
-// single-view and get converted as their compact designs land.
+// expanded module. Tasks and Paint use the split; the rest are still single-view
+// and get converted as their compact designs land.
 export const MODULES: ModuleDefinition[] = [
   {
     id: "tasks",
@@ -27,7 +29,14 @@ export const MODULES: ModuleDefinition[] = [
     Compact: TasksCompact,
     Expanded: TasksExpanded,
   },
-  { id: "color", title: "Color Picker", Component: ColorPickerModule },
+  {
+    // Still "color": it is the key saved layouts reopen this module by.
+    id: "color",
+    title: "Paint",
+    Provider: PaintProvider,
+    Compact: ColorPickerModule,
+    Expanded: PaintExpanded,
+  },
   { id: "weather", title: "Weather", Component: WeatherModule },
   { id: "lab", title: "Model Lab", Component: LabModule },
   { id: "agent", title: "Assistant", Component: AgentModule },

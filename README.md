@@ -22,7 +22,7 @@ result.*
 | **Assistant** | Tool-calling chat over your data. Switches between the embedded model and your server. | Nothing (embedded), a server for Tier 1 |
 | **Weather** | Current conditions and a three-day forecast, also exposed to the agent as a tool. | Network |
 | **Model Lab** | Fine-tune, export, and benchmark models against a GPU host you run. | A server plus Unsloth Studio |
-| **Color Picker** | Pick a colour from anywhere on screen, including through the Linux desktop portal. | Desktop app |
+| **Paint** | An MS Paint style drawing tool with undo, PNG save and copy/paste, plus a color picker that samples anywhere on screen on Windows, Linux and macOS. | Nothing (screen sampling needs the desktop app or a Chromium browser) |
 
 Modules live in a windowed workspace: drag, snap, split, dock, or collapse the
 whole desk down to just the assistant. `Ctrl`/`Cmd` `+`/`-`/`0` scales the
