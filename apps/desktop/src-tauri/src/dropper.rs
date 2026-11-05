@@ -10,15 +10,16 @@
 // applications' windows, not just ours, and the coordinate space is the virtual
 // screen spanning every monitor. That is what makes this usable outside the app.
 //
-// Windows-only for now. Everything else falls back to the EyeDropper path in
-// the web client (apps/web/src/color/screenDropper.ts), which is why the
-// commands report support rather than failing to exist.
+// That is the Windows path; Linux and macOS use the system pickers below. Any
+// other platform falls back to the EyeDropper path in the web client (apps/web/
+// src/color/screenDropper.ts), which is why the commands report support rather
+// than failing to exist.
 //
 // Support is reported as two flags, not one, because the platforms differ in
 // *which half* they can do. Windows needs the whole interaction built by hand —
 // the mouse hook below is most of this file — and having built it, sampling the
-// cursor mid-pick is free. The intended Linux and macOS backends are the
-// opposite: the XDG desktop portal's `org.freedesktop.portal.Screenshot.
+// cursor mid-pick is free. The Linux and macOS backends are the opposite: the
+// XDG desktop portal's `org.freedesktop.portal.Screenshot.
 // PickColor` and `NSColorSampler` each run the entire pick themselves, magnifier
 // and all, and hand back one color at the end. That is far less code, but it
 // leaves nothing to poll. So `pick` and `live_sample` are independent, and the
@@ -31,17 +32,19 @@ use serde_json::{json, Value};
 /// The common currency between backends: every one of them ends here, so this is
 /// the single place the output format is decided.
 ///
-/// Windows reaches it through `colorref_to_hex` and Linux calls it directly.
-/// On the platforms still waiting for a backend only the tests call it, which is
-/// the intended state rather than a warning worth carrying — it is tested
-/// everywhere precisely so it is already correct when NSColorSampler arrives.
-#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+/// Windows reaches it through `colorref_to_hex`; Linux and macOS call it directly.
+/// On platforms without a backend only the tests call it, which is the intended
+/// state rather than a warning worth carrying.
+#[cfg_attr(
+    not(any(windows, target_os = "linux", target_os = "macos")),
+    allow(dead_code)
+)]
 fn rgb_to_hex(r: u8, g: u8, b: u8) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 /// One 0.0–1.0 channel as a byte, for backends that report colors as floats
-/// (the XDG portal, and NSColorSampler when it lands).
+/// (the XDG portal and NSColorSampler).
 ///
 /// Rounded rather than truncated: `1.0 * 255.0` is exactly 255, but any value a
 /// hair under it truncates a whole step low, so a pure white pick would come
@@ -51,7 +54,7 @@ fn rgb_to_hex(r: u8, g: u8, b: u8) -> String {
 /// Up here with `rgb_to_hex` for the same reason: it is pure arithmetic, its
 /// failure mode is an off-by-one nobody would notice by eye, and inside a
 /// platform-gated module its tests would compile nowhere else.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 fn channel_to_byte(v: f64) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
@@ -252,7 +255,7 @@ mod imp {
     /// runtime's workers — `pick_blocking` parks for as long as the user takes
     /// to aim. The portal backend needs no such thing, which is why the async
     /// boundary sits per-platform rather than in the command.
-    pub async fn pick() -> Result<Option<String>, String> {
+    pub async fn pick(_app: tauri::AppHandle) -> Result<Option<String>, String> {
         tauri::async_runtime::spawn_blocking(pick_blocking)
             .await
             .map_err(|e| format!("Screen pick failed to start: {e}"))?
@@ -280,7 +283,7 @@ mod imp {
 
     use super::{channel_to_byte as channel, rgb_to_hex};
 
-    pub async fn pick() -> Result<Option<String>, String> {
+    pub async fn pick(_app: tauri::AppHandle) -> Result<Option<String>, String> {
         match Color::pick().send().await.and_then(|req| req.response()) {
             Ok(c) => Ok(Some(rgb_to_hex(
                 channel(c.red()),
@@ -305,12 +308,62 @@ mod imp {
     pub const CAN_LIVE_SAMPLE: bool = false;
 }
 
-/// macOS and anything else: no native backend yet.
+/// macOS: `NSColorSampler` (10.15+), the same shape as the portal. It runs its
+/// own magnifier and returns a single color, nil on Escape.
 ///
-/// The macOS one is `NSColorSampler` (10.15+), which behaves like the portal —
-/// it runs its own magnifier and returns a single color — so it will land as
-/// `CAN_PICK` alone, the same shape as Linux.
-#[cfg(not(any(windows, target_os = "linux")))]
+/// WKWebView has no EyeDropper, so without this macOS has no screen picking.
+#[cfg(target_os = "macos")]
+mod imp {
+    use std::sync::mpsc;
+
+    use block2::RcBlock;
+    use objc2_app_kit::{NSColor, NSColorSampler, NSColorSpace};
+
+    use super::{channel_to_byte as channel, rgb_to_hex};
+
+    /// Through sRGB explicitly: a sampled color arrives in the display's space,
+    /// where the raw components would read wrong on a wide-gamut screen.
+    fn to_hex(color: &NSColor) -> Option<String> {
+        let srgb = color.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())?;
+        Some(rgb_to_hex(
+            channel(srgb.redComponent()),
+            channel(srgb.greenComponent()),
+            channel(srgb.blueComponent()),
+        ))
+    }
+
+    /// AppKit needs the main thread for the sampler and answers on it too, so
+    /// the wait for the user sits on a blocking worker instead.
+    pub async fn pick(app: tauri::AppHandle) -> Result<Option<String>, String> {
+        let (tx, rx) = mpsc::channel();
+        app.run_on_main_thread(move || {
+            let handler = RcBlock::new(move |color: *mut NSColor| {
+                // SAFETY: AppKit passes a valid NSColor for the duration of the
+                // call, or nil on a cancel, which `as_ref` maps to None.
+                let _ = tx.send(unsafe { color.as_ref() }.and_then(to_hex));
+            });
+            // SAFETY: called on the main thread, and the sampler retains itself
+            // and copies the handler until the session completes.
+            unsafe { NSColorSampler::new().showSamplerWithSelectionHandler(&handler) };
+        })
+        .map_err(|e| format!("Screen pick failed to start: {e}"))?;
+
+        tauri::async_runtime::spawn_blocking(move || rx.recv())
+            .await
+            .map_err(|e| format!("Screen pick failed: {e}"))?
+            .map_err(|e| format!("Screen pick failed: {e}"))
+    }
+
+    pub fn color_at_cursor() -> Result<String, String> {
+        Err("NSColorSampler does not expose the color under the cursor.".into())
+    }
+
+    pub const CAN_PICK: bool = true;
+    pub const CAN_LIVE_SAMPLE: bool = false;
+}
+
+/// Anything else: no native backend.
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 mod imp {
     const UNSUPPORTED: &str = "Native screen picking is not implemented on this platform yet.";
 
@@ -318,7 +371,7 @@ mod imp {
         Err(UNSUPPORTED.into())
     }
 
-    pub async fn pick() -> Result<Option<String>, String> {
+    pub async fn pick(_app: tauri::AppHandle) -> Result<Option<String>, String> {
         Err(UNSUPPORTED.into())
     }
 
@@ -411,13 +464,14 @@ pub fn dropper_color_at_cursor() -> Result<String, String> {
 }
 
 /// Sample one pixel, chosen by the user's next click. `None` means they
-/// cancelled — Escape or a right click on Windows, the portal's own dismissal
-/// on Linux.
+/// cancelled — Escape or a right click on Windows, the system picker's own
+/// dismissal on Linux and macOS.
 ///
 /// Each backend owns its own threading: Windows parks a blocking wait on a
-/// dedicated thread, while the portal is natively async. Putting that inside
-/// `imp` rather than here is what keeps this command one line on both.
+/// dedicated thread, the portal is natively async, and macOS hops to the main
+/// thread, the only one that needs `app`. Putting that inside `imp` rather than
+/// here is what keeps this command one line on all of them.
 #[tauri::command]
-pub async fn dropper_pick() -> Result<Option<String>, String> {
-    imp::pick().await
+pub async fn dropper_pick(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    imp::pick(app).await
 }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Two things this module has to get right, both of which are silent when wrong:
+// Three things this module has to get right, all of them silent when wrong:
 //
 //   1. A cancel is not a failure. Chromium reports both a dismissal and a real
 //      abort as AbortError, so the wrapper folds that one case into `null` while
@@ -20,7 +20,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const CAPABLE = { pick: true, liveSample: true };
 /** A portal-style backend: it owns the picker, so there is nothing to poll. */
 const PICK_ONLY = { pick: true, liveSample: false };
-/** A shell with no native backend at all — today's Linux and macOS builds. */
+/** A shell with no native backend at all. */
 const NO_NATIVE = { pick: false, liveSample: false };
 
 type OpenResult = { sRGBHex: string };
@@ -94,7 +94,7 @@ describe("dropperSupport", () => {
   it("falls back to EyeDropper on a desktop build without native support", async () => {
     setTauri(true);
     stubEyeDropper(async () => ({ sRGBHex: "#000000" }));
-    invoke.mockResolvedValue(NO_NATIVE); // today's Linux and macOS builds
+    invoke.mockResolvedValue(NO_NATIVE);
 
     const { dropperSupport } = await freshImport();
 
@@ -203,6 +203,21 @@ describe("pickScreenColor via the native backend", () => {
     await expect(pickScreenColor()).rejects.toThrow(/already in progress/);
     expect(open).not.toHaveBeenCalled();
   });
+
+  it("turns the bare string a Tauri command rejects with into an Error", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "dropper_capabilities") return CAPABLE;
+      throw "Screen pick failed: no portal frontend";
+    });
+
+    const { pickScreenColor } = await freshImport();
+
+    const err = await pickScreenColor().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe(
+      "Screen pick failed: no portal frontend",
+    );
+  });
 });
 
 describe("pickScreenColor via the EyeDropper backend", () => {
@@ -271,8 +286,8 @@ describe("colorAtCursor", () => {
 
   it("returns null on a native backend that owns its own picker", async () => {
     // The case the whole split exists for. Before it, a native backend implied
-    // a live sample, so a portal-style dropper would have had this polled at
-    // 60ms against a command that can only ever error.
+    // a live sample, so a portal-style dropper would have had this polled
+    // against a command that can only ever error.
     setTauri(true);
     invoke.mockResolvedValue(PICK_ONLY);
 

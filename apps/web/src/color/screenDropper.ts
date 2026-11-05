@@ -3,8 +3,9 @@
 // Two backends, because neither covers everything:
 //
 //   native      The desktop shell's dropper (apps/desktop/src-tauri/src/
-//               dropper.rs). Today that is Windows' GDI path: one pixel per
-//               sample, with the pick click swallowed by a mouse hook.
+//               dropper.rs): Windows' GDI path, one pixel per sample with the
+//               pick click swallowed by a mouse hook, Linux's XDG portal, and
+//               macOS's NSColorSampler.
 //   eyedropper  The browser EyeDropper API. Works in any Chromium (including
 //               the plain-web build), but drags a magnifier overlay that
 //               continuously captures the screen — noticeably laggy across
@@ -15,9 +16,9 @@
 //
 // Picking and *live sampling* are reported separately, because they are not the
 // same capability. EyeDropper draws its own magnifier and exposes nothing to
-// poll; the Linux and macOS native backends (the XDG portal, NSColorSampler)
-// will be the same way, since each runs the whole pick itself. Only the Windows
-// path, which had to build the interaction by hand, can also answer "what is
+// poll; the Linux portal and NSColorSampler are the same way, since each runs the
+// whole pick itself. Only the Windows path, which had to build the interaction
+// by hand, can also answer "what is
 // under the cursor right now". So a caller asks for the readout and is told no,
 // rather than inferring it from which backend won.
 
@@ -126,7 +127,13 @@ export async function pickScreenColor(
 ): Promise<string | null> {
   const { backend } = await dropperSupport();
   if (backend === "native") {
-    return await invoke<string | null>("dropper_pick");
+    try {
+      return await invoke<string | null>("dropper_pick");
+    } catch (err) {
+      // Tauri rejects with the command's Err value, a bare string. Callers read
+      // `.message`, so without this the shell's explanation never reaches them.
+      throw err instanceof Error ? err : new Error(String(err));
+    }
   }
   if (backend === "eyedropper") return await openEyeDropper(signal);
   throw new Error("Screen color picking is not supported here.");
