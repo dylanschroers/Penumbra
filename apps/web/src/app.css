@@ -451,6 +451,257 @@ body {
   border-color: color-mix(in srgb, var(--cp-color) 45%, var(--border));
 }
 
+/* Paint module. The sheet is sized in CSS pixels at the current zoom, and the
+   canvas scales to it without smoothing so zoomed pixels stay square. */
+.paint {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  height: 100%;
+  min-height: 0;
+  outline: none;
+  font-size: 0.8rem;
+}
+
+.paint__bar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.paint__btn {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: inherit;
+  cursor: pointer;
+}
+
+.paint__btn:hover:not(:disabled) {
+  border-color: var(--primary);
+}
+
+.paint__btn:disabled {
+  color: var(--muted);
+  opacity: 0.6;
+  cursor: default;
+}
+
+.paint__sep {
+  width: 1px;
+  height: 1.2rem;
+  margin: 0 0.2rem;
+  background: var(--border);
+}
+
+.paint__field,
+.paint__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--muted);
+}
+
+.paint__field select,
+.paint__option select,
+.paint__number {
+  padding: 0.15rem 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: inherit;
+}
+
+.paint__number {
+  width: 4rem;
+}
+
+.paint__size {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.paint__main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.paint__tools {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 4.6rem;
+  overflow-y: auto;
+}
+
+.paint__tool-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.2rem;
+}
+
+.paint__tool {
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.paint__tool:hover {
+  border-color: var(--primary);
+}
+
+.paint__tool[aria-pressed="true"] {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+  background: color-mix(in srgb, var(--primary) 18%, var(--surface));
+}
+
+.paint__option {
+  flex-wrap: wrap;
+}
+
+.paint__option select {
+  width: 100%;
+}
+
+.paint__work {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.paint__stage {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.paint__sheet {
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+}
+
+.paint__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #fff;
+  image-rendering: pixelated;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+/* Black dashes on a white halo, so it stays visible over any drawing. */
+.paint__selection {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed #000;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+}
+
+/* Sits exactly where the text will land; padding would offset it. */
+.paint__text {
+  position: absolute;
+  padding: 0;
+  border: none;
+  outline: 1px dashed var(--muted);
+  background: transparent;
+  font-family: sans-serif;
+  line-height: 1.25;
+}
+
+.paint__status {
+  flex: none;
+  display: flex;
+  gap: 0.75rem;
+  min-height: 1.1rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.paint__status-message {
+  margin-left: auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.paint__colors {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.paint__swatch {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.paint__swatch--primary {
+  width: 2rem;
+  height: 2rem;
+}
+
+.paint__palette {
+  display: grid;
+  grid-template-columns: repeat(14, 1rem);
+  gap: 2px;
+}
+
+.paint__chip {
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.paint__popover {
+  position: absolute;
+  bottom: calc(100% + 0.4rem);
+  left: 0;
+  z-index: 5;
+  width: 280px;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
 /* Weather module */
 .weather {
   display: flex;

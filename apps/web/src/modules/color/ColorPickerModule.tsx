@@ -1,9 +1,7 @@
-import { STORAGE_NAMESPACE } from "@penumbra/shared";
 // Import from the meta package (a direct dependency) rather than the individual
 // @uiw/react-color-* packages, which are transitive and not resolvable under
 // pnpm's strict node_modules. It re-exports the components and color-convert.
 import {
-  type HsvaColor,
   hexToHsva,
   hsvaToHex,
   hsvaToHsla,
@@ -19,32 +17,30 @@ import {
   dropperSupport,
   pickScreenColor,
 } from "../../color/screenDropper";
+import { usePaint } from "./paint/PaintProvider";
 
-// A small, self-contained color tool: a hue/saturation wheel, a light↔dark shade
-// slider, a two-way hex box, and a screen dropper for sampling any pixel on any
-// monitor, with click-to-copy for hex/rgb/hsl. The last color is remembered in
-// localStorage. No DB, no server — pure client UI state.
-const STORAGE_KEY = `${STORAGE_NAMESPACE}.color-picker.hex.v1`;
-const DEFAULT_HEX = "#4f46e5"; // matches --primary
+// A small color tool: a hue/saturation wheel, a light↔dark shade slider, a two-way
+// hex box, and a screen dropper for sampling any pixel on any monitor, with
+// click-to-copy for hex/rgb/hsl. It edits Paint's primary color, and is both the
+// module's dock card and the popover inside the Paint window.
 const WHEEL_SIZE = 180; // static, per design
 
 // How often to sample the pixel under the cursor while the native dropper is
 // open. Fast enough to feel live, and each tick is a single GDI read.
 const PREVIEW_INTERVAL_MS = 40;
 
-function loadHsva(): HsvaColor {
-  try {
-    const hex = localStorage.getItem(STORAGE_KEY);
-    if (hex && validHex(hex)) return hexToHsva(hex);
-  } catch {
-    // Ignore unavailable/blocked storage; fall back to the default.
-  }
-  return hexToHsva(DEFAULT_HEX);
+// Narrower than validHex, which also passes 4 and 7 digits: both are prefixes of
+// a longer hex mid-typing, and hexToHsva reads "#abcd" as #abcd00.
+const COMPLETE_HEX = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+/** Whether the box's text already spells `hex`, so a resync would only rewrite
+ *  what the user is typing ("#abc" into "#aabbcc"). */
+function isTypedColor(draft: string, hex: string): boolean {
+  return COMPLETE_HEX.test(draft) && hsvaToHex(hexToHsva(draft)) === hex;
 }
 
 export function ColorPickerModule() {
-  const [hsva, setHsva] = useState<HsvaColor>(loadHsva);
-  const hex = hsvaToHex(hsva);
+  const { hsva, setHsva, hex } = usePaint();
   // Rounded by hand: the library's *String helpers emit raw floats
   // ("hsl(310.049…)"), which read terribly in the chips.
   const rgba = hsvaToRgba(hsva);
@@ -56,7 +52,7 @@ export function ColorPickerModule() {
   // back; commit to the shared color only once the value is a valid hex. When
   // the wheel/slider change the color, this resyncs to the canonical hex.
   const [draft, setDraft] = useState(hex);
-  useEffect(() => setDraft(hex), [hex]);
+  useEffect(() => setDraft((d) => (isTypedColor(d, hex) ? d : hex)), [hex]);
 
   // Which value was just copied (hex/rgb/hsl string), for inline feedback.
   const [copied, setCopied] = useState<string | null>(null);
@@ -113,19 +109,11 @@ export function ColorPickerModule() {
     };
   }, [picking, support?.liveSample]);
 
-  // Persist the chosen color on every change.
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, hex);
-    } catch {
-      // Ignore quota/serialization errors; the in-memory color still works.
-    }
-  }, [hex]);
-
   function onHexChange(value: string) {
-    const next = value.startsWith("#") ? value : `#${value}`;
+    // An emptied box still holds "#", so pasting "#abc123" arrives as "##abc123".
+    const next = `#${value.trim().replace(/^#+/, "")}`;
     setDraft(next);
-    if (validHex(next)) setHsva({ ...hexToHsva(next), a: 1 });
+    if (COMPLETE_HEX.test(next)) setHsva({ ...hexToHsva(next), a: 1 });
   }
 
   // One pick per click: the dropper ends itself after the user clicks a pixel,
@@ -167,7 +155,10 @@ export function ColorPickerModule() {
         color={hsva}
         width={WHEEL_SIZE}
         height={WHEEL_SIZE}
-        onChange={(c) => setHsva({ ...c.hsva, a: 1 })}
+        // At zero brightness every hue is black, so the wheel would look dead.
+        onChange={(c) =>
+          setHsva({ ...c.hsva, v: c.hsva.v === 0 ? 100 : c.hsva.v, a: 1 })
+        }
       />
       <ShadeSlider
         hsva={hsva}
@@ -202,7 +193,7 @@ export function ColorPickerModule() {
           aria-pressed={picking}
           title={
             support?.backend === "none"
-              ? "Screen picking needs the desktop app or a Chromium browser"
+              ? "Screen picking isn't available on this platform yet"
               : "Pick a color from anywhere on screen"
           }
           aria-label="Pick a color from anywhere on screen"

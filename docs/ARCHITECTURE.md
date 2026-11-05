@@ -61,7 +61,7 @@ The plane split governs every design decision below.
   definitions (SQLite dialect), Zod validation and sync wire schemas, and the
   tool contracts. Types are inferred from schemas, so they cannot drift.
 - **`apps/web`** — the app. A launcher shell hosts the assistant and a dock of
-  registered modules (tasks, weather, color picker, Model Lab); a
+  registered modules (tasks, weather, Paint, Model Lab); a
   storage-agnostic `DbApi` owns all database logic; a sync client runs the
   push/pull loop; the engine layer routes chat to the local or the server model.
 - **`apps/server`** — the sync server (two endpoints per synced table,
