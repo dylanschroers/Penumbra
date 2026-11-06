@@ -6,6 +6,7 @@ import {
   AGENT_POLICY,
   type AgentEvent,
   type Engine,
+  readSseFrames,
 } from "@penumbra/shared";
 import Database from "better-sqlite3";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -362,5 +363,173 @@ describe("status target", () => {
   it("keeps a target the engine reports for itself", async () => {
     const gateway = { id: "gateway", label: "GoModel" };
     expect((await statusWith(gateway)).target).toEqual(gateway);
+  });
+});
+
+describe("client file tools", () => {
+  /** Runs one client tool call, then answers with what came back. */
+  function fileEngine(seen: { tools?: string[]; roots?: string[] }): Engine {
+    return {
+      getStatus: async () => ({ state: "ready", model: "fake" }),
+      async *runAgent(_messages, _signal, clientTools) {
+        seen.tools = clientTools?.tools;
+        seen.roots = clientTools?.roots;
+        const result = clientTools
+          ? await clientTools.runTool("read_file", { path: "/n/a.md" })
+          : "no client tools";
+        yield { kind: "tool", name: "read_file", args: {}, result };
+        yield { kind: "answer", text: result };
+      },
+    };
+  }
+
+  async function serve(engine: Engine): Promise<string> {
+    app = Fastify();
+    registerAgentRoutes(app, { engine });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    return `http://127.0.0.1:${address.port}`;
+  }
+
+  it("forwards a call to the client and resumes with the posted result", async () => {
+    const seen: { tools?: string[]; roots?: string[] } = {};
+    const base = await serve(fileEngine(seen));
+    const res = await fetch(`${base}/agent/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "read a.md" }],
+        client: { tools: ["read_file"], roots: ["/n"] },
+      }),
+    });
+    const events: Array<{ event: string; data: unknown }> = [];
+    for await (const frame of readSseFrames(res.body as ReadableStream)) {
+      events.push(frame);
+      if (frame.event === "client_tool") {
+        const call = frame.data as { id: string; name: string };
+        expect(call.name).toBe("read_file");
+        const posted = await fetch(`${base}/agent/tool-result`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id: call.id, result: "# notes" }),
+        });
+        expect(posted.status).toBe(200);
+      }
+    }
+    expect(seen).toEqual({ tools: ["read_file"], roots: ["/n"] });
+    expect(events.at(-2)).toEqual({
+      event: "agent",
+      data: { kind: "answer", text: "# notes" },
+    });
+    expect(events.at(-1)?.event).toBe("done");
+  });
+
+  it("refuses a result for a call it is not waiting on", async () => {
+    const base = await serve(fileEngine({}));
+    const res = await fetch(`${base}/agent/tool-result`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: crypto.randomUUID(), result: "x" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("offers no client tools when the request names none", async () => {
+    const seen: { tools?: string[] } = {};
+    const app = await build(fileEngine(seen));
+    const res = await app.inject({
+      method: "POST",
+      url: "/agent/chat",
+      payload: { messages: [{ role: "user", content: "hi" }] },
+    });
+    expect(seen.tools).toBeUndefined();
+    expect(res.body).toContain("no client tools");
+  });
+});
+
+describe("GET /agent/usage", () => {
+  const engine = fakeEngine([answer]);
+  const usage = {
+    limits: [],
+    today: { requests: 3, tokens: 1200 },
+    serverTime: "2026-11-06T18:00:00Z",
+  };
+
+  it("is 404 without a gateway", async () => {
+    const app = await build(engine);
+    expect((await app.inject({ url: "/agent/usage" })).statusCode).toBe(404);
+  });
+
+  it("relays the gateway's reading", async () => {
+    app = Fastify();
+    registerAgentRoutes(app, { engine, gatewayUsage: async () => usage });
+    await app.ready();
+    expect((await app.inject({ url: "/agent/usage" })).json()).toEqual(usage);
+  });
+
+  it("is 502 when the gateway cannot be read", async () => {
+    app = Fastify({ logger: false });
+    registerAgentRoutes(app, {
+      engine,
+      gatewayUsage: async () => {
+        throw new Error("down");
+      },
+    });
+    await app.ready();
+    expect((await app.inject({ url: "/agent/usage" })).statusCode).toBe(502);
+  });
+});
+
+describe("a long turn over a real connection", () => {
+  async function serve(engine: Engine): Promise<string> {
+    app = Fastify();
+    registerAgentRoutes(app, { engine, keepAliveMs: 20 });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    return `http://127.0.0.1:${address.port}/agent/chat`;
+  }
+  const body = JSON.stringify({ messages: [{ role: "user", content: "hi" }] });
+  const headers = { "content-type": "application/json" };
+
+  it("sends keep-alive comments while the model is quiet", async () => {
+    const url = await serve({
+      getStatus: async () => ({ state: "ready" }),
+      async *runAgent() {
+        await new Promise((r) => setTimeout(r, 120));
+        yield answer;
+      },
+    });
+    const text = await (
+      await fetch(url, { method: "POST", headers, body })
+    ).text();
+    expect(text).toContain(": keep-alive");
+    expect(text).toContain("event: done");
+  });
+
+  it("aborts the turn when the client goes away", async () => {
+    let aborted: () => void = () => {};
+    const sawAbort = new Promise<void>((r) => {
+      aborted = r;
+    });
+    const url = await serve({
+      getStatus: async () => ({ state: "ready" }),
+      async *runAgent(_m, signal) {
+        signal?.addEventListener("abort", () => aborted());
+        await new Promise((r) => setTimeout(r, 5000));
+        yield answer;
+      },
+    });
+    const client = new AbortController();
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body,
+      signal: client.signal,
+    });
+    await res.body?.getReader().read();
+    client.abort();
+    await sawAbort;
   });
 });

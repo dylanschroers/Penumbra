@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { fileClientTools } from "../../agent/fileTools";
 import {
   type AgentStatus,
   type ChatMessage,
@@ -82,10 +83,15 @@ function replaceTrailingNotice(notice: DisplayMessage | null) {
   };
 }
 
-export function useAgent() {
-  const [messages, setMessages] = useState<DisplayMessage[]>([]);
-  const [status, setStatus] = useState<AgentStatus>({ state: "stopped" });
-  const [busy, setBusy] = useState(false);
+/**
+ * The conversation, kept outside the component. Holding the logo returns to the
+ * launcher, which unmounts the chat, and component state went with it: the
+ * thread was wiped and a turn in flight was cancelled. Here both outlive the
+ * component, so a turn left running finishes and its reply is waiting on return.
+ */
+interface Chat {
+  messages: DisplayMessage[];
+  busy: boolean;
   /**
    * When the in-flight turn started, or null when none is.
    *
@@ -93,19 +99,61 @@ export function useAgent() {
    * silence between events, which is indistinguishable from a hang unless
    * something on screen is visibly moving — the complaint this answers.
    */
-  const [startedAt, setStartedAt] = useState<number | null>(null);
+  startedAt: number | null;
+}
+
+const EMPTY_CHAT: Chat = { messages: [], busy: false, startedAt: null };
+let chat: Chat = EMPTY_CHAT;
+const chatListeners = new Set<() => void>();
+/** The turn in flight. Only it may write to the thread, so a turn that was
+ *  cleared away cannot patch the next one's messages. */
+let turn: AbortController | null = null;
+/**
+ * The target and model that produced the most recent *turn*.
+ *
+ * Compared against, rather than against the previous poll, because the marker
+ * describes a boundary in the conversation. Polling the difference instead
+ * meant every hop counted: switching provider and back stacked three markers
+ * around no conversation at all, when the thread had not actually changed
+ * hands. Null until something has answered — an empty thread has no boundary.
+ */
+let answeredBy: Identity | null = null;
+
+function updateChat(change: Partial<Chat>): void {
+  chat = { ...chat, ...change };
+  for (const listener of chatListeners) listener();
+}
+
+function setMessages(
+  next: DisplayMessage[] | ((prev: DisplayMessage[]) => DisplayMessage[]),
+): void {
+  updateChat({
+    messages: typeof next === "function" ? next(chat.messages) : next,
+  });
+}
+
+function subscribeChat(listener: () => void): () => void {
+  chatListeners.add(listener);
+  return () => chatListeners.delete(listener);
+}
+
+/** Back to an empty thread with nothing running. For tests, which share the
+ *  module across cases. */
+export function resetChat(): void {
+  turn?.abort();
+  turn = null;
+  answeredBy = null;
+  chat = EMPTY_CHAT;
+  for (const listener of chatListeners) listener();
+}
+
+export function useAgent() {
+  const { messages, busy, startedAt } = useSyncExternalStore(
+    subscribeChat,
+    () => chat,
+  );
+  const [status, setStatus] = useState<AgentStatus>({ state: "stopped" });
   const [provider, setProviderState] = useState<ProviderKind>(getProvider);
-  const abortRef = useRef<AbortController | null>(null);
-  /**
-   * The target and model that produced the most recent *turn*.
-   *
-   * Compared against, rather than against the previous poll, because the marker
-   * describes a boundary in the conversation. Polling the difference instead
-   * meant every hop counted: switching provider and back stacked three markers
-   * around no conversation at all, when the thread had not actually changed
-   * hands. Null until something has answered — an empty thread has no boundary.
-   */
-  const answeredBy = useRef<Identity | null>(null);
 
   const refreshStatus = useCallback(async () => {
     const next = await engine.getStatus();
@@ -122,7 +170,7 @@ export function useAgent() {
     // Keying on the target alone made the commonest change of all — the same
     // machine now running different weights — the one the transcript stayed
     // silent about.
-    const was = answeredBy.current;
+    const was = answeredBy;
     if (!was) return;
     const now = identityOf(next);
 
@@ -168,14 +216,10 @@ export function useAgent() {
     return () => clearInterval(id);
   }, [refreshStatus]);
 
-  // Cancel an in-flight turn when the module unmounts, so the tool loop stops
-  // instead of patching state that no longer has a component.
-  useEffect(() => () => abortRef.current?.abort(), []);
-
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || busy) return;
+      if (!trimmed || chat.busy) return;
 
       // History is role + content only; tool steps are display-only and never
       // replayed (each turn runs a fresh tool loop). Notices are dropped for a
@@ -186,7 +230,7 @@ export function useAgent() {
       const spoken = (m: DisplayMessage) =>
         !m.notice && !(m.error && !m.content.trim());
       const history: ChatMessage[] = [
-        ...messages
+        ...chat.messages
           .filter(spoken)
           .map(({ role, content }) => ({ role, content })),
         { role: "user", content: trimmed },
@@ -198,15 +242,16 @@ export function useAgent() {
       ]);
       // Whatever is resolved now is what serves this turn, and what a later
       // change is measured against.
-      answeredBy.current = identityOf(status);
-      setBusy(true);
-      setStartedAt(Date.now());
+      answeredBy = identityOf(status);
+      updateChat({ busy: true, startedAt: Date.now() });
 
       const controller = new AbortController();
-      abortRef.current = controller;
+      turn = controller;
 
-      // Patch the trailing (assistant) message in place.
+      // Patch the trailing (assistant) message in place, unless this turn has
+      // since been cleared away.
       const patch = (fn: (m: DisplayMessage) => DisplayMessage) =>
+        turn === controller &&
         setMessages((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
@@ -216,7 +261,11 @@ export function useAgent() {
         });
 
       try {
-        for await (const ev of engine.runAgent(history, controller.signal)) {
+        for await (const ev of engine.runAgent(
+          history,
+          controller.signal,
+          fileClientTools(controller.signal),
+        )) {
           if (ev.kind === "tool") {
             patch((m) => ({
               ...m,
@@ -247,12 +296,13 @@ export function useAgent() {
               : String(err),
         }));
       } finally {
-        setBusy(false);
-        setStartedAt(null);
-        abortRef.current = null;
+        if (turn === controller) {
+          turn = null;
+          updateChat({ busy: false, startedAt: null });
+        }
       }
     },
-    [messages, busy, status],
+    [status],
   );
 
   /**
@@ -264,15 +314,8 @@ export function useAgent() {
    * prompt says, which made an old answer outlive the prompt that produced it.
    * Discarding the history is the only way back, so it needs a control.
    */
-  const clear = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setMessages([]);
-    // A cleared thread has no last turn to measure a change against.
-    answeredBy.current = null;
-    setBusy(false);
-    setStartedAt(null);
-  }, []);
+  // A cleared thread also has no last turn to measure a change against.
+  const clear = useCallback(() => resetChat(), []);
 
   /**
    * Abandon the turn in flight, keeping the thread.
@@ -282,7 +325,7 @@ export function useAgent() {
    * Whatever the tools already did stands; the server stops its own loop when
    * the stream closes (docs/AGENT_DESIGN.md §5).
    */
-  const stop = useCallback(() => abortRef.current?.abort(), []);
+  const stop = useCallback(() => turn?.abort(), []);
 
   return {
     messages,

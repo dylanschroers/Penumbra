@@ -1,9 +1,11 @@
 import { normalizeBaseUrl } from "../net";
 import { type ModelCatalogEntry, pickLoadedModel } from "./catalog";
+import { withClientTools } from "./clientTools";
 import type {
   AgentEvent,
   AgentStatus,
   ChatMessage,
+  ClientTools,
   Engine,
   ToolBindings,
 } from "./types";
@@ -216,8 +218,12 @@ export class OpenAiEngine implements Engine {
   async *runAgent(
     messages: ChatMessage[],
     signal?: AbortSignal,
+    clientTools?: ClientTools,
   ): AsyncGenerator<AgentEvent> {
-    const { tools, system, runTool } = this.bindings;
+    const { tools, system, runTool } = withClientTools(
+      this.bindings,
+      clientTools,
+    );
     const convo: WireMessage[] = [
       { role: "system", content: await this.systemWithIdentity(system) },
       ...messages.map((m) => ({ role: m.role, content: m.content })),

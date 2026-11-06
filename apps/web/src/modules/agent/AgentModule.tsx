@@ -2,40 +2,18 @@ import { type FormEvent, useEffect, useState } from "react";
 import { ComputeTargets } from "../../compute/ComputeTargets";
 import { useCompute } from "../../compute/useCompute";
 import { type AgentStatus, PROVIDERS } from "../../engine";
+import { PendingApprovals } from "./ApprovalCard";
 import { Markdown } from "./Markdown";
 import { PromptPanel } from "./PromptPanel";
+import { ToolSteps } from "./ToolSteps";
+import { UsageMeter } from "./UsageMeter";
 import { useAgent } from "./useAgent";
+import { useGatewayUsage } from "./useGatewayUsage";
 
 // The assistant module: a status pill plus a chat against the embedded local
 // model (Tier 0). It can call task tools (see ../../agent/tools) and shows each
 // tool it ran inline. Card chrome (title bar, expand, close) belongs to the
 // shell — the dock card or the focus pane — so this renders only inner content.
-
-const TOOL_LABEL: Record<string, string> = {
-  create_task: "Added task",
-  list_tasks: "Listed tasks",
-  complete_task: "Completed task",
-  delete_task: "Deleted task",
-  get_weather: "Checked the weather",
-  list_models: "Listed models",
-  list_datasets: "Listed datasets",
-  start_finetune: "Started fine-tuning",
-  run_benchmark: "Started a benchmark",
-  job_status: "Checked job status",
-};
-
-/**
- * Whether a tool's result reads as a refusal rather than an answer.
- *
- * Matched on the openings the runners actually use, which are few and fixed
- * (../../../../packages/shared/src/tools, apps/server/src/agent/tools.ts): a
- * tool reports failure by *returning* a sentence, because the model has to be
- * able to read and correct it. That leaves the UI nothing typed to key on, and
- * a failed step rendered identically to a successful one is how "it silently
- * did nothing" happens. Mis-classifying only changes an icon.
- */
-const FAILED_RESULT =
-  /^(Cannot |Invalid arguments|Tool \S+ failed|Unknown tool|No task matching|There is no job)/;
 
 /** How long a turn may run before the wait itself is worth remarking on. Past
  *  this the counter is the only evidence anything is still happening. */
@@ -129,6 +107,11 @@ export function AgentModule() {
   // Polled only when it can be acted on, so a chat on the embedded model never
   // asks the server about Studios it is not using.
   const compute = useCompute(canConfigure);
+
+  // Only a gateway keeps the counters the bar shows.
+  const usage = useGatewayUsage(
+    canConfigure && status.target?.id === "gateway",
+  );
 
   // Escape closes whichever panel is open, matching the backdrop click.
   useEffect(() => {
@@ -254,6 +237,10 @@ export function AgentModule() {
         )}
       </div>
 
+      {usage && usage.usage.limits.length + usage.usage.today.requests > 0 && (
+        <UsageMeter reading={usage} />
+      )}
+
       <div className="agent__messages">
         {messages.length === 0 ? (
           <p className="notice">{emptyHint(status, provider)}</p>
@@ -270,25 +257,7 @@ export function AgentModule() {
             ) : (
               // biome-ignore lint/suspicious/noArrayIndexKey: append-only chat log, never reordered or removed
               <div key={i} className={`agent__msg agent__msg--${m.role}`}>
-                {m.steps?.map((s, j) => {
-                  const failed = FAILED_RESULT.test(s.result);
-                  return (
-                    <div
-                      // biome-ignore lint/suspicious/noArrayIndexKey: a message's tool steps are fixed once rendered
-                      key={j}
-                      className={`agent__tool${failed ? " agent__tool--failed" : ""}`}
-                      title={s.result}
-                    >
-                      {failed ? "⚠" : "🔧"} {TOOL_LABEL[s.name] ?? s.name}
-                      {/* The result inline, not only as a tooltip: a tool that
-                          refused said why in this string, and a hover target is
-                          not somewhere a person looks when nothing happened. */}
-                      <span className="agent__tool-result">
-                        {s.result.split("\n")[0]}
-                      </span>
-                    </div>
-                  );
-                })}
+                {m.steps && <ToolSteps steps={m.steps} />}
                 {m.content.trim() ? (
                   <div className="agent__bubble">
                     {m.role === "assistant" ? (
@@ -315,6 +284,7 @@ export function AgentModule() {
             ),
           )
         )}
+        <PendingApprovals />
       </div>
 
       <form className="agent__form" onSubmit={onSubmit}>

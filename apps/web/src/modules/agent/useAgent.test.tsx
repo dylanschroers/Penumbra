@@ -29,7 +29,7 @@ vi.mock("../../engine", () => ({
   PROVIDERS: [],
 }));
 
-const { useAgent } = await import("./useAgent");
+const { resetChat, useAgent } = await import("./useAgent");
 
 let container: HTMLDivElement;
 let root: Root;
@@ -74,6 +74,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  resetChat();
   container.remove();
   vi.useRealTimers();
 });
@@ -415,5 +416,68 @@ describe("a turn that fails", () => {
     expect(last?.error).toBe("Stopped.");
     expect(latest.busy).toBe(false);
     expect(latest.startedAt).toBeNull();
+  });
+});
+
+describe("leaving the chat", () => {
+  // Holding the logo returns to the launcher, which unmounts the chat.
+  it("keeps the thread when the chat is unmounted and mounted again", async () => {
+    await mount();
+    await act(async () => latest.send("hello"));
+    expect(latest.messages.map((m) => m.content)).toEqual(["hello", "hi"]);
+
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await mount();
+    expect(latest.messages.map((m) => m.content)).toEqual(["hello", "hi"]);
+  });
+
+  it("lets a turn left running finish while the chat is away", async () => {
+    let finish: () => void = () => {};
+    turn = async function* () {
+      await new Promise<void>((r) => {
+        finish = r;
+      });
+      yield { kind: "answer", text: "done while away" };
+    };
+    await mount();
+    let sent: Promise<void> = Promise.resolve();
+    await act(async () => {
+      sent = latest.send("slow one");
+    });
+    expect(latest.busy).toBe(true);
+
+    await act(async () => root.unmount());
+    await act(async () => {
+      finish();
+      await sent;
+    });
+
+    root = createRoot(container);
+    await mount();
+    expect(latest.busy).toBe(false);
+    expect(latest.messages.at(-1)?.content).toBe("done while away");
+  });
+
+  it("does not let a cleared turn write into the next thread", async () => {
+    let finish: () => void = () => {};
+    turn = async function* () {
+      await new Promise<void>((r) => {
+        finish = r;
+      });
+      yield { kind: "answer", text: "stale" };
+    };
+    await mount();
+    let sent: Promise<void> = Promise.resolve();
+    await act(async () => {
+      sent = latest.send("first");
+    });
+    await act(async () => latest.clear());
+    await act(async () => {
+      finish();
+      await sent;
+    });
+    expect(latest.messages).toEqual([]);
+    expect(latest.busy).toBe(false);
   });
 });

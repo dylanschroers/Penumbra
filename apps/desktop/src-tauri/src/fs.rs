@@ -17,7 +17,7 @@ use tauri::Manager;
 /// Studio host refuses `\\?\...` as a dataset path). Every path we return
 /// crosses to JS, so normalize here rather than at each call site. No-op off
 /// Windows, where canonicalize adds no prefix.
-fn display_path(p: &Path) -> String {
+pub(crate) fn display_path(p: &Path) -> String {
     let s = p.to_string_lossy().into_owned();
     #[cfg(windows)]
     {

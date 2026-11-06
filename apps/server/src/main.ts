@@ -2,10 +2,16 @@
 // below reads a credential at construction time.
 import "./env";
 import cors from "@fastify/cors";
-import type { AgentEvent, ChatMessage, Engine } from "@penumbra/shared";
+import type {
+  AgentEvent,
+  ChatMessage,
+  ClientTools,
+  Engine,
+} from "@penumbra/shared";
 import { composeSystem, LAB_POLICY, ResolvingEngine } from "@penumbra/shared";
 import Fastify from "fastify";
 import { GatewayEngine, gatewayConfigFromEnv } from "./agent/GatewayEngine";
+import { fetchGatewayUsage } from "./agent/gatewayUsage";
 import { createPromptStore } from "./agent/prompt";
 import { registerAgentRoutes } from "./agent/routes";
 import { createServerTools } from "./agent/tools";
@@ -92,8 +98,16 @@ const prompts = createPromptStore(sqlite);
 // every time a key rotated or the role was pointed somewhere else.
 const currentEngine: Engine = {
   getStatus: () => chatEngine().getStatus(),
-  runAgent: (messages: ChatMessage[], signal?: AbortSignal) =>
-    chatEngine().runAgent(messages, signal) as AsyncGenerator<AgentEvent>,
+  runAgent: (
+    messages: ChatMessage[],
+    signal?: AbortSignal,
+    clientTools?: ClientTools,
+  ) =>
+    chatEngine().runAgent(
+      messages,
+      signal,
+      clientTools,
+    ) as AsyncGenerator<AgentEvent>,
 };
 // When a gateway is configured it answers chat, and the Studio target is the
 // fallback for when the gateway is down or its route is missing.
@@ -131,7 +145,13 @@ function chatEngine(): Engine {
     { name: "studio", engine: studio },
   ]);
 }
-registerAgentRoutes(app, { engine: currentEngine, targets, prompts, devices });
+registerAgentRoutes(app, {
+  engine: currentEngine,
+  targets,
+  prompts,
+  devices,
+  gatewayUsage: gateway ? () => fetchGatewayUsage(gateway) : undefined,
+});
 
 const port = Number(process.env.PORT ?? 3000);
 app.listen({ port, host: "0.0.0.0" }).catch((err) => {

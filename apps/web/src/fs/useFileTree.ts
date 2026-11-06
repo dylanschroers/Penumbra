@@ -1,4 +1,3 @@
-import { migrateStorageKey, STORAGE_NAMESPACE } from "@penumbra/shared";
 import { useCallback, useEffect, useState } from "react";
 import {
   type DirEntry,
@@ -7,6 +6,7 @@ import {
   moveEntry,
   pickFolder,
 } from "./fsClient";
+import { FS_CHANGED_EVENT, loadRoots, ROOTS_KEY } from "./roots";
 
 // Owns the file sidebar's state: the set of imported root folders and, for each
 // expanded directory, its lazily-loaded children. Roots are the only thing that
@@ -16,22 +16,6 @@ import {
 //
 // Desktop-only. On the web build isFsAvailable is false and every action no-ops,
 // so the component can render a placeholder without special-casing the hook.
-
-const ROOTS_KEY = `${STORAGE_NAMESPACE}.fs.roots.v1`;
-const LEGACY_ROOTS_KEY = "penumbra.fs.roots";
-
-function loadRoots(): string[] {
-  migrateStorageKey(LEGACY_ROOTS_KEY, ROOTS_KEY);
-  try {
-    const raw = localStorage.getItem(ROOTS_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed)
-      ? parsed.filter((p) => typeof p === "string")
-      : [];
-  } catch {
-    return [];
-  }
-}
 
 /** Parent directory of a path (handles both separators; no trailing slash). */
 function parentDir(path: string): string {
@@ -104,6 +88,18 @@ export function useFileTree(): FileTree {
     },
     [markLoading],
   );
+
+  // The agent changed files: reload the folders holding them, where shown.
+  useEffect(() => {
+    if (!isFsAvailable) return;
+    const onChanged = (event: Event) => {
+      const paths = (event as CustomEvent<string[]>).detail ?? [];
+      const dirs = new Set(paths.map(parentDir));
+      for (const dir of dirs) if (dir in children) void load(dir);
+    };
+    window.addEventListener(FS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(FS_CHANGED_EVENT, onChanged);
+  }, [children, load]);
 
   const toggle = useCallback(
     (path: string) => {

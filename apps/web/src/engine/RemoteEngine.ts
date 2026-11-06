@@ -2,6 +2,7 @@ import type {
   AgentEvent,
   AgentStatus,
   ChatMessage,
+  ClientTools,
   Engine,
 } from "@penumbra/shared";
 import { normalizeBaseUrl, readSseFrames } from "@penumbra/shared";
@@ -65,6 +66,7 @@ export class RemoteEngine implements Engine {
   async *runAgent(
     messages: ChatMessage[],
     signal?: AbortSignal,
+    clientTools?: ClientTools,
   ): AsyncGenerator<AgentEvent> {
     // Pre-turn flush: the turn reads the *server's* store, so unpushed local
     // edits would be invisible to the model. Never let a sync failure block the
@@ -74,7 +76,13 @@ export class RemoteEngine implements Engine {
     const res = await fetch(`${this.baseURL}/agent/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...this.headers },
-      body: JSON.stringify({ messages }),
+      body: JSON.stringify({
+        messages,
+        client: clientTools && {
+          tools: clientTools.tools,
+          roots: clientTools.roots,
+        },
+      }),
       signal,
     });
     if (!res.ok) throw new Error(`agent server responded ${res.status}`);
@@ -88,6 +96,24 @@ export class RemoteEngine implements Engine {
         throw new Error(message ?? "agent turn failed");
       }
       if (frame.event === "done") return;
+      // The server is waiting on a file tool only this client can run.
+      if (frame.event === "client_tool") {
+        const call = frame.data as {
+          id: string;
+          name: string;
+          args: Record<string, unknown>;
+        };
+        const result = clientTools
+          ? await clientTools.runTool(call.name, call.args ?? {})
+          : `Tool ${call.name} failed: this client cannot run file tools.`;
+        await fetch(`${this.baseURL}/agent/tool-result`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...this.headers },
+          body: JSON.stringify({ id: call.id, result }),
+          signal,
+        });
+        continue;
+      }
       if (frame.event !== "agent") continue;
 
       const ev = frame.data as AgentEvent;

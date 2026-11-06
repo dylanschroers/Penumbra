@@ -76,3 +76,34 @@ describe("GatewayEngine", () => {
     expect(JSON.parse(chat?.[1]?.body as string).model).toBe("route");
   });
 });
+
+describe("reply cap", () => {
+  async function capSent(maxTokens?: number): Promise<unknown> {
+    mockFetch.mockImplementation(async (url: string) =>
+      String(url).includes("/v1/models")
+        ? res({ data: [{ id: "route" }] })
+        : res({ choices: [{ message: { content: "hi" } }] }),
+    );
+    const engine = new GatewayEngine({
+      bindings,
+      baseURL: "http://g:8090",
+      model: "route",
+      label: "GoModel",
+      maxTokens,
+    });
+    await engine.runAgent([{ role: "user", content: "x" }]).next();
+    const chat = mockFetch.mock.calls.find((c) =>
+      String(c[0]).includes("/v1/chat/completions"),
+    );
+    return JSON.parse(chat?.[1]?.body as string).max_tokens;
+  }
+
+  // Reasoning models spend the cap on thinking too; 2048 cut a summary off.
+  it("defaults to the largest cap the app allows", async () => {
+    expect(await capSent()).toBe(8192);
+  });
+
+  it("keeps a cap set in the prompt panel", async () => {
+    expect(await capSent(1024)).toBe(1024);
+  });
+});

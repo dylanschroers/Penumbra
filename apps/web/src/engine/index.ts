@@ -9,6 +9,7 @@ import type {
   AgentEvent,
   AgentStatus,
   ChatMessage,
+  ClientTools,
   Engine,
   ToolBindings,
 } from "@penumbra/shared";
@@ -129,8 +130,9 @@ class SwitchableEngine implements Engine {
   async *runAgent(
     messages: ChatMessage[],
     signal?: AbortSignal,
+    clientTools?: ClientTools,
   ): AsyncGenerator<AgentEvent> {
-    yield* this.active().runAgent(messages, signal);
+    yield* this.active().runAgent(messages, signal, clientTools);
   }
 }
 
