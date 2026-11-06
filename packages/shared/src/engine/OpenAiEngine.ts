@@ -29,6 +29,10 @@ export const AGENT_MAX_TOKENS_LOCAL = 512;
  *  mid-word. */
 export const AGENT_MAX_TOKENS_SERVER = 2048;
 
+/** Tool rounds per turn for the server-side backends, which run larger models
+ *  over the full registry and so get a longer leash than the default of 4. */
+export const AGENT_MAX_TOOL_STEPS_SERVER = 8;
+
 /** What the setting will accept. The floor is low enough to be a deliberate
  *  "keep it terse" and high enough to finish a sentence; the ceiling exists
  *  because this is a *runaway* guard first, and an unbounded one guards
@@ -97,6 +101,15 @@ export interface OpenAiEngineConfig {
   baseURL: string;
   /** Model id sent with each request. */
   model: string;
+  /**
+   * The backend is a gateway and `model` is a route on it, not a resident model.
+   *
+   * A gateway's `/v1/models` is its whole catalog, so reading the first entry as
+   * "what is loaded" names an arbitrary model. Routed, readiness means the route
+   * is listed, and the identity line says a route answers rather than naming a
+   * model that may not be the one replying.
+   */
+  routed?: boolean;
   /** Extra headers on every request — Tier 1 sends `Authorization: Bearer`. */
   headers?: Record<string, string>;
   /** Names this backend in error messages ("local model responded 500"). */
@@ -135,6 +148,7 @@ export class OpenAiEngine implements Engine {
   protected readonly bindings: ToolBindings;
   protected readonly baseURL: string;
   protected readonly model: string;
+  protected readonly routed: boolean;
   protected readonly headers: Record<string, string>;
   protected readonly label: string;
   protected readonly maxToolSteps: number;
@@ -146,6 +160,7 @@ export class OpenAiEngine implements Engine {
     this.bindings = config.bindings;
     this.baseURL = normalizeBaseUrl(config.baseURL);
     this.model = config.model;
+    this.routed = config.routed ?? false;
     this.headers = config.headers ?? {};
     this.label = config.label ?? "model";
     this.maxToolSteps = config.maxToolSteps ?? DEFAULT_MAX_TOOL_STEPS;
@@ -178,9 +193,14 @@ export class OpenAiEngine implements Engine {
       }
       if (!res.ok) return { state: "stopped" };
       const body = (await res.json()) as { data?: ModelCatalogEntry[] };
+      const entries = body.data ?? [];
       // Which entry is actually servable is a rule with a trap in it; it lives
       // in ./catalog so the benchmark route reads the listing the same way.
-      const model = pickLoadedModel(body.data ?? []);
+      const model = this.routed
+        ? entries.some((m) => m.id === this.model)
+          ? this.model
+          : undefined
+        : pickLoadedModel(entries);
 
       return model ? { state: "ready", model } : { state: "no_model" };
     } catch {
@@ -268,6 +288,9 @@ export class OpenAiEngine implements Engine {
     const status = await this.getStatus();
     const model = status.state === "ready" ? status.model : undefined;
     if (!model) return system;
+    if (this.routed) {
+      return `${system}\n\nYou are reached through "${model}", a route on the ${this.label} backend that can hand each request to a different underlying model, so you cannot know which model is writing this reply. If the user asks which model, backend, or version they are talking to, say exactly that and do not name or guess a specific model.`;
+    }
     return `${system}\n\nYou are currently running as the model "${model}", served by the ${this.label} backend. If the user asks which model, backend, or version they are talking to, answer with exactly that and nothing invented.`;
   }
 

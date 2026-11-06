@@ -1,5 +1,6 @@
 import {
   AGENT_MAX_TOKENS_SERVER,
+  AGENT_MAX_TOOL_STEPS_SERVER,
   OpenAiEngine,
   type ToolBindings,
 } from "@penumbra/shared";
@@ -27,9 +28,7 @@ const DEFAULT_BASE_URL = "http://127.0.0.1:8888";
 /** Sent as the model id when none is configured; Studio serves whatever it has
  *  loaded, and getStatus() reports the real id. */
 const DEFAULT_MODEL = "unsloth";
-/** Tier 1 exists for multi-step work and runs a larger model than Tier 0, so it
- *  gets a longer leash than OpenAiEngine's small-model default of 4. */
-const DEFAULT_MAX_TOOL_STEPS = 8;
+const DEFAULT_MAX_TOOL_STEPS = AGENT_MAX_TOOL_STEPS_SERVER;
 /**
  * Room for an answer that is actually long.
  *
