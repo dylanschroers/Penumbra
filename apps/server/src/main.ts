@@ -3,8 +3,9 @@
 import "./env";
 import cors from "@fastify/cors";
 import type { AgentEvent, ChatMessage, Engine } from "@penumbra/shared";
-import { composeSystem, LAB_POLICY } from "@penumbra/shared";
+import { composeSystem, LAB_POLICY, ResolvingEngine } from "@penumbra/shared";
 import Fastify from "fastify";
+import { GatewayEngine, gatewayConfigFromEnv } from "./agent/GatewayEngine";
 import { createPromptStore } from "./agent/prompt";
 import { registerAgentRoutes } from "./agent/routes";
 import { createServerTools } from "./agent/tools";
@@ -94,23 +95,41 @@ const currentEngine: Engine = {
   runAgent: (messages: ChatMessage[], signal?: AbortSignal) =>
     chatEngine().runAgent(messages, signal) as AsyncGenerator<AgentEvent>,
 };
-function chatEngine(): UnslothEngine {
+// When a gateway is configured it answers chat, and the Studio target is the
+// fallback for when the gateway is down or its route is missing.
+const gateway = gatewayConfigFromEnv(process.env);
+
+function chatEngine(): Engine {
   // The persona is read here rather than captured with the bindings, for the
   // same reason the credentials are: an edit must reach the next turn without a
   // restart, and there is nothing to invalidate if nothing is cached.
-  return new UnslothEngine({
-    bindings: {
-      ...bindings,
-      // LAB_POLICY is restated here because this line replaces the system
-      // prompt createServerTools composed: dropping it would leave the lab
-      // tools advertised with nothing in the prompt saying when to use them.
-      system: composeSystem(prompts.current().persona, LAB_POLICY),
-    },
-    // Read here for the same reason the persona is: an edit must reach the next
-    // turn without a restart. Undefined leaves Tier 1's own default in force.
-    maxTokens: prompts.current().maxTokens ?? undefined,
+  const turnBindings = {
+    ...bindings,
+    // LAB_POLICY is restated here because this line replaces the system
+    // prompt createServerTools composed: dropping it would leave the lab
+    // tools advertised with nothing in the prompt saying when to use them.
+    system: composeSystem(prompts.current().persona, LAB_POLICY),
+  };
+  // Read here for the same reason the persona is: an edit must reach the next
+  // turn without a restart. Undefined leaves Tier 1's own default in force.
+  const maxTokens = prompts.current().maxTokens ?? undefined;
+  const studio = new UnslothEngine({
+    bindings: turnBindings,
+    maxTokens,
     ...targets.resolve("chat"),
   });
+  if (!gateway) return studio;
+  return new ResolvingEngine([
+    {
+      name: "gateway",
+      engine: new GatewayEngine({
+        ...gateway,
+        bindings: turnBindings,
+        maxTokens,
+      }),
+    },
+    { name: "studio", engine: studio },
+  ]);
 }
 registerAgentRoutes(app, { engine: currentEngine, targets, prompts, devices });
 

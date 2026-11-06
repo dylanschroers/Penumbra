@@ -147,6 +147,7 @@ required to run locally.
 | `DB_PATH` | `server.db` | SQLite file. |
 | `UNSLOTH_BASE_URL` / `UNSLOTH_API_KEY` | none | The local Studio's address and bearer. Anything set through the compute panel outranks these and persists. |
 | `UNSLOTH_MODEL` | none | Model id sent in Tier-1 chat requests. A label: Studio serves whatever is resident regardless. |
+| `PENUMBRA_GATEWAY_URL` / `PENUMBRA_GATEWAY_MODEL` / `PENUMBRA_GATEWAY_KEY` / `PENUMBRA_GATEWAY_LABEL` | none / none / none / `Gateway` | An OpenAI-compatible model gateway (e.g. GoModel) and the route chat sends to. Set URL and model to make it chat's first choice, with the Studio target as fallback. |
 | `UNSLOTH_LAUNCH_CMD` / `UNSLOTH_STOP_CMD` | `unsloth studio` / `unsloth studio stop` | What the panel's Launch and Stop buttons run. Empty hides the button. |
 | `LM_EVAL_BIN` | `lm_eval` | The lm_eval executable. Point it inside a venv when it is not on PATH. |
 | `BENCHMARK_STALL_MS` | `300000` | How long a benchmark may print nothing before it is killed as wedged. Any output restarts the clock. |

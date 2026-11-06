@@ -10,6 +10,7 @@ import {
 import Database from "better-sqlite3";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTargetStore } from "../compute/targets";
 import { createPromptStore } from "./prompt";
 import { registerAgentRoutes } from "./routes";
 
@@ -330,5 +331,36 @@ describe("POST /agent/chat", () => {
       ["agent", answer],
       ["done", {}],
     ]);
+  });
+});
+
+describe("status target", () => {
+  async function statusWith(engineTarget?: { id: string; label: string }) {
+    app = Fastify();
+    registerAgentRoutes(app, {
+      engine: {
+        getStatus: async () => ({
+          state: "ready",
+          model: "m",
+          ...(engineTarget ? { target: engineTarget } : {}),
+        }),
+        async *runAgent() {},
+      },
+      targets: createTargetStore(new Database(":memory:"), {}),
+    });
+    await app.ready();
+    return (await app.inject({ url: "/agent/status" })).json();
+  }
+
+  it("names the Studio the chat role resolves to", async () => {
+    expect((await statusWith()).target).toEqual({
+      id: "local",
+      label: "Local Studio",
+    });
+  });
+
+  it("keeps a target the engine reports for itself", async () => {
+    const gateway = { id: "gateway", label: "GoModel" };
+    expect((await statusWith(gateway)).target).toEqual(gateway);
   });
 });

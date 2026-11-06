@@ -229,6 +229,46 @@ describe("identity in the system prompt", () => {
   });
 });
 
+describe("a routed backend", () => {
+  const routed = new OpenAiEngine({
+    bindings: { tools: [], system: "sys", runTool: vi.fn() },
+    baseURL: "http://test",
+    model: "my-route",
+    routed: true,
+    label: "gateway",
+  });
+  const catalog = () =>
+    res({ data: [{ id: "provider/some-model" }, { id: "my-route" }] });
+
+  it("is ready when its route is listed, and names the route", async () => {
+    mockFetch.mockResolvedValue(catalog());
+    expect(await routed.getStatus()).toEqual({
+      state: "ready",
+      model: "my-route",
+    });
+  });
+
+  it("reports no_model when its route is missing from the catalog", async () => {
+    mockFetch.mockResolvedValue(res({ data: [{ id: "provider/some-model" }] }));
+    expect(await routed.getStatus()).toEqual({ state: "no_model" });
+  });
+
+  it("tells the model it is behind a route instead of naming a model", async () => {
+    mockFetch.mockImplementation(async (url: string) =>
+      String(url).includes("/v1/models") ? catalog() : answerReply("hi"),
+    );
+    await collect(routed.runAgent([{ role: "user", content: "x" }]));
+    const system = (
+      bodyOf(0).messages as Array<{ role: string; content: string }>
+    )[0]?.content;
+    expect(system).toContain('reached through "my-route"');
+    expect(system).toContain("gateway backend");
+    expect(system).not.toContain("provider/some-model");
+    expect(system).not.toContain("running as the model");
+    expect(bodyOf(0).model).toBe("my-route");
+  });
+});
+
 describe("runAgent", () => {
   it("yields a single answer and strips <think> blocks", async () => {
     queueChat(answerReply("<think>secret</think>Hello"));

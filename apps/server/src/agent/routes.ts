@@ -87,10 +87,11 @@ export function registerAgentRoutes(
 
   // Readiness carries the target that produced it. Resolved here rather than
   // left to the client to pair up, so a pill can never show one target's name
-  // beside another's state.
+  // beside another's state. An engine that names its own target (the gateway)
+  // is not on a Studio, so the chat assignment does not describe it.
   app.get("/agent/status", { preHandler }, async () => {
     const status = await engine.getStatus();
-    if (!targets) return status;
+    if (!targets || status.target) return status;
     const id = targets.effective("chat");
     const target = targets.list().find((t) => t.id === id);
     return { ...status, target: { id, label: target?.label ?? id } };
