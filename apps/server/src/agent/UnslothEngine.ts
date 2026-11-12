@@ -17,7 +17,7 @@ import {
 // One constraint that is easy to violate by accident: **never send
 // `enable_tools` or `mcp_enabled`.** Those ask Studio to run *its own* tool
 // loop against its MCP registry. Penumbra executes tools itself, server-side,
-// against the sync store (plan §2), and Studio only passes client-supplied
+// against the sync store, and Studio only passes client-supplied
 // tools through when neither flag is set — see
 // `_explicit_studio_tool_loop_requested` and the `_sf_client_tools` gate in
 // studio/backend/routes/inference.py. Setting either would silently take the

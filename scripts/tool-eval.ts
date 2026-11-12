@@ -1,11 +1,6 @@
-// Tool-calling regression check (docs/AGENT_DESIGN.md §7). Measures whether a
-// model turns a natural request into the RIGHT tool call with the RIGHT args.
-// It does not execute tools — it only checks what the model emits.
-//
-// The cases, scoring, and training-set logic all live in @penumbra/shared, so this
-// script is just IO: ask the model, score, print, record. That keeps the eval
-// from drifting from the product (it imports the same specs and prompt the app
-// ships) and keeps the metrics unit-tested.
+// Tool-calling regression check (docs/AGENT_DESIGN.md → Tool calling with a
+// small model). Grades what the model emits; tools are not executed. Cases and
+// scoring live in @penumbra/shared.
 //
 // Usage: pnpm tool-eval                (needs an OpenAI-compatible server)
 //   LLM_URL=http://127.0.0.1:8080      llama-server (Tier 0) or Studio (Tier 1)
@@ -15,12 +10,8 @@
 //   BENCH_DIR=bench                    where results and trainsets are written
 //   TIER=0 | 1                         which tool set to advertise (default 0)
 //
-// TIER=1 is the measurement worth running after touching the tool set. It
-// advertises the Model Lab contracts alongside the base ones, with the prompt
-// the server actually composes, and scores the base cases *and* the lab ones.
-// The base rows are the point: §7 is a claim about what tool count costs, and
-// the only way to see that cost is to run the same utterances against both
-// lists. Tier 0 stays the default so the pinned number keeps its meaning.
+// Run TIER=1 after touching the tool set: it also scores the base cases, which
+// shows what the extra tools cost.
 
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -41,7 +32,7 @@ import {
   toTrainingExamples,
 } from "@penumbra/shared";
 
-// Named BASE_URL so it doesn't shadow the global URL constructor.
+// Not `URL`, which would shadow the global constructor.
 const BASE_URL = process.env.LLM_URL ?? "http://127.0.0.1:8080";
 const MODEL = process.env.MODEL ?? "qwen3-1.7b";
 const API_KEY = process.env.API_KEY;
@@ -49,10 +40,7 @@ const LABEL = process.env.LABEL;
 const BENCH_DIR = process.env.BENCH_DIR ?? "bench";
 const TIER = process.env.TIER === "1" ? 1 : 0;
 
-// Both halves come from the shipped definitions, so this cannot measure a tool
-// set the app does not have. The Tier-1 prompt is composed the way main.ts
-// composes it, because a policy that never mentions the lab is not the prompt
-// those tools ship behind.
+// The Tier 1 prompt is composed the way main.ts composes it.
 const tools = (TIER === 1 ? [...agentTools, ...labTools] : agentTools).map(
   toToolSpec,
 );
@@ -79,8 +67,7 @@ async function ask(text: string): Promise<CaseOutcome> {
       temperature: 0,
     }),
   });
-  // Fail loudly: a non-OK response (e.g. a schema the server's grammar builder
-  // rejects) must not be scored as "the model declined to call a tool".
+  // A non-OK response must not score as "declined to call a tool".
   if (!res.ok) {
     throw new Error(
       `model server responded ${res.status}: ${await res.text()}`,
@@ -112,7 +99,6 @@ async function ask(text: string): Promise<CaseOutcome> {
     name: call?.name ?? null,
     args,
     argsValid,
-    // Strip <think> so a refusal's gold text isn't polluted with reasoning.
     content: (message?.content ?? "")
       .replace(/<think>[\s\S]*?<\/think>/g, "")
       .trim(),
@@ -183,13 +169,8 @@ const main = async (): Promise<void> => {
     `Latency                 : avg ${summary.latency.avg}ms, max ${summary.latency.max}ms`,
   );
 
-  // Append rather than overwrite: the value of a benchmark is the trend across
-  // models and finetunes, not one number.
-  //
-  // The tier rides in the label because both tiers write to this one file, and
-  // the rows are not comparable: Tier 1 answers more cases against more tools.
-  // An unmarked mixed file is worse than no file — the trend it draws is an
-  // artifact of which command someone last ran.
+  // Append, never overwrite: the trend is the point. The tier is in the label
+  // because Tier 0 and Tier 1 rows aren't comparable.
   mkdirSync(BENCH_DIR, { recursive: true });
   const tierTag = `tier${TIER}`;
   const record = toRecord(
@@ -202,10 +183,7 @@ const main = async (): Promise<void> => {
     `${JSON.stringify(record)}\n`,
   );
 
-  // The same run doubles as a finetuning seed set — only the turns the model
-  // got right (see @penumbra/shared → eval/trainset). Seeded with the prompt
-  // the turns actually ran under: an example that pairs a lab tool call with a
-  // system prompt that never mentioned the lab teaches the wrong thing.
+  // Seeded with the prompt the turns actually ran under.
   const { examples, skipped } = toTrainingExamples(scored, system);
   writeFileSync(join(BENCH_DIR, "trainset.jsonl"), `${toJsonl(examples)}\n`);
   console.log(

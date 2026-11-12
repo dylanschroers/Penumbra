@@ -10,16 +10,9 @@ import { useCallback, useEffect, useState } from "react";
 import { api, getAgentToken, getServerUrl } from "../../api";
 import { type UploadProgress, uploadDataset, uploadModel } from "./upload";
 
-// Drives the Model Lab module. Everything goes through the Penumbra server's
-// /lab/* routes — never to Studio directly, because the Studio key is an
-// unscoped admin credential that must not reach a browser
-// (docs/MODEL_LAB.md → Deployment topology).
-//
-// Which Studio the Lab trains and benchmarks on is *not* here: that is a compute
-// target, shared with chat, and lives in ../../compute/useCompute.
+// Everything goes through /lab/*, never Studio. Target choice lives in
+// ../../compute/useCompute.
 
-/** What the export form collects. Everything past `runId` is the optional
- *  "publish it somewhere permanent" half. */
 export interface ExportRequestInput {
   runId: string;
   quantization?: string;
@@ -33,14 +26,11 @@ export interface LabStatus {
   suites: SuiteDefinition[];
 }
 
-/** What the benchmark target can serve, and which of it is resident. The
- *  resident model is always listed, inventory or no inventory: it is the only
- *  one a benchmark can actually score. */
+/** The resident model is always listed: it's the only one a benchmark scores. */
 export interface AvailableModels {
   target: string;
   models: AvailableModel[];
-  /** Why the list holds no more than that, when the target's own inventory
-   *  refused to answer. Null when it answered. */
+  /** Null when the inventory answered. */
   inventoryError: string | null;
 }
 
@@ -51,10 +41,7 @@ export function useLab() {
   const [scores, setScores] = useState<BenchmarkResult[]>([]);
   const [available, setAvailable] = useState<AvailableModels | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** Whether the server answered the last poll. Null until the first one
-   *  returns — kept apart from `false` so the UI can hold off on saying
-   *  "disconnected" during the round trip it takes to find out, rather than
-   *  flashing it on every mount. */
+  /** Null until the first poll returns, so "disconnected" doesn't flash on mount. */
   const [connected, setConnected] = useState<boolean | null>(null);
 
   const refresh = useCallback(async () => {
@@ -64,9 +51,7 @@ export function useLab() {
         api<LabJob[]>("/lab/jobs"),
         api<LabRun[]>("/lab/runs"),
         api<BenchmarkResult[]>("/lab/scores"),
-        // Reaches the target's inventory, so it is the one call here that can
-        // be slow. A failure leaves the picker empty rather than blanking the
-        // whole Lab, which the other four would do.
+        // Can be slow; a failure empties the picker without blanking the Lab.
         api<AvailableModels>("/lab/models").catch(() => null),
       ]);
       setStatus(s);
@@ -83,9 +68,8 @@ export function useLab() {
     }
   }, []);
 
-  // Poll rather than hold an SSE stream open: jobs are long-lived and the job
-  // record is authoritative, so a periodic read shows the same truth with far
-  // less to go wrong. Skip while hidden; the next visible tick catches up.
+  // Polls rather than holding SSE: the job record is authoritative. Skips while
+  // hidden.
   useEffect(() => {
     void refresh();
     const id = setInterval(() => {
@@ -116,29 +100,22 @@ export function useLab() {
     connected,
     running: jobs.some((j) => j.state === "running"),
     finetune: (req: FinetuneRequest) => act("/lab/finetune", req),
-    // The Hub fields are optional and, when given, are the only way the artifact
-    // survives the trainer that made it. The token is sent for this one call and
-    // kept nowhere — not in this hook, not in the job record.
+    // The Hub token is sent for this call only and kept nowhere.
     exportRun: (req: ExportRequestInput) => act("/lab/export", req),
     benchmark: (model: string, suite: string, samplesPerTask: number) =>
       act("/lab/benchmark", { model, suite, samplesPerTask }),
-    // Stops a running benchmark. No scores are written for a partial run, so
-    // cancelling costs the run and nothing else.
+    // Partial runs write no scores.
     cancelJob: (id: string) => act(`/lab/jobs/${id}/cancel`, {}),
-    // Transfer a client-local file to the Studio host and return the path there
-    // to train from. Desktop only (needs disk access).
     uploadDataset: (localPath: string, onProgress?: UploadProgress) =>
       uploadDataset(
-        // Resolved per call, not captured: the address can change under a long
-        // session, and an upload is the last thing that should go somewhere else.
+        // Resolved per call: the address can change mid-session.
         { serverURL: getServerUrl(), token: getAgentToken() },
         localPath,
         onProgress,
       ),
     uploadModel: (localDir: string, onProgress?: UploadProgress) =>
       uploadModel(
-        // Resolved per call, not captured: the address can change under a long
-        // session, and an upload is the last thing that should go somewhere else.
+        // Resolved per call: the address can change mid-session.
         { serverURL: getServerUrl(), token: getAgentToken() },
         localDir,
         onProgress,

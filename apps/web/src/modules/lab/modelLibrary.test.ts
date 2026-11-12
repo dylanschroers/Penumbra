@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Listing } from "../../fs/fsClient";
 import { type DirLister, scanModels } from "./modelLibrary";
 
-// A tiny in-memory filesystem: map each directory path to its entries as
-// [name, isDir, size?] tuples. Missing paths throw, standing in for an
-// unreadable directory.
+// Missing paths throw, standing in for unreadable directories.
 type Node = [name: string, isDir: boolean, size?: number];
 
 function fakeFs(tree: Record<string, Node[]>): DirLister {
@@ -48,7 +46,6 @@ describe("scanModels", () => {
         ["model.safetensors", false, 9_000_000_000],
         ["shard", true],
       ],
-      // Present but must never be visited — the HF dir is taken whole.
       "/models/Llama-3.2-1B/shard": [["extra.gguf", false, 42]],
     });
     const models = await scanModels("/models", fs);
@@ -63,8 +60,7 @@ describe("scanModels", () => {
   });
 
   it("lists a gguf release folder as its individual quants, not one model", async () => {
-    // Unsloth's GGUF repos ship a config.json next to every quant of the same
-    // weights — taking the directory whole would upload all of them.
+    // GGUF repos ship a config.json beside every quant.
     const fs = fakeFs({
       "/models": [["Qwen3-1.7B-GGUF", true]],
       "/models/Qwen3-1.7B-GGUF": [
@@ -111,7 +107,6 @@ describe("scanModels", () => {
       "/r/d1": [["d2", true]],
       "/r/d1/d2": [["deep.gguf", false, 1]],
     });
-    // maxDepth 1: /r (depth 0) → d1 (depth 1) is listed, but d2 (depth 2) is not.
     expect(await scanModels("/r", fs, 1)).toEqual([]);
     expect((await scanModels("/r", fs, 2)).map((m) => m.name)).toEqual([
       "deep.gguf",
@@ -124,7 +119,6 @@ describe("scanModels", () => {
         ["locked", true],
         ["ok.gguf", false, 1],
       ],
-      // "/models/locked" is intentionally absent → throws when listed.
     });
     const models = await scanModels("/models", fs);
     expect(models.map((m) => m.name)).toEqual(["ok.gguf"]);
@@ -140,7 +134,6 @@ describe("scanModels", () => {
       "/m/hf": [["config.json", false, 1]],
     });
     const models = await scanModels("/m", fs);
-    // gguf sorts before hf; within a kind, by name.
     expect(models.map((m) => `${m.kind}:${m.name}`)).toEqual([
       "gguf:a.gguf",
       "gguf:z.gguf",

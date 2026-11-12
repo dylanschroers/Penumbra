@@ -17,9 +17,6 @@ function dayLabel(date: string): string {
   });
 }
 
-// Weather module: search a city (or use geolocation), see current conditions and
-// a 3-day forecast. Units auto-default from locale with a toggle; the last result
-// is cached so it restores on reload. State and fetching live in useWeather.
 export function WeatherModule() {
   const { units, data, loading, error, search, locate, changeUnits } =
     useWeather();

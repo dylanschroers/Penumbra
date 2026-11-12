@@ -3,17 +3,8 @@ import type { FastifyInstance } from "fastify";
 import { isLoopback, requireAuth, sharedSecret } from "../http/auth";
 import type { DeviceStore } from "./store";
 
-// Managing which devices may call the gated routes.
-//
-// These sit behind the same gate they administer, which is deliberate and is
-// what makes the bootstrap work: on a server with nothing set up, loopback is
-// allowed, so the first device is added from the machine the server runs on.
-// After that the device token it was issued reaches this route from anywhere,
-// and can add the next one.
-//
-// The alternative — leaving these open so a device could enrol itself — would
-// mean anyone who can reach the port can grant themselves access, which is the
-// whole thing the gate exists to prevent.
+// Behind the gate they administer: loopback enrols the first device, whose
+// token then enrols the next from anywhere.
 
 export interface DeviceRouteOptions {
   devices: DeviceStore;
@@ -26,10 +17,8 @@ export function registerDeviceRoutes(
 ): void {
   const preHandler = requireAuth({ token, devices });
 
-  // Ungated on purpose: a device with no credential still needs to learn whether
-  // it can enrol one. Says only what the gate's own 401-vs-403 already would —
-  // and says it by asking the gate's own helper, so an empty
-  // PENUMBRA_AGENT_TOKEN reads as no secret here exactly as it does there.
+  // Ungated so an uncredentialed device can learn whether it may enrol. Uses the
+  // gate's own `sharedSecret` helper so both agree on an empty env var.
   app.get("/auth/context", async (req) => ({
     loopback: isLoopback(req.ip),
     requiresToken: sharedSecret(token) !== undefined,
@@ -45,9 +34,7 @@ export function registerDeviceRoutes(
         message: "A device needs a label to be told apart from the others.",
       });
     }
-    // 201 with the token in the body. This is the only response that will ever
-    // contain it, which the client has to know so it can show it once rather
-    // than assume it can fetch it back later.
+    // The only response that ever contains the token.
     return reply.code(201).send(devices.issue(parsed.data.label));
   });
 
@@ -56,8 +43,7 @@ export function registerDeviceRoutes(
     { preHandler },
     async (req, reply) => {
       if (!devices.revoke(req.params.id)) {
-        // Unknown and already-revoked collapse into one answer on purpose:
-        // both mean "this id has no access", which is what was asked for.
+        // Unknown and already-revoked both mean "no access", so one answer.
         return reply.code(404).send({
           error: "not_found",
           message: "No device with that id still has access.",

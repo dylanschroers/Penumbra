@@ -3,21 +3,11 @@ import { AddTaskForm } from "./AddTaskForm";
 import { TaskItem } from "./TaskItem";
 import { useTasks } from "./useTasks";
 
-// Tasks in the split shape (workspace/types.ts → SplitViewModule): one state
-// owner, plus a dock summary and the full expanded view. This is the reference
-// pattern for splitting the other modules.
-//
-// useTasks itself is unchanged — it only moved up a level. Both views now read
-// one list and one set of mutations, so the dock card stays live while the
-// module is expanded, and a task completed in either place is immediately true
-// in the other.
-//
-// What goes where: the Provider owns anything whose loss would be a bug (the
-// list, the loading/error state, the mutations). A view owns only what is
-// meaningless outside it — a hover, an open disclosure. Note that the add-task
-// draft currently lives inside AddTaskForm, which is fine while only the
-// expanded view renders it; it would have to move up here if the compact view
-// ever grew its own quick-add.
+// Split shape (workspace/types.ts → SplitViewModule): one Provider owns the
+// state, with compact and expanded views over it. The Provider holds anything
+// whose loss would be a bug; views hold only view-local state. The add-task
+// draft lives in AddTaskForm, which is fine while only the expanded view
+// renders it.
 
 type TasksState = ReturnType<typeof useTasks>;
 
@@ -36,8 +26,7 @@ function useTasksState(): TasksState {
   return state;
 }
 
-/** How many tasks are outstanding and what's next. Read-only: every action
- *  belongs to the expanded view, so the card stays glanceable at dock size. */
+/** Read-only; actions live in the expanded view. */
 export function TasksCompact() {
   const { tasks, loading, error } = useTasksState();
 
@@ -81,7 +70,6 @@ export function TasksCompact() {
   );
 }
 
-/** The full list: add, complete, re-prioritise, delete. */
 export function TasksExpanded() {
   const { tasks, loading, error, createTask, updateTask, deleteTask } =
     useTasksState();

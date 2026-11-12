@@ -7,22 +7,10 @@ import type {
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 
-// Which Studios the server can reach, and which one each role uses.
-//
-// Shared by the chat pill and the Model Lab, because they are looking at one
-// setting: the Studio a conversation runs against is the same one the Lab
-// trains and benchmarks on.
-//
-// Keys never come back from the server — a target reports `hasKey` and nothing
-// more — so there is no bearer held anywhere in this hook.
+// Shared by the chat pill and the Lab. Keys never come back from the server.
 
-/** Slower than the Lab's job poll: this is configuration plus a reachability
- *  probe, and each probe costs a request to a possibly-unreachable host. */
 const POLL_MS = 5000;
 
-/** A target's models, plus why the list is short when it is. An inventory that
- *  will not answer is not the same as a target with nothing on it, and the
- *  panel says which. */
 export interface TargetInventory {
   models: AvailableModel[];
   inventoryError: string | null;
@@ -38,31 +26,21 @@ export interface Compute {
   ) => Promise<void>;
   clearTarget: (id: TargetId) => Promise<void>;
   assign: (role: ComputeRole, target: TargetId) => Promise<void>;
-  /** What each target can serve, keyed by target id. Empty until fetched. */
   inventory: Partial<Record<TargetId, TargetInventory>>;
-  /** Fetch a target's inventory. Called when its card opens, not on the poll:
-   *  it reaches the target's disk and is far heavier than a reachability probe. */
+  /** On card open, not on the poll: it scans the target's disk. */
   loadInventory: (id: TargetId) => Promise<void>;
-  /** Make a model resident there. Evicts whatever was loaded. */
+  /** Evicts whatever was loaded. */
   loadModel: (id: TargetId, model: string) => Promise<void>;
-  /** The target with a load in flight, if any. */
   loading: TargetId | null;
-  /** Start the local Studio (loopback only; the button is hidden elsewhere). */
+  /** Loopback only. */
   launch: (id: TargetId) => Promise<void>;
-  /** The target being started, if any — held through the ~45s cold start so the
-   *  button can say so, cleared when the poll reports it ready. */
+  /** Held through the ~45s cold start, cleared when the poll says ready. */
   launching: TargetId | null;
-  /** Stop the local Studio (loopback only). */
   stop: (id: TargetId) => Promise<void>;
-  /** The target being stopped, if any — held until the poll reports it down. */
   stopping: TargetId | null;
 }
 
-/**
- * @param enabled Poll only while the caller can act on the answer. Each poll
- * probes every configured target, so a chat running on the embedded Tier 0
- * model would otherwise keep asking a server about Studios it is not using.
- */
+/** @param enabled Poll only while needed: each poll probes every target. */
 export function useCompute(enabled = true): Compute {
   const [state, setState] = useState<ComputeState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -78,8 +56,7 @@ export function useCompute(enabled = true): Compute {
       setState(await api<ComputeState>("/compute/targets"));
       setError(null);
     } catch (err) {
-      // Keep the last known state: a dropped poll should not blank the panel
-      // the user is typing into.
+      // Keep the last state so a dropped poll doesn't blank the panel.
       setError(err instanceof Error ? err.message : String(err));
     }
   }, []);
@@ -111,10 +88,7 @@ export function useCompute(enabled = true): Compute {
       const body = await api<TargetInventory>(`/compute/targets/${id}/models`);
       setInventory((prev) => ({ ...prev, [id]: body }));
     } catch (err) {
-      // A request that never landed leaves the picker empty. The card's own
-      // state usually says why, but the message is kept: a target reporting
-      // "ready" whose inventory call fails is exactly the case where the state
-      // alone explains nothing.
+      // Keep the error: a "ready" target whose inventory call fails needs it.
       setInventory((prev) => ({
         ...prev,
         [id]: {
@@ -134,8 +108,7 @@ export function useCompute(enabled = true): Compute {
           body: JSON.stringify({ model }),
         });
         setError(null);
-        // Re-read both: the pill's model and the list's "loaded" marker are the
-        // same fact, and refreshing one without the other shows them disagreeing.
+        // The pill's model and the list's "loaded" marker must refresh together.
         await Promise.all([refresh(), loadInventory(id)]);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -149,9 +122,7 @@ export function useCompute(enabled = true): Compute {
   const launch = useCallback(
     async (id: TargetId) => {
       setLaunching(id);
-      // Give up the "starting" state after the cold-start window even if the
-      // poll never reports ready — unsloth missing, or a crash — so the button
-      // recovers rather than saying "starting" forever.
+      // Recover if the poll never reports ready (unsloth missing, crash).
       window.setTimeout(() => {
         setLaunching((cur) => (cur === id ? null : cur));
       }, 120_000);
@@ -161,17 +132,13 @@ export function useCompute(enabled = true): Compute {
         await refresh();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
-        // It did not even start, so let the button return immediately.
         setLaunching((cur) => (cur === id ? null : cur));
       }
     },
     [refresh],
   );
 
-  // Clear the moment it answers at all, rather than waiting out the cap. Any
-  // state but "stopped" means the process is up — "unauthorized" (its fresh key
-  // differs from the configured one) is now a key to paste, not a launch still
-  // in flight.
+  // Any state but "stopped" means the process is up.
   useEffect(() => {
     if (!launching) return;
     const s = state?.targets.find((t) => t.id === launching)?.state;
@@ -181,8 +148,7 @@ export function useCompute(enabled = true): Compute {
   const stop = useCallback(
     async (id: TargetId) => {
       setStopping(id);
-      // Studio shuts down in a second or two, but give the state a cap in case
-      // the stop command never lands rather than pinning the button.
+      // Cap in case the stop command never lands.
       window.setTimeout(() => {
         setStopping((cur) => (cur === id ? null : cur));
       }, 30_000);
@@ -198,7 +164,6 @@ export function useCompute(enabled = true): Compute {
     [refresh],
   );
 
-  // Clear once the poll confirms it is down.
   useEffect(() => {
     if (!stopping) return;
     const s = state?.targets.find((t) => t.id === stopping)?.state;
@@ -217,8 +182,7 @@ export function useCompute(enabled = true): Compute {
     launching,
     stop,
     stopping,
-    // Send only what changed: an omitted field keeps its current value, while
-    // an empty apiKey is an explicit "no bearer".
+    // An omitted field keeps its value; an empty apiKey means "no bearer".
     setTarget: (id, patch) =>
       act(`/compute/targets/${id}`, {
         method: "POST",

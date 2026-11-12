@@ -4,10 +4,8 @@ import { migrateStorageKey, STORAGE_NAMESPACE } from "./index";
 const OLD = "penumbra.thing";
 const NEW = `${STORAGE_NAMESPACE}.thing.v1`;
 
-// This package runs its tests under Node, which has no localStorage, and that is
-// the point: the server imports @penumbra/shared, so `migrateStorageKey` has to
-// be callable where web storage does not exist. The stub below installs one only
-// for the tests that need it, leaving the absent case genuinely absent.
+// Node has no localStorage, and the server imports this package, so the
+// migration must work without it.
 function installStorage(initial: Record<string, string> = {}) {
   const map = new Map(Object.entries(initial));
   const storage = {
@@ -40,7 +38,6 @@ describe("migrateStorageKey", () => {
     expect(map.has(NEW)).toBe(false);
   });
 
-  // The migration runs on every load, so it has to be safe to repeat.
   it("is idempotent", () => {
     const map = installStorage({ [OLD]: "kept" });
     migrateStorageKey(OLD, NEW);
@@ -48,8 +45,6 @@ describe("migrateStorageKey", () => {
     expect(map.get(NEW)).toBe("kept");
   });
 
-  // A value written under the current name is the live one; a legacy value still
-  // lying around is stale and must not overwrite it.
   it("never lets a stale legacy value clobber the current one", () => {
     const map = installStorage({ [OLD]: "stale", [NEW]: "current" });
     migrateStorageKey(OLD, NEW);

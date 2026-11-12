@@ -1,22 +1,11 @@
-// Contract probe: drives the REAL StudioClient and UnslothEngine against a
-// live Unsloth Studio, and reports which of our assumptions hold.
-//
-// Everything in the lab was built against Studio's documented API and tested
-// with a fake that encodes the same reading — so a fake can only catch our
-// bugs, never our misunderstandings. This is the only thing that catches those.
-//
-// Read-only: it lists, probes, and runs one chat turn. It starts no training.
-// Everything that changes Studio's state is opt-in and off unless you ask for it
-// by name — see the mutating section at the bottom.
-//
-// Two kinds of line. A ✅/❌ *check* asserts something the code already believes
-// and fails the run when it doesn't hold. A · *note* asks a question the code has
-// no answer for yet and prints what Studio said; notes never fail the run,
-// because "there is no such endpoint" is an answer, not a regression.
+// Drives the real StudioClient and UnslothEngine against a live Studio: the
+// fakes can only catch our bugs, not our misreadings of Studio. Read-only
+// unless an opt-in variable below is set. ✅/❌ checks fail the run; · notes
+// only report.
 //
 // Usage: UNSLOTH_BASE_URL=… UNSLOTH_API_KEY=… pnpm exec tsx src/lab/probe.mts
 //
-// Opt-in, each mutating and each off by default:
+// Opt-in, each mutating:
 //   PENUMBRA_PROBE_LOAD_CHECKPOINT=<dir>   does load-checkpoint reach /v1?
 //   PENUMBRA_PROBE_LOAD_MODEL=<id|path>    does /api/inference/load reach /v1?
 //   PENUMBRA_PROBE_DOWNLOAD_REPO=<repo>    start-then-cancel a hub download
@@ -43,7 +32,6 @@ async function check(name: string, fn: () => Promise<string>): Promise<void> {
   }
 }
 
-/** An observation, not an assertion. Never counts as a failure. */
 function note(name: string, detail: string): void {
   console.log(`·  ${name.padEnd(34)} ${detail}`);
 }
@@ -56,20 +44,14 @@ async function observe(name: string, fn: () => Promise<string>): Promise<void> {
   }
 }
 
-// The discovery probes below reach endpoints StudioClient has no method for —
-// that is precisely what makes them worth probing — so they use fetch directly.
-// The header rule is copied rather than shared for the same reason the client
-// states it: an empty bearer is rejected as malformed, so the header is omitted
-// entirely when there is no key.
+// Raw fetch for endpoints StudioClient lacks. No header without a key: Studio
+// rejects an empty bearer.
 const KEY = process.env.UNSLOTH_API_KEY;
 const authHeaders: Record<string, string> = KEY
   ? { Authorization: `Bearer ${KEY}` }
   : {};
 
-// 10s suits a listing. A load is a different animal — paging a multi-GB GGUF
-// into RAM and onto the GPU runs to minutes — and timing out on it would be
-// actively misleading: the abort happens here while Studio carries on loading,
-// so the probe would report a failure against a Studio that then works fine.
+// Loads take minutes; timing out here would misreport a load Studio finishes.
 async function raw(
   path: string,
   init: RequestInit = {},
@@ -94,7 +76,6 @@ await check("studio reachable", async () =>
     : Promise.reject(new Error("no answer")),
 );
 
-// getStatus is what the status pill and the engine resolver both key on.
 await check("engine getStatus", async () => {
   const engine = new UnslothEngine({
     bindings: { tools: [], system: "", runTool: async () => "" },
@@ -106,8 +87,7 @@ await check("engine getStatus", async () => {
   return `ready · ${status.model}`;
 });
 
-// The assumption the whole Tier-1 design rests on: Studio speaks OpenAI tool
-// calling, and client-supplied tools pass through untouched.
+// Tier 1 rests on this: Studio passes client-supplied tools through.
 await check("tool calling over /v1", async () => {
   const calls: string[] = [];
   const engine = new UnslothEngine({
@@ -134,8 +114,6 @@ await check("tool calling over /v1", async () => {
   return `called ${calls.join(", ")} → ${events.length} events`;
 });
 
-// Shapes the Model Lab consumes. These are read-only and safe to call even
-// when nothing has ever been trained.
 await check("GET /api/train/runs", async () => {
   const runs = await studio.listRuns();
   return `${runs.length} run(s); keys: ${
@@ -148,31 +126,11 @@ await check("GET /api/export/status", async () => {
   return `keys: ${Object.keys(status).join(",") || "(empty)"}`;
 });
 
-// ──────────────────────────────────────────────────────────────── discovery ──
-//
-// Benchmarking two models and comparing them needs an answer to three questions
-// the code cannot currently answer, because nothing in it ever changes which
-// model Studio serves:
-//
-//   1. Is there an endpoint that loads a model *for inference*? Today a
-//      benchmark posts a model id to /v1/chat/completions and hopes Studio is
-//      already serving it — swapping models is a manual step in Studio's own UI.
-//   2. Does /api/export/load-checkpoint affect /v1, or only the export pipeline?
-//      If it serves the checkpoint too, a base+adapter run is benchmarkable
-//      without a merge step.
-//   3. What model id does a loaded GGUF report, and can it be told apart from an
-//      unloaded one? Fact 7 says /v1/models lists both.
-//
-// Question 1 now has a candidate answer read off Studio's own source: inference
-// mounts at /api/inference with load/unload/load-progress, and a separate hub
-// router at /api/hub owns the inventory and an async download job API. That
-// reading is what the section below exists to confirm *against this build* —
-// the pip Studio and a source checkout are different trees, and committing a
-// Penumbra route to a path this Studio does not serve would surface as a 404
-// deep inside a handler rather than here.
-//
-// Everything here is read-only. The two probes that would change Studio — an
-// actual load, and starting a download — live in the opt-in section at the end.
+// Discovery: questions the code can't answer yet, checked against this Studio
+// build (pip and source trees differ).
+//   1. Which endpoint loads a model for inference (expected /api/inference)?
+//   2. Does /api/export/load-checkpoint also serve the checkpoint on /v1?
+//   3. Can a loaded GGUF be told apart from an unloaded one (fact 7)?
 
 console.log(
   `${"-".repeat(72)}\nDiscovery — questions the code has no answer for\n`,
@@ -191,9 +149,7 @@ await observe("GET /v1/models (full shape)", async () => {
   if (status !== 200) return `HTTP ${status}`;
   models = (JSON.parse(body) as { data?: ModelEntry[] }).data ?? [];
   if (!models.length) return "no entries — nothing loaded or downloaded";
-  // The `loaded` flag is the whole point: fact 7 says an unloaded GGUF sitting
-  // on disk is listed too, and reading data[0].id reports ready off a model the
-  // next completion will fail on.
+  // Fact 7: unloaded GGUFs are listed too.
   const flagged = models.filter((m) => m.loaded !== undefined).length;
   const lines = models
     .map(
@@ -209,9 +165,7 @@ await observe("GET /v1/models (full shape)", async () => {
 const loadedModel = models.find((m) => m.loaded === true) ?? models[0];
 const loadedId = loadedModel?.id;
 
-// Studio's backend is FastAPI (routers, 422-with-detail, the doubled
-// /api/export/export/gguf segment), so the generated schema should be served and
-// is authoritative — far better than guessing at route names.
+// Studio is FastAPI, so its OpenAPI schema is authoritative when served.
 let routeTable: string[] = [];
 
 await observe("GET /openapi.json", async () => {
@@ -237,9 +191,7 @@ if (routeTable.length) {
     }`,
   );
 } else {
-  // Fallback when the schema isn't served. A GET against a POST-only route is
-  // harmless and tells us the route exists: FastAPI answers 405 for a matched
-  // path with the wrong method, 404 for no such path.
+  // FastAPI answers 405 for a real path with the wrong method, 404 for none.
   const candidates = [
     "/api/models/load",
     "/api/model/load",
@@ -259,18 +211,8 @@ if (routeTable.length) {
   }
 }
 
-// ── The model-loading surface this build actually serves ────────────────────
-//
-// These paths come from Studio's own source: backend/main.py mounts inference at
-// /api/inference and a separate hub router at /api/hub, and routes/inference.py
-// plus hub/routes/inventory.py declare the rest. They are named one by one
-// rather than matched by pattern because the whole point is to catch the one
-// that is *missing here* — a filter over the route table reports what exists and
-// stays silent about what doesn't.
-//
-// These stay notes even when a route is absent. Nothing in Penumbra calls them
-// yet, so "no such endpoint" is a fact about this Studio rather than a broken
-// assumption in our code — the same rule the header states.
+// Named one by one so a missing route is reported. Notes, not checks: nothing
+// in Penumbra calls these yet.
 const LOADING_ROUTES: [method: string, path: string, why: string][] = [
   ["POST", "/api/inference/load", "load a model for inference"],
   ["POST", "/api/inference/unload", "free the GPU without loading another"],
@@ -287,14 +229,11 @@ const LOADING_ROUTES: [method: string, path: string, why: string][] = [
 console.log("");
 for (const [method, path, why] of LOADING_ROUTES) {
   await observe(`${method} ${path}`, async () => {
-    // The schema is authoritative and costs no requests, so prefer it.
     if (routeTable.length) {
       return routeTable.includes(`${method} ${path}`)
         ? `present — ${why}`
         : "ABSENT from the schema";
     }
-    // Without a schema, a GET at a POST-only route is harmless and FastAPI's
-    // status tells a real path with the wrong method apart from no path at all.
     const { status } = await raw(path);
     if (status === 404) return "404 — absent";
     if (status === 405) return `405 — present (POST-only) — ${why}`;
@@ -303,11 +242,8 @@ for (const [method, path, why] of LOADING_ROUTES) {
   });
 }
 
-// Existence is only half of it. The inventory is what a model picker in the app
-// would render, so its *shape* decides whether the picker can be built: `load_id`
-// is the string that goes back to load/train, and `model_format` decides which
-// benchmark suites can run at all (fact 6 — only a GGUF answers /v1/completions),
-// so a picker that hides it would let a user disqualify half the suites blind.
+// `load_id` is what goes back to load/train; `model_format` decides which
+// suites can run (fact 6).
 await observe("GET /api/hub/local (shape)", async () => {
   const { status, body } = await raw("/api/hub/local");
   if (status !== 200) return `HTTP ${status} — try /api/models/local instead`;
@@ -331,8 +267,7 @@ await observe("GET /api/hub/local (shape)", async () => {
   }\n${lines}${rows.length > 8 ? `\n      … ${rows.length - 8} more` : ""}`;
 });
 
-// Idle shape. Worth seeing before building a progress bar on it: `phase` is null
-// when nothing is loading, which is what the UI has to render most of the time.
+// `phase` is null when idle.
 await observe("GET /api/inference/load-progress", async () => {
   const { status, body } = await raw("/api/inference/load-progress");
   return status === 200 ? `200 — ${body.slice(0, 160)}` : `HTTP ${status}`;
@@ -343,8 +278,7 @@ await observe("GET /api/hub/active-downloads", async () => {
   return status === 200 ? `200 — ${body.slice(0, 160)}` : `HTTP ${status}`;
 });
 
-// Read-only against Studio, but it reaches the HuggingFace API to enumerate a
-// repo's quants, so it is named explicitly rather than run against a guess.
+// Reaches the HuggingFace API, so opt-in.
 const ggufRepo = process.env.PENUMBRA_PROBE_GGUF_REPO;
 if (ggufRepo) {
   await observe("GET /api/hub/gguf-variants", async () => {
@@ -357,10 +291,7 @@ if (ggufRepo) {
   note("gguf-variants", "skipped — set PENUMBRA_PROBE_GGUF_REPO=<repo_id>");
 }
 
-// Fact 6, re-checked because the whole multiple-choice suite plan turns on it:
-// /v1/completions is a passthrough to llama-server and answers only with a GGUF
-// loaded. So this doubles as "is the currently loaded model a GGUF?" — which is
-// the runtime test for whether loglikelihood tasks can run at all.
+// Fact 6: /v1/completions answers only with a GGUF loaded.
 await observe("POST /v1/completions", async () => {
   const { status, body } = await raw("/v1/completions", {
     method: "POST",
@@ -377,8 +308,7 @@ await observe("POST /v1/completions", async () => {
   return `HTTP ${status} — not a GGUF (or no passthrough): ${body.slice(0, 160)}`;
 });
 
-// The other half of fact 6: the chat endpoint works for any loaded model but
-// rejects logprobs, which is why general-v1 is generative-only.
+// Fact 6: chat rejects logprobs, hence generative-only general-v1.
 await observe("chat/completions + logprobs", async () => {
   const { status, body } = await raw("/v1/chat/completions", {
     method: "POST",
@@ -398,13 +328,8 @@ await observe("chat/completions + logprobs", async () => {
   return `HTTP ${status} — rejected as documented: ${body.slice(0, 160)}`;
 });
 
-// ── Opt-in, and the only things here that change Studio's state ─────────────
-//
-// Each is off unless named, because each can evict the model currently serving
-// inference (fact 3 says training does; there is no reason to assume a load
-// does not) or write bytes to the host's disk.
+// Opt-in mutating probes: each can evict the serving model or write to disk.
 
-/** `/v1/models` flattened to one comparable string, for before/after. */
 async function modelSignature(): Promise<string> {
   const { status, body } = await raw("/v1/models");
   if (status !== 200) return `(/v1/models answered ${status})`;
@@ -414,14 +339,12 @@ async function modelSignature(): Promise<string> {
     .join(" ");
 }
 
-/** Renders a before/after pair the same way for every mutating probe. */
 const diff = (before: string, after: string): string =>
   before === after
     ? "no change to /v1/models"
     : `CHANGED\n      before: ${before || "(empty)"}\n      after:  ${after || "(empty)"}`;
 
-// Question 2: whether /api/export/load-checkpoint also makes the checkpoint
-// servable on /v1, or only feeds the export pipeline.
+// Question 2.
 const checkpoint = process.env.PENUMBRA_PROBE_LOAD_CHECKPOINT;
 if (checkpoint) {
   console.log(
@@ -442,9 +365,7 @@ if (checkpoint) {
   );
 }
 
-// Question 1, answered directly. If this moves /v1/models, then loading from
-// Penumbra is a route away rather than a manual step in Studio's own UI, and
-// the whole model-picker plan rests on it.
+// Question 1.
 const loadModel = process.env.PENUMBRA_PROBE_LOAD_MODEL;
 if (loadModel) {
   console.log(
@@ -460,12 +381,10 @@ if (loadModel) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model_path: loadModel,
-          // Required for a GGUF repo and meaningless otherwise, so it is sent
-          // only when named — a wrong variant is a 4xx, not a silent fallback.
+          // Sent only when named: a wrong variant is a 4xx, not a fallback.
           ...(variant ? { gguf_variant: variant } : {}),
         }),
       },
-      // Weights page in from disk before this answers; minutes is normal.
       10 * 60_000,
     );
     if (status !== 200) {
@@ -480,11 +399,8 @@ if (loadModel) {
   );
 }
 
-// The download job's *contract*, without pulling gigabytes: start it, read the
-// 202, then cancel it scoped to the generation it just handed back. What matters
-// is that the lifecycle is observable and interruptible — a picker that cannot
-// cancel a 40 GB pull is not one anybody wants. A small repo may finish before
-// the cancel lands; that is reported rather than treated as a failure.
+// Start a download, then cancel it by the returned generation. A small repo
+// may finish first; that's reported, not a failure.
 const downloadRepo = process.env.PENUMBRA_PROBE_DOWNLOAD_REPO;
 if (downloadRepo) {
   console.log(

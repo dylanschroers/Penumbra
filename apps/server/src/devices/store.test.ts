@@ -2,10 +2,6 @@ import Database from "better-sqlite3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeviceStore, type DeviceStore } from "./store";
 
-// What is pinned here is the credential posture, not the CRUD. A token that can
-// be read back, a revoked device that still authenticates, or two devices
-// sharing a token would each defeat the point of issuing them per device.
-
 let db: Database.Database;
 let devices: DeviceStore;
 beforeEach(() => {
@@ -21,8 +17,7 @@ describe("issuing", () => {
       unknown
     >[];
     expect(rows).toHaveLength(1);
-    // The whole row, not just the columns we map: a token that leaked into any
-    // field would be usable by anyone who could read the database.
+    // The whole row, so a token leaked into any column fails.
     expect(JSON.stringify(rows[0])).not.toContain(token);
   });
 
@@ -62,7 +57,6 @@ describe("verifying", () => {
     expect(devices.verify("")).toBeNull();
   });
 
-  // The reason per-device tokens exist at all.
   it("stops accepting a revoked device", () => {
     const { token, device } = devices.issue("laptop");
     expect(devices.verify(token)).not.toBeNull();
@@ -89,8 +83,6 @@ describe("revoking", () => {
     expect(devices.revoke(device.id)).toBe(false);
   });
 
-  // "This used to have access and no longer does" is the question an audit
-  // asks, and deleting the row would erase the answer.
   it("keeps the device listed, marked revoked", () => {
     const { device } = devices.issue("laptop");
     devices.revoke(device.id);
@@ -112,8 +104,6 @@ describe("last seen", () => {
     expect(devices.list()[0]?.lastSeenAt).toEqual(expect.any(String));
   });
 
-  // Every gated request would otherwise be a write, and the Lab polls every two
-  // seconds. A minute's resolution answers the only question this value is for.
   it("does not write again on a second request in the same minute", () => {
     vi.useFakeTimers();
     try {

@@ -1,33 +1,22 @@
-// Server-side Plane A sync store. The database is *injected* (a parameter),
-// not a module-level singleton: production passes the shared better-sqlite3
-// handle, tests pass a fresh in-memory one. All the merge authority lives here
-// — LWW conflict resolution and monotonic `rev` assignment — while the routes
-// in ./tasks.ts are a thin HTTP shell over push()/pull(). See docs/SYNC.md.
-//
-// The server uses the better-sqlite3 driver directly rather than Drizzle: it
-// owns exactly one table, and staying off Drizzle avoids pulling a second,
-// peer-resolved copy of drizzle-orm into the workspace that would clash with
-// the client's. The shared Zod schema still governs the wire format, so the two
-// stores cannot drift. The DDL mirrors client migrations 0000_init +
-// 0001_add_sync_columns. A later move to Postgres is contained to this module.
+// The merge authority: LWW resolution and `rev` assignment (docs/SYNC.md).
+// Raw better-sqlite3, not Drizzle, to avoid a second peer-resolved drizzle-orm
+// copy clashing with the client's. DDL mirrors the client's 0000/0001
+// migrations.
 
 import { randomUUID } from "node:crypto";
 import type { SyncTask } from "@penumbra/shared";
 import type Database from "better-sqlite3";
 
 export interface TaskSyncStore {
-  /** Identity of this database ("epoch"), returned with every response. Revs
-   * are only meaningful within one database's lifetime, so a client that sees
-   * an unfamiliar id reconciles (docs/SYNC.md → Epochs). */
+  /**
+   * Revs are only meaningful within one database, so clients reconcile on an
+   * unfamiliar id (docs/SYNC.md → Epochs).
+   */
   readonly instanceId: string;
-  /** Pull: rows with `rev` past `since`, in rev order, plus the new cursor. */
   pull(since: number): { rows: SyncTask[]; cursor: number; serverId: string };
-  /** Push: LWW-merge the rows, stamping each accepted write the next `rev`. */
   push(rows: SyncTask[]): { cursor: number; serverId: string };
 }
 
-/** Build a sync store over the given database. Ensures the schema and mints (or
- *  reads) the instance id, then prepares its statements against that handle. */
 export function createTaskSyncStore(db: Database.Database): TaskSyncStore {
   db.exec(`
 CREATE TABLE IF NOT EXISTS tasks (
@@ -50,8 +39,7 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 `);
 
-  // Mint once at creation, or read the existing one. A restored backup keeps
-  // its id (its revs are still valid); a fresh or replaced file gets a new one.
+  // A restored backup keeps its id; a new or replaced file gets a new one.
   const instanceId = ((): string => {
     const row = db
       .prepare(`SELECT value FROM meta WHERE key = 'instance_id'`)
@@ -64,8 +52,6 @@ CREATE TABLE IF NOT EXISTS meta (
     return id;
   })();
 
-  // Column aliases map snake_case storage to the camelCase SyncTask wire shape,
-  // so rows read straight out of this statement are already valid sync rows.
   const selectSince = db.prepare(`
     SELECT id, user_id AS userId, title, notes, priority, status,
            due_at AS dueAt, created_at AS createdAt, updated_at AS updatedAt,
@@ -91,8 +77,6 @@ CREATE TABLE IF NOT EXISTS meta (
       rev = excluded.rev
   `);
 
-  // One transaction per push. Each accepted write takes the next rev, so the
-  // returned value is the server's high-water cursor after the batch.
   const applyPush = db.transaction((rows: SyncTask[]): number => {
     let rev = Number((maxRev.get() as { m: number }).m);
     for (const row of rows) {
@@ -100,8 +84,7 @@ CREATE TABLE IF NOT EXISTS meta (
         | { updatedAt: string }
         | undefined;
 
-      // ISO-8601 strings compare chronologically. Keep the stored row only when
-      // it is strictly newer; otherwise the incoming edit wins (ties included).
+      // Keep the stored row only if strictly newer; ties go to the incoming write.
       if (existing && row.updatedAt < existing.updatedAt) continue;
 
       rev += 1;

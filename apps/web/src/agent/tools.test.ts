@@ -4,9 +4,6 @@ import { getDb } from "../db/client";
 import { requestSync } from "../sync/SyncClient";
 import { runTool } from "./tools";
 
-// tools.ts reaches for the real local store and the sync loop; both are
-// replaced so runTool can be exercised in isolation. The mock factories are
-// hoisted above the imports, so tools.ts loads against these fakes.
 vi.mock("../db/client", () => ({ getDb: vi.fn() }));
 vi.mock("../sync/SyncClient", () => ({
   requestSync: vi.fn(),
@@ -16,7 +13,6 @@ vi.mock("../sync/SyncClient", () => ({
 const mockGetDb = vi.mocked(getDb);
 const mockRequestSync = vi.mocked(requestSync);
 
-/** A DbApi test double: every method a spy, overridable per test. */
 function fakeDb(overrides: Record<string, unknown> = {}) {
   const db = {
     createTask: vi.fn(),
@@ -78,7 +74,6 @@ describe("create_task", () => {
     const result = await runTool("create_task", { title: "buy milk" });
     window.removeEventListener("penumbra:synced", onSync);
 
-    // priority defaulted by the Zod schema, not the runner.
     expect(db.createTask).toHaveBeenCalledWith({
       title: "buy milk",
       priority: "medium",
@@ -86,7 +81,6 @@ describe("create_task", () => {
       notes: undefined,
     });
     expect(result).toContain('Created task "buy milk"');
-    // The bucket-2 fix: a write both refreshes the UI and pushes immediately.
     expect(synced).toBe(true);
     expect(mockRequestSync).toHaveBeenCalledOnce();
   });

@@ -1,7 +1,5 @@
-// Cross-platform launcher for fetch-assets.sh. `pnpm fetch-assets` runs npm
-// scripts through cmd.exe on Windows, where bash isn't on PATH even with Git
-// installed (Git exposes cmd/git.exe, not bin/bash.exe). This finds a bash and
-// hands off, so the .sh stays the single implementation.
+// `pnpm fetch-assets` runs through cmd.exe on Windows, where bash isn't on PATH
+// even with Git installed. This finds one and runs fetch-assets.sh.
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";

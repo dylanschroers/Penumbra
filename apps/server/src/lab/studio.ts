@@ -9,16 +9,9 @@ import {
   type SseFrame,
 } from "@penumbra/shared";
 
-// Typed client for Unsloth Studio's training, dataset, and export APIs.
-//
-// Credentials come from the same environment variables UnslothEngine uses, so
-// inference and training can never end up pointed at different Studios. The key
-// is *unscoped admin* — it can start jobs and write files — which is why it
-// lives on the server and no client ever sees it
-// (docs/MODEL_LAB.md → Deployment topology).
+// Typed client for Studio's training, dataset, and export APIs. The key is an
+// unscoped admin key and stays server-side.
 
-/** Studio's default address. Exported so the credential store resolves the same
- *  fallback this client would. */
 export const DEFAULT_STUDIO_URL = "http://127.0.0.1:8888";
 
 export interface StudioConfig {
@@ -27,21 +20,19 @@ export interface StudioConfig {
   env?: Record<string, string | undefined>;
 }
 
-/** Studio's report of a training run. Only the fields we consume are typed. */
 export interface StudioRun {
   id?: string;
   run_id?: string;
   output_dir?: string;
-  /** "running" | "completed" | "stopped" | "error". The run record is the only
-   *  place a crash is reported — the progress stream ends the same way either
-   *  way (see `startTraining`'s caller). */
+  /**
+   * "running" | "completed" | "stopped" | "error". The only place a crash shows:
+   * the progress stream ends the same either way.
+   */
   status?: string;
   error_message?: string | null;
 }
 
-/** One row of Studio's local inventory. Only the fields we consume are typed;
- *  `load_id` is the identifier to hand back to load or train, which is not
- *  always the display id. */
+/** `load_id` is what to hand back to load or train, not always the display id. */
 export interface StudioLocalModel {
   id?: string;
   load_id?: string;
@@ -52,24 +43,12 @@ export interface StudioLocalModel {
 }
 
 /**
- * Studio's id scheme for a model discovered in an Ollama store.
- *
- * These are filtered out of the listings, because Studio cannot load one. Its
- * inventory hands out these opaque references, and its own load route never
- * decodes them: `materialize_ollama_model_ref` in
- * hub/services/models/ollama.py exists for exactly this and, per that module's
- * own docstrings, is what "the load route later calls" — but nothing anywhere
- * calls it, and routes/inference.py does not mention ollama at all. Sent one,
- * Studio treats the whole string as a path, fails to read config.json, selects
- * the transformers runtime for what its own listing calls a GGUF, and dies in
- * AutoConfig. Offering a model that cannot load is worse than not offering it.
- *
- * Drop this filter if a later Studio wires the resolver up.
+ * Filtered out: Studio's inventory lists Ollama models, but its load route
+ * never resolves these refs (`materialize_ollama_model_ref` is never called),
+ * so loading one fails. Drop this if a later Studio wires it up.
  */
 const OLLAMA_REF_PREFIX = "ollama-manifest:";
 
-/** One quantization of a GGUF repo. `downloaded` is the difference between
- *  loading in seconds and pulling gigabytes first. */
 export interface GgufVariant {
   quant?: string;
   filename?: string;
@@ -77,13 +56,7 @@ export interface GgufVariant {
   downloaded?: boolean;
 }
 
-/**
- * Map Studio's inventory to the wire shape the pickers use.
- *
- * Shared by the two routes that offer models — the benchmark form's, resolved
- * by role, and the compute panel's, resolved by target — so the two cannot
- * disagree about what a model is called or which one is resident.
- */
+/** Shared by the benchmark form and the compute panel so they agree. */
 export function toAvailableModels(
   models: StudioLocalModel[],
   served: string | null,
@@ -96,27 +69,18 @@ export function toAvailableModels(
       format: m.model_format ?? "unknown",
       sizeBytes: m.size_bytes ?? 0,
       requiresVariant: m.capabilities?.requires_variant ?? false,
-      // Compared on the served id, which is what /v1/models reports and what a
-      // score is recorded against.
+      // Compared on the served id, which /v1/models reports and scores record.
       loaded: !!served && (id === served || m.id === served),
     };
   });
 
-  // A target can serve a model its inventory never mentions, and Colab is where
-  // that is normal rather than exotic: /api/hub/local scans disk (models dir, HF
-  // cache, LM Studio, Ollama) while /v1/models reports the resident backend's
-  // own identifier, so a model loaded from a checkpoint dir, under an id the
-  // scan spells differently, or through an inventory call that failed outright,
-  // is listed nowhere. Without this the served model — the only one a benchmark
-  // can actually measure — is the one option the picker does not offer, and the
-  // form then disables itself against a Studio with a model sitting loaded on
-  // the GPU.
+  // Colab often serves a model its disk inventory doesn't list, and it's the only
+  // one a benchmark can measure, so add it.
   if (served && !mapped.some((m) => m.loaded)) {
     mapped.push({
       id: served,
       label: served,
-      // Unknown rather than guessed: this row comes from /v1/models, which says
-      // what is answering and nothing about the file behind it.
+      // From /v1/models, which says nothing about the file format.
       format: "unknown",
       sizeBytes: 0,
       requiresVariant: false,
@@ -127,19 +91,9 @@ export function toAvailableModels(
 }
 
 /**
- * What a target can serve and what it is serving, as the pickers need it.
- *
- * Shared by the two routes that offer models — the benchmark form's, resolved by
- * role, and the compute panel's, resolved by target — so neither can disagree
- * with the other about a model's name or which one is resident.
- *
- * Either call is allowed to fail: a picker that lost its list is recoverable, an
- * error that blanks the panel is not. But a failure is *reported* rather than
- * swallowed, because "this target has nothing on it" and "the call asking it
- * failed" look identical as an empty list and need completely different fixes.
- * That is doubly true of the resident model: swallowing that one turns "we could
- * not ask what is loaded" into "nothing is loaded", which is a lie the benchmark
- * form then repeats.
+ * Either call may fail without blanking the picker, but failures are reported
+ * in `inventoryError`: an empty shelf and a failed call need different fixes,
+ * and "couldn't ask what's loaded" must not read as "nothing is loaded".
  */
 export async function readInventory(client: StudioClient): Promise<{
   models: AvailableModel[];
@@ -164,15 +118,12 @@ export async function readInventory(client: StudioClient): Promise<{
 
   return {
     models: toAvailableModels(models, served),
-    // The resident lookup first: it is the one whose failure is invisible in the
-    // list, and the one that decides whether a benchmark can run at all.
+    // The resident-model error wins: it decides whether a benchmark can run.
     inventoryError: servedError ?? listError,
   };
 }
 
-/** Where to publish an export, so it outlives the machine that produced it.
- *  The token belongs to the user and is passed straight through — never stored,
- *  never logged. */
+/** The token is passed through, never stored or logged. */
 export interface HubTarget {
   repoId: string;
   hfToken?: string;
@@ -182,8 +133,7 @@ export interface HubTarget {
 export interface TrainingStart {
   model_name: string;
   training_type: string;
-  /** Required by Studio. "auto" detects the dataset's shape; the alternatives
-   *  are alpaca, chatml, mistral, raw, custom, generic. */
+  /** "auto" | alpaca | chatml | mistral | raw | custom | generic. */
   format_type: string;
   local_datasets?: string[];
   hf_dataset?: string;
@@ -194,36 +144,24 @@ export interface TrainingStart {
 }
 
 /**
- * Studio's export state. There is deliberately no `status` field: progress is
- * reported as "is an export running" plus the outcome of the last operation.
- * Verified against a live Studio — an earlier version of this client polled a
- * non-existent `status` and would have waited forever.
+ * No `status` field: an export reports whether one is active plus the last
+ * op's outcome.
  */
 export interface ExportStatus {
   is_export_active?: boolean;
-  /** Monotonic op counter. Compare against a pre-export baseline to tell our
-   *  operation apart from one that already finished. */
+  /** Compare against a pre-export baseline. */
   last_op_seq?: number;
-  /** "success" | "error" | "cancelled". */
   last_op_status?: string | null;
   last_op_output_path?: string | null;
   last_op_error?: string | null;
 }
 
-/** One decoded SSE frame from Studio's progress stream. */
 export type StudioProgress = SseFrame<Record<string, unknown>>;
 
 /**
- * Studio's readiness as the lab reports it:
- * - `ready` — answering, authorized, and answering as *Studio*.
- * - `unauthorized` — up, but the key is missing or wrong (a 401/403). This is a
- *   *different* fix from "not running", so it is not collapsed into `stopped`.
- * - `not_studio` — something answered 200 that is not Studio's API: a sign-in
- *   page, a proxy's own response, a web UI on the port. Kept apart from `ready`
- *   because it is the failure that lies — every later call fails on a body that
- *   is not JSON, and "no model is loaded" is what that looks like from the
- *   inside.
- * - `stopped` — unreachable, or answering with some other error.
+ * `unauthorized`: up, bad key (a different fix from stopped). `not_studio`: a
+ * 200 that isn't Studio's API (sign-in page, proxy, web UI); later calls would
+ * fail on HTML and look like "no model loaded".
  */
 export type StudioReachability =
   | "ready"
@@ -231,40 +169,24 @@ export type StudioReachability =
   | "not_studio"
   | "stopped";
 
-/** The readiness probe's budget. Generous next to a localhost round trip
- *  because the target may be a tunnel to another continent, and a Colab that
- *  takes two seconds to answer is up, not down. */
+/** A Colab tunnel may take seconds to answer. */
 const PROBE_TIMEOUT_MS = 4000;
 
 /**
- * The default ceiling on an ordinary Studio call.
- *
- * Wide, because these are not latency budgets: `/api/hub/local` walks the models
- * dir, the HuggingFace cache, LM Studio and Ollama, and a big cache legitimately
- * takes many seconds. It is here because the alternative was unbounded — an
- * agent turn calling one of these had no way to end, so a Studio that accepted
- * the connection and went quiet froze the chat with no event and no error. The
- * calls that really can run for minutes (a checkpoint load, a quantization, a
- * multi-gigabyte upload) pass SLOW_CALL_TIMEOUT_MS instead.
+ * Not a latency budget: /api/hub/local scans several caches. Without a bound,
+ * a Studio that went quiet froze an agent turn. Long operations use
+ * SLOW_CALL_TIMEOUT_MS.
  */
 const REQUEST_TIMEOUT_MS = 60_000;
 
-/** For the handful of calls whose work is measured in minutes. */
 const SLOW_CALL_TIMEOUT_MS = 15 * 60_000;
 
 /**
- * What one probe learned.
- *
- * The model rides along because it costs nothing: readiness is decided by
- * reading `/v1/models`, and that listing *is* the answer to "what is loaded".
- * Reporting them together is what lets a panel that polls for reachability show
- * a model appear the moment it is loaded on the other machine, rather than
- * needing a second, heavier call nobody thought to repeat.
+ * The served model comes from the same `/v1/models` read as readiness, so the
+ * panel's poll picks up loads made elsewhere.
  */
 export interface StudioProbe {
   state: StudioReachability;
-  /** What it is serving right now, or null when it is serving nothing or was
-   *  in no state to be asked. */
   served: string | null;
 }
 
@@ -278,8 +200,7 @@ export class StudioClient {
     this.baseURL = normalizeBaseUrl(
       config.baseURL ?? env.UNSLOTH_BASE_URL ?? DEFAULT_STUDIO_URL,
     );
-    // Studio rejects an empty bearer as malformed, so omit the header entirely
-    // when there is no key (a trusted-LAN instance may run without one).
+    // Studio rejects an empty bearer as malformed.
     this.headers = key ? { Authorization: `Bearer ${key}` } : {};
   }
 
@@ -288,8 +209,7 @@ export class StudioClient {
     init: RequestInit = {},
     signal: AbortSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   ): Promise<T> {
-    // A multipart body carries its own content type with the boundary in it;
-    // declaring JSON over the top makes Studio reject the upload as malformed.
+    // A multipart body sets its own content type with the boundary.
     const multipart = init.body instanceof FormData;
     let res: Response;
     try {
@@ -303,17 +223,14 @@ export class StudioClient {
         signal,
       });
     } catch (err) {
-      // A bare TimeoutError names neither the call nor the wait, and these run
-      // inside an agent turn where the message *is* what the user is told.
+      // The message is what the user sees inside an agent turn.
       if (err instanceof Error && err.name === "TimeoutError") {
         throw new Error(`studio ${path} did not respond in time`);
       }
       throw err;
     }
     if (!res.ok) {
-      // Include the body. Studio answers a malformed request with a 422 whose
-      // detail names the offending field; without it the caller sees only
-      // "responded 422" and has to reproduce the call by hand to learn why.
+      // Studio's 422 body names the offending field.
       const detail = await res.text().catch(() => "");
       throw new StudioHttpError(
         res.status,
@@ -323,11 +240,6 @@ export class StudioClient {
     return (await res.json()) as T;
   }
 
-  /**
-   * The lab's readiness probe. Distinguishes "up but the key is wrong" from
-   * "not running", because a 401 sends you looking in the wrong place
-   * otherwise — the reason this returns three states rather than a boolean.
-   */
   async probe(): Promise<StudioProbe> {
     const nothing = (state: StudioReachability): StudioProbe => ({
       state,
@@ -343,50 +255,27 @@ export class StudioClient {
       }
       if (!res.ok) return nothing("stopped");
 
-      // A 200 is not proof this is Studio. The address is often a proxy or a
-      // tunnel, and those answer for themselves: a Google sign-in page (Colab's
-      // kernel proxy authenticates with the browser's session, so a server
-      // reaching it is redirected), a tunnel's own interstitial, or the Studio
-      // *web UI* on a port where the API is not. Every one of those is a 200
-      // with an HTML body, and calling it ready is the failure that lies —
-      // `loadedModel` then parses HTML, fails, and reports what looks exactly
-      // like a Studio with nothing loaded.
-      //
-      // The listing's own contract is the test: `data` is an array, empty when
-      // nothing is resident. Studio itself 404s an unknown /v1 path rather than
-      // falling through to its SPA, so anything else here came from in front.
+      // A 200 isn't proof of Studio: proxies, tunnels, Colab's sign-in redirect, or
+      // Studio's web UI all answer 200 with HTML. A real listing has an array
+      // `data`; Studio 404s unknown /v1 paths rather than serving its SPA.
       const body = (await res.json().catch(() => null)) as {
         data?: ModelCatalogEntry[];
       } | null;
       if (!Array.isArray(body?.data)) return nothing("not_studio");
-      // Read through the shared rule rather than by hand: an entry can be a
-      // model sitting on disk, and reporting one as served would put a name in
-      // the panel that no completion would ever come from.
+      // pickLoadedModel: on-disk entries must not be reported as served.
       return { state: "ready", served: pickLoadedModel(body.data) ?? null };
     } catch {
       return nothing("stopped");
     }
   }
 
-  /** True when Studio is answering and authorized. Kept for callers that only
-   *  need a yes/no; `probe()` carries the reason and the model. */
   async reachable(): Promise<boolean> {
     return (await this.probe()).state === "ready";
   }
 
   /**
-   * The model a completion would actually run against here, or null when
-   * nothing is resident.
-   *
-   * Studio serves whatever it has loaded and ignores the `model` field of a
-   * request — which is why UnslothEngine can send a placeholder and still get
-   * an answer. The consequence for benchmarking is that the model *named* in a
-   * run is not evidence of the model that produced the scores, so this is asked
-   * and recorded instead.
-   *
-   * Reads the listing through the shared rule: an unloaded model on disk is
-   * listed too, and reporting one would attribute a run to weights that never
-   * served it.
+   * Studio serves whatever is loaded and ignores the request's `model`, so this
+   * is what a run actually measures. Uses pickLoadedModel.
    */
   async loadedModel(): Promise<string | null> {
     const body = await this.json<{ data?: ModelCatalogEntry[] }>("/v1/models");
@@ -394,17 +283,8 @@ export class StudioClient {
   }
 
   /**
-   * Every model this Studio can serve: its own models dir, the HuggingFace
-   * cache, LM Studio, and Ollama, all in one listing.
-   *
-   * A different question from `/v1/models`, which reports what is *resident*.
-   * This is what could be, which is what a picker needs — and the two together
-   * are what let one say which of the offered models is the one a run would
-   * actually measure.
-   *
-   * Only chat-capable rows are returned: a benchmark drives a chat endpoint, so
-   * a base model that cannot hold a conversation is not a candidate. Verified
-   * against hub/routes/inventory.py → GET /api/hub/local.
+   * Everything Studio can serve (its models dir, HF cache, LM Studio, Ollama),
+   * unlike `/v1/models`, which is what's resident. Chat-capable rows only.
    */
   async listLocalModels(): Promise<StudioLocalModel[]> {
     const body = await this.json<{ models?: StudioLocalModel[] }>(
@@ -417,13 +297,7 @@ export class StudioClient {
     );
   }
 
-  /**
-   * The quantizations a GGUF repo offers, and which one Studio would pick.
-   *
-   * Answered from the local cache when possible: the alternative reaches the
-   * HuggingFace API, and this runs on the way to a load that is about to read
-   * those same files off disk anyway.
-   */
+  /** Prefers the local cache over the HuggingFace API. */
   async ggufVariants(
     repoId: string,
   ): Promise<{ variants: GgufVariant[]; defaultVariant?: string }> {
@@ -443,17 +317,9 @@ export class StudioClient {
   }
 
   /**
-   * Make a model resident, so completions run against it.
-   *
-   * One GPU holds one model, so this *evicts* whatever was loaded — including
-   * the model a conversation has been talking to (docs/MODEL_LAB.md → Compute
-   * targets). The caller is expected to know that; the transcript marker is what
-   * tells the user.
-   *
-   * A GGUF repo holds several quantizations and Studio will not guess between
-   * them, so one is resolved here when the caller did not name it. Weights page
-   * in from disk before this answers, which for a large model is minutes, hence
-   * the timeout far past the default.
+   * Evicts whatever was loaded. Resolves a GGUF quant if none is named, since
+   * Studio won't guess. Weights page in before it answers, hence the long
+   * timeout.
    */
   async loadModel(modelPath: string, variant?: string): Promise<void> {
     await this.json(
@@ -470,17 +336,8 @@ export class StudioClient {
   }
 
   /**
-   * Whether a load is still working inside Studio.
-   *
-   * Two endpoints because the two backends report differently: a transformers
-   * load appears in `/api/inference/status`'s `loading` list, while a GGUF load
-   * shows up only as a `/api/inference/load-progress` phase (status reports the
-   * llama backend as not-loaded and the *other* backend's empty loading set).
-   * Either one working is enough to say "still going".
-   *
-   * Never throws: this answers a question about a connection that has already
-   * gone wrong once, and an unreachable Studio is simply not loading anything
-   * we can see.
+   * A transformers load shows in `/api/inference/status`, a GGUF load only in
+   * `/api/inference/load-progress`. Never throws.
    */
   async loadInFlight(): Promise<boolean> {
     const probe = <T>(path: string): Promise<T | null> =>
@@ -495,13 +352,11 @@ export class StudioClient {
   }
 
   /**
-   * Start a training run. Studio permits only one at a time and answers a
-   * second request with `status: "error"` rather than a non-2xx, so that case
-   * is detected here and raised as a distinct, catchable error.
+   * Studio answers a second concurrent run with `status: "error"`, not a
+   * non-2xx.
    */
   async startTraining(body: TrainingStart): Promise<void> {
-    // Slow: Studio loads the base model before it answers, so a first run on a
-    // cold cache legitimately sits here for minutes.
+    // Studio loads the base model before answering.
     const result = await this.json<{ status?: string; message?: string }>(
       "/api/train/start",
       { method: "POST", body: JSON.stringify(body) },
@@ -513,17 +368,9 @@ export class StudioClient {
   }
 
   /**
-   * Hand a dataset file to Studio and return the path Studio stored it at.
-   *
-   * Studio will not train from an arbitrary absolute path: `resolve_dataset_path`
-   * accepts one only if it sits under a Studio dataset root, and answers
-   * anything else with "dataset path must be relative or under a dataset root".
-   * Our upload root is deliberately elsewhere (a different drive, often a
-   * different machine), so a local dataset has to go *through* Studio to become
-   * a path Studio will open.
-   *
-   * Streamed from disk as a Blob rather than read whole — the file is already on
-   * this host and there is no reason to hold it in memory too.
+   * Studio only trains from paths under its own dataset roots, and our upload
+   * root is elsewhere, so datasets go through Studio's upload. Streamed from
+   * disk.
    */
   async uploadDataset(localPath: string): Promise<string> {
     const form = new FormData();
@@ -531,7 +378,6 @@ export class StudioClient {
     const res = await this.json<{ stored_path?: string; filename?: string }>(
       "/api/datasets/upload",
       { method: "POST", body: form },
-      // A multi-gigabyte dataset to a tunnelled Studio is minutes of transfer.
       AbortSignal.timeout(SLOW_CALL_TIMEOUT_MS),
     );
     if (!res.stored_path) {
@@ -551,7 +397,6 @@ export class StudioClient {
     return Array.isArray(body) ? body : (body.runs ?? []);
   }
 
-  /** Stream training progress. Yields decoded frames until the stream ends. */
   async *trainingProgress(
     signal?: AbortSignal,
   ): AsyncGenerator<StudioProgress> {
@@ -561,7 +406,6 @@ export class StudioClient {
     });
     if (!res.ok) throw new Error(`studio progress responded ${res.status}`);
     if (!res.body) return;
-    // "skip": one malformed frame must not kill a run that may have hours left.
     yield* readSseFrames<Record<string, unknown>>(res.body, {
       onParseError: "skip",
     });
@@ -574,20 +418,15 @@ export class StudioClient {
         method: "POST",
         body: JSON.stringify({ checkpoint_path: checkpointPath }),
       },
-      // Reads a checkpoint off disk into memory before answering.
       AbortSignal.timeout(SLOW_CALL_TIMEOUT_MS),
     );
   }
 
   /**
-   * Note the doubled segment: the export router mounts at `/api/export` and
-   * declares this route as `/export/gguf`, so the real path is
-   * `/api/export/export/gguf`. `/api/export/gguf` answers 405. Verified live —
-   * the plan's shorthand for this endpoint was wrong.
-   *
-   * With `hub` set, Studio also pushes the result to the HuggingFace Hub. That
-   * is the only exit for an artifact from a trainer whose disk is temporary:
-   * nothing in Studio's API serves an export back for download.
+   * The doubled segment is real: the router mounts at `/api/export` and
+   * declares `/export/gguf`. `/api/export/gguf` answers 405. With `hub`, Studio
+   * also pushes to the Hub, the only way an artifact leaves an ephemeral
+   * trainer.
    */
   async exportGguf(
     saveDirectory: string,
@@ -601,8 +440,7 @@ export class StudioClient {
         body: JSON.stringify({
           save_directory: saveDirectory,
           quantization_method: quantization,
-          // Studio ignores repo_id/hf_token unless push_to_hub is set, so the
-          // flag and the target always travel together.
+          // Studio ignores repo_id/hf_token without push_to_hub.
           ...(hub
             ? {
                 push_to_hub: true,
@@ -613,8 +451,7 @@ export class StudioClient {
             : {}),
         }),
       },
-      // Quantization routinely outlives its own request; the caller's polling
-      // loop is what settles the outcome either way.
+      // Usually outlives its request; the caller's polling settles it.
       AbortSignal.timeout(SLOW_CALL_TIMEOUT_MS),
     );
   }
@@ -625,11 +462,8 @@ export class StudioClient {
 }
 
 /**
- * A non-2xx from Studio, carrying the status alongside the message.
- *
- * The status is the difference between "Studio read the request and refused it"
- * and "something between here and Studio gave up" — a distinction the load path
- * acts on, because only the second may still be running on the other side.
+ * The status distinguishes Studio refusing from a hop in between giving up;
+ * only the latter may still be running.
  */
 export class StudioHttpError extends Error {
   constructor(
@@ -641,8 +475,6 @@ export class StudioHttpError extends Error {
   }
 }
 
-/** Studio allows one training run at a time; a second start is a 409, not a
- *  crash. Typed so the route can say so plainly. */
 export class TrainingBusyError extends Error {
   constructor(message: string) {
     super(message);

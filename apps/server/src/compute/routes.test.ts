@@ -6,13 +6,7 @@ import { registerComputeRoutes } from "./routes";
 import type { LaunchOutcome, StopOutcome } from "./studioLauncher";
 import { createTargetStore, type TargetStore } from "./targets";
 
-// The HTTP surface over compute targets. Most of these cases came from
-// /lab/provider/* — the settings themselves are unchanged, they just stopped
-// being the Lab's private business once chat started reading them.
-//
-// No Studio is running in these tests, so every probe reports "stopped". That
-// is fine: what is under test here is configuration and assignment, not
-// reachability, which StudioClient.probe covers on its own.
+// No Studio runs here, so every probe reports "stopped".
 
 let app: FastifyInstance;
 let targets: TargetStore;
@@ -33,12 +27,7 @@ const local = (body: { targets: { id: string }[] }) =>
 const colab = (body: { targets: { id: string }[] }) =>
   body.targets.find((t) => t.id === "colab");
 
-// Changing which model a target serves, from the panel that already says which
-// target answers. One GPU holds one model, so a load is always a replacement —
-// which is why the route reports what Studio ended up with rather than echoing
-// what was asked for.
 describe("model loading", () => {
-  /** Rebuild the app with a Studio stand-in for the local target. */
   async function withStudio(over: Record<string, unknown>) {
     await app.close();
     app = Fastify();
@@ -46,9 +35,6 @@ describe("model loading", () => {
       targets,
       makeClient: () =>
         ({
-          // The probe carries the model with the state: they come from one
-          // reading of /v1/models, so a fake that split them could not drift
-          // the way the real client cannot.
           probe: async () => ({ state: "ready", served: "resident-model" }),
           loadedModel: async () => "resident-model",
           listLocalModels: async () => [],
@@ -60,8 +46,6 @@ describe("model loading", () => {
           loadInFlight: async () => false,
           ...over,
         }) as unknown as StudioClient,
-      // A lost response is waited out by polling; these tests are not going to
-      // sit through three seconds of it.
       loadPollMs: 1,
       loadSettleMs: 500,
     });
@@ -69,9 +53,6 @@ describe("model loading", () => {
     return app;
   }
 
-  // The poll is the only call repeated while a panel sits open, so what is
-  // loaded rides on it. Without that, a model loaded in Studio's own UI on
-  // another machine stays invisible until someone re-opens the panel.
   it("reports the resident model with the target's state", async () => {
     const app = await withStudio({});
     const body = (await app.inject({ url: "/compute/targets" })).json();
@@ -117,10 +98,7 @@ describe("model loading", () => {
     });
   });
 
-  // A Colab Studio has nothing on disk until something is downloaded, and the
-  // model it is serving may have come from a checkpoint dir or straight from
-  // HuggingFace. Offering only inventory rows hid the one model that could
-  // answer, on the target where that is the normal case.
+  // Colab often serves a model its inventory doesn't list.
   it("offers the resident model even when the inventory does not list it", async () => {
     const app = await withStudio({ listLocalModels: async () => [] });
 
@@ -140,8 +118,6 @@ describe("model loading", () => {
     expect(body.inventoryError).toBeNull();
   });
 
-  // An empty list and a list that failed to load send you to different places,
-  // so the panel is told which happened rather than left to guess.
   it("reports why an inventory is empty when the call failed", async () => {
     const app = await withStudio({
       listLocalModels: async () => {
@@ -153,7 +129,6 @@ describe("model loading", () => {
       await app.inject({ url: "/compute/targets/local/models" })
     ).json();
     expect(body.inventoryError).toContain("500");
-    // Still usable: what is loaded is still what a benchmark would measure.
     expect(body.models).toMatchObject([{ id: "resident-model", loaded: true }]);
   });
 
@@ -172,10 +147,8 @@ describe("model loading", () => {
       payload: { model: "a/gguf" },
     });
     expect(res.statusCode).toBe(200);
-    // Not echoed from the request: Studio is the authority on what it serves.
     expect(res.json()).toEqual({ loaded: "a/gguf" });
-    // A GGUF repo holds several quants and Studio will not choose, so its own
-    // default is resolved on the way through.
+    // Studio won't pick a GGUF quant, so the repo default is resolved first.
     expect(loads).toEqual([["a/gguf", "Q4_K_M"]]);
   });
 
@@ -194,8 +167,6 @@ describe("model loading", () => {
     expect(loads).toEqual([["a/gguf", "UD-Q8_K_XL"]]);
   });
 
-  // "It did not load" with no reason sends you to Studio's logs for something
-  // this call already knows.
   it("reports why a load failed", async () => {
     const app = await withStudio({
       loadModel: async () => {
@@ -215,23 +186,18 @@ describe("model loading", () => {
     expect(res.json().message).toContain("OOM");
   });
 
-  // The Colab case. A load holds the connection while weights page in and the
-  // tunnel cuts at ~100s, so the response is lost while the load carries on —
-  // reporting that as a failure would send you to reload a model that is
-  // already there.
+  // A Colab tunnel cuts at ~100s while the load carries on, so a lost response
+  // is not a failure.
   it("waits out a lost response and reports what ended up loaded", async () => {
     let served = "resident-model";
     const app = await withStudio({
       loadModel: async () => {
-        // What a cut tunnel looks like from here: a gateway status, not
-        // Studio's own answer.
         throw new StudioHttpError(
           524,
           "studio /api/inference/load responded 524",
         );
       },
       loadedModel: async () => served,
-      // Still paging weights in for one poll, then done.
       loadInFlight: async () => {
         served = "new-model";
         return true;
@@ -247,8 +213,6 @@ describe("model loading", () => {
     expect(res.json()).toEqual({ loaded: "new-model" });
   });
 
-  // The same drop, with nothing to show for it: Studio settles with the model
-  // it already had, so the original error is the honest answer.
   it("gives up on a lost response that never loads anything", async () => {
     const app = await withStudio({
       loadModel: async () => {
@@ -308,7 +272,6 @@ describe("model loading", () => {
 });
 
 describe("auth", () => {
-  // Same class of endpoint as /lab and /agent: it decides where a model runs.
   it("refuses a non-loopback caller with no token configured", async () => {
     const res = await app.inject({
       url: "/compute/targets",
@@ -359,7 +322,6 @@ describe("GET /compute/targets", () => {
   });
 });
 
-// Rotating Studio's key used to mean editing .env and restarting the server.
 describe("POST /compute/targets/:id", () => {
   it("stores a rotated key and says the settings now govern", async () => {
     const res = await app.inject({
@@ -411,8 +373,6 @@ describe("POST /compute/targets/:id", () => {
     });
   });
 
-  // A key with nothing to attach it to would store silently and read as a save
-  // that worked.
   it("refuses a Colab key before an address is known", async () => {
     const res = await app.inject({
       method: "POST",
@@ -467,12 +427,8 @@ describe("DELETE /compute/targets/:id", () => {
   });
 });
 
-// Starting the local Studio from the panel. The gate here is stricter than the
-// rest of the surface — it spawns a process on the host — so loopback is
-// required on top of auth, and only the local target qualifies.
+// Launch needs loopback on top of auth, local target only.
 describe("POST /compute/targets/:id/launch", () => {
-  /** Rebuild the app with an injected launcher and, optionally, a Studio probe
-   *  state, so nothing here starts a real server. */
   async function withLauncher(opts: {
     launch?: () => LaunchOutcome;
     launchConfigured?: boolean;
@@ -523,8 +479,6 @@ describe("POST /compute/targets/:id/launch", () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
-  // Loopback is required on top of the token, not instead of it: a valid device
-  // token from another machine still cannot start a process here.
   it("refuses a valid token from off-machine", async () => {
     const launch = vi.fn((): LaunchOutcome => ({ ok: true }));
     const app = await withLauncher({ launch, token: "secret" });
@@ -562,8 +516,6 @@ describe("POST /compute/targets/:id/launch", () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
-  // A Studio already answering means the port is taken; a second process would
-  // only fail to bind, so don't start one.
   it("does not launch over a Studio that is already up", async () => {
     const launch = vi.fn((): LaunchOutcome => ({ ok: true }));
     const app = await withLauncher({ launch, probeState: "ready" });
@@ -613,8 +565,6 @@ describe("POST /compute/targets/:id/launch", () => {
       near.targets.find((t: { id: string }) => t.id === "colab"),
     ).toMatchObject({ canLaunch: false });
 
-    // Off-loopback needs a token to be served at all; the point is canLaunch is
-    // false even so.
     await app.close();
     app = Fastify();
     registerComputeRoutes(app, {
@@ -648,12 +598,7 @@ describe("POST /compute/targets/:id/launch", () => {
   });
 });
 
-// Stopping the local Studio. Same strict gate as launch — loopback required on
-// top of auth, local target only — but simpler: no probe, since stopping an
-// already-stopped Studio is a harmless no-op.
 describe("POST /compute/targets/:id/stop", () => {
-  /** Rebuild the app with an injected stopper, so nothing here shuts a real
-   *  server down. */
   async function withStopper(opts: {
     stop?: () => StopOutcome;
     stopConfigured?: boolean;
@@ -666,8 +611,6 @@ describe("POST /compute/targets/:id/stop", () => {
       token: opts.token,
       stop: opts.stop ?? (() => ({ ok: true })),
       stopConfigured: opts.stopConfigured ?? true,
-      // A fast fake probe so the /compute/targets listing doesn't reach for a
-      // real Studio (which would hang the canStop cases).
       makeClient: () =>
         ({
           probe: async () => ({ state: "stopped" as const, served: null }),
@@ -702,8 +645,6 @@ describe("POST /compute/targets/:id/stop", () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
-  // Loopback is required on top of the token, not instead of it: a valid device
-  // token from another machine still cannot stop a process here.
   it("refuses a valid token from off-machine", async () => {
     const stop = vi.fn((): StopOutcome => ({ ok: true }));
     const app = await withStopper({ stop, token: "secret" });
@@ -828,9 +769,6 @@ describe("POST /compute/assign", () => {
     });
   });
 
-  // Colab's config dies with the process, so an assignment can outlive the
-  // target it names. Reporting both is what lets the UI say so instead of
-  // misreporting where answers come from.
   it("reports the fallback when the assigned target is not configured", async () => {
     const res = await app.inject({
       method: "POST",

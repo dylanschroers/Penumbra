@@ -1,16 +1,8 @@
-// Parse the head of a dataset file, recognise its schema, and validate it — the
-// analysis behind the Model Lab's dataset preview. Pure and synchronous: the
-// caller reads the bounded head (fsClient.readHead) and hands the text here.
-//
-// The point is to catch, before a run starts, the two failures that otherwise
-// surface minutes later as an opaque error from Studio: a file in a shape the
-// trainer can't read, and a schema the SFT path can't train at all (preference
-// data). It also preselects Studio's `format_type` so the trainer reads the
-// file the way the file is actually written.
+// Catches, before a run, a shape the trainer can't read and preference data
+// the SFT path can't train. Also preselects Studio's `format_type`.
 
 import type { DatasetFormat } from "./datasetLibrary";
 
-/** The record shape we recognise. */
 export type DatasetSchema =
   | "alpaca" // { instruction, input?, output }
   | "chatml" // { messages: [{ role, content }] }
@@ -19,7 +11,6 @@ export type DatasetSchema =
   | "raw" // { text }
   | "unknown";
 
-/** The subset of Studio's `format_type` we map a detected schema onto. */
 export type FormatType = "auto" | "alpaca" | "chatml" | "raw" | "generic";
 
 export interface PreviewIssue {
@@ -29,21 +20,16 @@ export interface PreviewIssue {
 
 export interface DatasetPreview {
   schema: DatasetSchema;
-  /** The Studio `format_type` to preselect for this schema. */
   formatType: FormatType;
-  /** False when the SFT fine-tune path can't train this schema (preference/DPO). */
+  /** False for preference/DPO data. */
   trainable: boolean;
-  /** Parsed sample records from the head (bounded). */
   records: unknown[];
-  /** Records counted in the head. */
   count: number;
-  /** True when `count` is the whole file; false when it's a sample of the head. */
+  /** False when `count` is a sample of the head. */
   exact: boolean;
   issues: PreviewIssue[];
 }
 
-// How many records to weigh when deciding the schema and validating. A dataset
-// is normally homogeneous, so a sample settles it.
 const SAMPLE = 50;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -54,7 +40,6 @@ function nonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.trim() !== "";
 }
 
-/** Split a CSV line on commas, honouring simple `"..."` quoting. */
 function splitCsv(line: string): string[] {
   const out: string[] = [];
   let cur = "";
@@ -85,15 +70,13 @@ function splitCsv(line: string): string[] {
 
 interface Parsed {
   records: unknown[];
-  /** Lines/records that failed to parse (JSON only). */
   parseErrors: number;
   exact: boolean;
 }
 
 function parseJsonl(head: string, truncated: boolean): Parsed {
   const lines = head.split("\n");
-  // A truncated read almost always cuts the last line mid-record; drop it so it
-  // doesn't read as a parse error.
+  // A truncated read usually cuts the last line mid-record.
   if (truncated) lines.pop();
   const records: unknown[] = [];
   let parseErrors = 0;
@@ -115,8 +98,7 @@ function parseJson(head: string, truncated: boolean): Parsed {
     const records = Array.isArray(value) ? value : [value];
     return { records, parseErrors: 0, exact: !truncated };
   } catch {
-    // A truncated single big array can't parse from its head — expected, not an
-    // error. A complete file that won't parse is genuinely malformed.
+    // A truncated single array can't parse from its head; that's expected.
     return { records: [], parseErrors: truncated ? 0 : 1, exact: false };
   }
 }
@@ -150,7 +132,6 @@ function classify(r: unknown): DatasetSchema {
   return "unknown";
 }
 
-/** The dominant schema across the sample, and how many records dissented. */
 function detectSchema(records: unknown[]): {
   schema: DatasetSchema;
   dissent: number;
@@ -164,7 +145,6 @@ function detectSchema(records: unknown[]): {
   let schema: DatasetSchema = "unknown";
   let best = -1;
   for (const [s, n] of counts) {
-    // Prefer any recognised schema over "unknown" on a tie.
     if (n > best || (n === best && schema === "unknown")) {
       best = n;
       schema = s;
@@ -180,14 +160,12 @@ const FORMAT_OF: Record<
 > = {
   alpaca: { formatType: "alpaca", trainable: true },
   chatml: { formatType: "chatml", trainable: true },
-  // Studio ingests ShareGPT conversations as chat; chatml is the closest type.
   sharegpt: { formatType: "chatml", trainable: true },
   preference: { formatType: "auto", trainable: false },
   raw: { formatType: "raw", trainable: true },
   unknown: { formatType: "auto", trainable: true },
 };
 
-/** Count records failing a per-record predicate, over the sample. */
 function countBad(
   records: unknown[],
   bad: (r: Record<string, unknown>) => boolean,
@@ -270,10 +248,6 @@ function validate(schema: DatasetSchema, records: unknown[]): PreviewIssue[] {
   return issues;
 }
 
-/**
- * Analyse the head of a dataset file. `truncated` (from readHead) tells us
- * whether the count is exact or a sample.
- */
 export function analyzeHead(
   head: string,
   format: DatasetFormat,
@@ -321,7 +295,6 @@ export function analyzeHead(
         "This .json is one large array; a preview would need the whole file.",
     });
   }
-  // Only flag dissent for a schema that was actually recognised.
   if (schema !== "unknown" && dissent > 0) {
     issues.push({
       level: "warn",

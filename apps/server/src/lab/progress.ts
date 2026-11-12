@@ -1,80 +1,43 @@
-// Turning a benchmark's output into something a job row can show.
-//
-// Both suites report where they are, and neither said so in a form anyone could
-// read. The general suite piped raw chunks off lm_eval's pipes straight into the
-// job's detail — a carriage-return tqdm frame, truncated mid-bar at 200 chars —
-// and never set `progress` at all, so the UI could not draw a bar even in
-// principle. A run at 48 seconds a request then looked exactly like a hung one
-// for two hours.
-//
-// Pure functions here, because every hard case is a string shape: the rate
-// arrives as `s/it` or `it/s` depending on which side of one-per-second it
-// falls, the remaining time is `?` until tqdm has a rate to extrapolate from,
-// and a chunk off a pipe holds several frames, or half of one.
+// Parses benchmark output into progress for the job row. Rates come as s/it or
+// it/s, the estimate is `?` until tqdm has a rate, and a pipe chunk holds
+// several frames or half of one.
 
-/** What a line of output says about a run's position. */
 export interface RunProgress {
-  /** 0..1 where the output says so, else null — the job keeps its last value
-   *  rather than blanking a bar that was correct. */
+  /** Null keeps the job's last value. */
   progress: number | null;
-  /** The line to show, already short enough for a job row. */
   detail: string;
 }
 
-/** The job row is one line in a strip; anything longer is not read anyway. */
 const MAX_DETAIL = 200;
 
 /**
- * Longest line TQDM_FRAME is allowed to scan.
- *
- * Not a tidiness rule — it is half of what stops long output from stalling the
- * server. TQDM_FRAME is unanchored, so a line that is not a frame is retried
- * from every position, and the lazy label re-expands at each: quadratic in the
- * line's length however tight the pattern is. Node runs this on the only thread
- * it has, so a stall here is chat, sync, and the lab UI frozen together, in the
- * middle of a benchmark.
- *
- * The other half is the pattern itself (see TQDM_FRAME). Both are load-bearing,
- * and each alone leaves a hole — measured on whitespace-padded lm_eval-shaped
- * output, scanning as readOutputChunk does:
+ * Load-bearing. TQDM_FRAME is unanchored, so a non-frame line is retried from
+ * every position: quadratic in length, on Node's only thread. The cap bounds
+ * one line; the pattern's shape bounds each line. Measured on 64 KB of
+ * lm_eval-like output:
  *
  *                                 one 64 KB line   64 KB of 500-char lines
  *     cap only, ambiguous pattern         0.2 ms                   7193 ms
  *     pattern only, no cap                3643 ms                    28 ms
  *     both (what this ships)              0.1 ms                     27 ms
  *
- * The cap bounds one line; the pattern bounds the per-line constant, which is
- * what the cap cannot do when a chunk holds a hundred lines just under it.
- *
- * A real frame is around 66 characters, so 512 leaves roughly sevenfold
- * headroom while refusing anything that could not be one.
+ * A real frame is ~66 chars.
  */
 const MAX_FRAME_LINE = 512;
 
 /**
- * One tqdm frame, as lm-eval writes them:
- *
  *     Requesting API:  18%|█▊        | 33/180 [13:25<1:54:32, 46.75s/it]
  *
- * The trailing group is optional because the first frames carry no rate yet
- * (`[00:01<?, ?it/s]`), and the label is optional because not every bar has a
- * description.
- *
- * Do not put `\s*` back between the label and `\d+%`. The label already matches
- * whitespace, so the two quantifiers overlap and the engine retries every way
- * of splitting a run of spaces between them — 250x the cost on padded output,
- * enough to stall the event loop for seconds (see MAX_FRAME_LINE). The label
- * absorbs the spaces instead and the use site trims them, which is what it did
- * with the trailing `:` anyway.
+ * Early frames have no rate (`[00:01<?, ?it/s]`). Do not put `\s*` back
+ * between the label and `\d+%`: the label already matches whitespace, and the
+ * overlap is 250x slower on padded output (see MAX_FRAME_LINE).
  */
 const TQDM_FRAME =
   /(?<label>[^|\r\n]*?)\d+%\|[^|]*\|\s*(?<done>\d+)\/(?<total>\d+)\s*\[(?<elapsed>[\d:]+)<(?<remain>[\d:?]+)(?:,\s*(?<rate>[\d.]+)(?<unit>s\/it|it\/s))?/;
 
-/** A bar's own characters. A chunk boundary can split a frame, and half a
- *  progress bar as the status line is worse than the line it replaced. */
+/** Detects half a bar split across chunks. */
 const BAR_CHARS = /%\||[█-▏]|░|▒|▓/;
 
-/** tqdm's `H:MM:SS` or `MM:SS` as seconds, or null for its `?`. */
 function toSeconds(clock: string): number | null {
   if (clock.includes("?")) return null;
   const parts = clock.split(":").map(Number);
@@ -82,13 +45,7 @@ function toSeconds(clock: string): number | null {
   return parts.reduce((total, part) => total * 60 + part, 0);
 }
 
-/**
- * Seconds as a duration worth reading at a glance: `1h58m`, `6m`, `45s`.
- *
- * Deliberately a duration and never a clock time. The detail line is written on
- * the server and read on whatever device has the app open, and "done ~21:55"
- * from another timezone is worse than no estimate at all.
- */
+/** A duration, never a clock time: the reader may be in another timezone. */
 export function formatDuration(seconds: number): string {
   const whole = Math.max(0, Math.round(seconds));
   const hours = Math.floor(whole / 3600);
@@ -98,22 +55,12 @@ export function formatDuration(seconds: number): string {
   return `${whole}s`;
 }
 
-/** The pace, in whichever direction tqdm chose to report it. */
 function formatRate(rate: string, unit: string): string {
   return unit === "s/it" ? `${Number(rate).toFixed(1)}s each` : `${rate}/s`;
 }
 
-/**
- * Read one tqdm frame, or null when the line is not one.
- *
- * The frame carries everything the job row wants — position, pace, and how much
- * longer — which is why parsing it beats every alternative: no extra flags on
- * the child, no second channel, and it works for whichever bar lm_eval decides
- * to show for a given task.
- */
 export function parseTqdmFrame(line: string): RunProgress | null {
-  // Before the match, not after: see MAX_FRAME_LINE. A line this long is not a
-  // frame, and finding that out by scanning it is the expensive part.
+  // Before the match: scanning a long line is the expensive part.
   if (line.length > MAX_FRAME_LINE) return null;
   const match = TQDM_FRAME.exec(line);
   if (!match?.groups) return null;
@@ -126,8 +73,7 @@ export function parseTqdmFrame(line: string): RunProgress | null {
   const parts = [`${label?.trim() || "progress"} ${at}/${of}`];
   if (rate && unit) parts.push(formatRate(rate, unit));
 
-  // No estimate on the last frame: "~0s left" on a finished bar reads as a
-  // stall, and tqdm reports 00:00 remaining there rather than nothing.
+  // tqdm reports 00:00 on the last frame; "~0s left" reads as a stall.
   const remaining = toSeconds(remain ?? "?");
   if (at < of && remaining !== null && remaining > 0) {
     parts.push(`~${formatDuration(remaining)} left`);
@@ -140,15 +86,8 @@ export function parseTqdmFrame(line: string): RunProgress | null {
 }
 
 /**
- * What one chunk off a child's stdout/stderr is worth showing, or null for
- * "nothing new — keep what the row already says".
- *
- * A chunk is not a line: tqdm redraws with carriage returns, so a single read
- * can hold a dozen frames, and a read can land mid-frame. The newest frame in
- * the chunk wins because the older ones in it are already stale, and a chunk
- * with no frame at all falls back to its last real line — that is where
- * lm_eval's warnings and its "Selected Tasks:" preamble live, which are worth
- * seeing while a run starts up.
+ * Null means keep what the row says. The newest frame in the chunk wins; with
+ * no frame, the last real line (lm_eval's warnings and preamble).
  */
 export function readOutputChunk(chunk: string): RunProgress | null {
   const segments = chunk.split(/[\r\n]+/);
@@ -166,8 +105,6 @@ export function readOutputChunk(chunk: string): RunProgress | null {
   return { progress: null, detail: text.slice(0, MAX_DETAIL) };
 }
 
-/** Position through a fixed list of cases, for a suite that counts its own
- *  work rather than shelling out to something that prints a bar. */
 export function caseProgress(
   done: number,
   total: number,

@@ -4,16 +4,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerDeviceRoutes } from "./routes";
 import { createDeviceStore, type DeviceStore } from "./store";
 
-// Two things matter here beyond the CRUD. That these routes are themselves
-// gated — an open enrolment endpoint would let anyone who can reach the port
-// grant themselves the access the gate exists to withhold. And that a token
-// issued through them actually opens the gate afterwards.
+// These routes must themselves be gated, or anyone could enrol.
 
 let app: FastifyInstance;
 let devices: DeviceStore;
 
-/** Fastify reports the loopback address for inject() calls unless told
- *  otherwise, so a remote caller is simulated with an explicit forwarded IP. */
+/** inject() reports loopback unless a forwarded IP is set. */
 const REMOTE = { "x-forwarded-for": "203.0.113.9" };
 
 async function build(token?: string): Promise<void> {
@@ -33,8 +29,6 @@ describe("GET /auth/context", () => {
     expect(res.json()).toEqual({ loopback: true, requiresToken: false });
   });
 
-  // Ungated: a device with no credential still needs to learn it is off-machine
-  // and cannot enrol here, rather than being refused with no explanation.
   it("answers a remote caller without a credential", async () => {
     const res = await app.inject({
       method: "GET",
@@ -51,15 +45,11 @@ describe("GET /auth/context", () => {
     expect(res.json().requiresToken).toBe(true);
   });
 
-  // `PENUMBRA_AGENT_TOKEN=` with nothing after it is how a .env turns the shared
-  // secret off, and the gate reads it as unset. This route decided the same
-  // question for itself with `!== undefined` and answered the opposite, telling
-  // a client it needed a token to reach a server that wanted none.
+  // An empty PENUMBRA_AGENT_TOKEN means no shared secret.
   it("reports no shared secret when the env var is set but empty", async () => {
     await build("");
     const res = await app.inject({ method: "GET", url: "/auth/context" });
     expect(res.json().requiresToken).toBe(false);
-    // And the gate agrees: loopback is still served with no credential.
     expect((await app.inject({ url: "/auth/devices" })).statusCode).toBe(200);
   });
 });
@@ -80,7 +70,6 @@ describe("enrolment is gated", () => {
     expect(res.json().error).toBe("local_only");
   });
 
-  // The failure that would make the whole scheme pointless.
   it("refuses a remote caller trying to issue itself a token", async () => {
     const res = await app.inject({
       method: "POST",
@@ -105,7 +94,6 @@ describe("POST /auth/devices", () => {
     expect(body.device).toMatchObject({ label: "laptop", lastSeenAt: null });
     expect(body.token).toEqual(expect.any(String));
 
-    // Never again, by any route.
     const listed = await app.inject({ method: "GET", url: "/auth/devices" });
     expect(listed.payload).not.toContain(body.token);
   });
@@ -119,8 +107,6 @@ describe("POST /auth/devices", () => {
     expect(res.statusCode).toBe(400);
   });
 
-  // The point of the whole exercise: the minted token reaches the gate from
-  // somewhere that would otherwise be refused.
   it("issues a token that works from off-loopback", async () => {
     const { token } = (
       await app.inject({
@@ -187,8 +173,7 @@ describe("alongside a shared secret", () => {
     }
   });
 
-  // Unchanged from when the shared secret was the only scheme: setting one
-  // means everyone presents a credential, loopback included.
+  // A shared secret, once set, is required from loopback too.
   it("still requires a credential from loopback", async () => {
     await build("shared-secret");
     const res = await app.inject({ method: "GET", url: "/auth/devices" });

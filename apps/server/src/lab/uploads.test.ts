@@ -12,9 +12,7 @@ import {
 } from "./uploads";
 
 describe("resolveDest — path safety", () => {
-  // resolveDest builds its answer with node:path, so the expectations have to
-  // as well: a bare "/srv/uploads" is drive-relative on Windows, where resolve
-  // prepends the cwd's drive and joins with backslashes.
+  // On Windows a bare "/srv/uploads" is drive-relative.
   const root = resolve("/srv/uploads");
 
   it("resolves a normal relative path under the kind dir", () => {
@@ -39,7 +37,7 @@ describe("resolveDest — path safety", () => {
   });
 
   it("rejects a sibling dir that shares the kind prefix", () => {
-    // Would resolve to /srv/uploads/models-evil without the separator guard.
+    // The separator guard stops sibling dirs like models-evil.
     expect(() => resolveDest(root, "models", "../models-evil/x")).toThrow();
   });
 });
@@ -54,7 +52,6 @@ describe("computeNeed", () => {
     const host: Record<string, number> = {
       "config.json": 100, // present, same → skip
       "model.safetensors": 12, // present, different → need
-      // tokenizer.json missing → need
     };
     expect(computeNeed(files, (rel) => host[rel])).toEqual([
       "model.safetensors",
@@ -102,10 +99,8 @@ describe("freeSpace", () => {
   });
 
   it("measures the nearest existing ancestor of a not-yet-created root", async () => {
-    // The upload root is created lazily on the first chunk, so the preflight has
-    // to work before it exists. A real figure (not the Infinity that means
-    // "couldn't measure") proves it walked up to a path that does exist —
-    // asserting the exact number would only test how busy the disk is.
+    // The root is created lazily, so the preflight must walk up. Infinity means
+    // "couldn't measure".
     const nested = join(tmpdir(), "penumbra-absent", "uploads", "models");
     const free = await freeSpace(nested);
     expect(Number.isFinite(free)).toBe(true);

@@ -1,8 +1,5 @@
--- Client-only sync bookkeeping, like _outbox: hand-written, not in the shared
--- schema. Holds the id of the server database this store last reconciled with
--- (key 'server_id'), so the sync client can detect when the database behind
--- the server URL has been replaced and its revs/cursor no longer mean
--- anything. See docs/SYNC.md.
+-- Client-only, hand-written. Holds the last reconciled server database id
+-- (key 'server_id'). See docs/SYNC.md → Epochs.
 CREATE TABLE IF NOT EXISTS `_sync_meta` (
 	`key` text PRIMARY KEY NOT NULL,
 	`value` text NOT NULL

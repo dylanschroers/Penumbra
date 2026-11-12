@@ -24,9 +24,7 @@ const result = (over: Partial<BenchmarkResult> = {}): BenchmarkResult => ({
   ...over,
 });
 
-// A live server has a database that predates the provider column. Opening it
-// must migrate rather than throw, and the runs already in it are local ones —
-// Colab didn't exist as an option when they were written.
+// Old databases predate the provider column; their runs were all local.
 describe("schema migration", () => {
   it("adds the provider column to a database that lacks it", () => {
     const db = new Database(":memory:");
@@ -45,7 +43,6 @@ describe("schema migration", () => {
     const migrated = createLabStore(db);
 
     expect(migrated.getRun("r1")?.provider).toBe("local");
-    // And the store still works for new rows.
     const job = migrated.createJob("finetune");
     const fresh = migrated.createRun({
       jobId: job.id,
@@ -73,8 +70,8 @@ describe("jobs", () => {
     expect(store.getJob(job.id)?.id).toBe(job.id);
   });
 
-  // A progress tick must not wipe the detail line, and vice versa — the UI
-  // reads both, and they arrive from different events.
+  // Progress and detail arrive from different events; neither may blank the
+  // other.
   it("leaves omitted fields untouched on partial updates", () => {
     const job = store.createJob("finetune");
     store.updateJob(job.id, { state: "running", detail: "step 1/60" });
@@ -114,19 +111,15 @@ describe("jobs", () => {
   });
 });
 
-// Nothing survives a restart except the rows, so a job left mid-flight names a
-// process that no longer exists. Left alone it claims to be running forever,
-// which wedged the Lab in practice: the form disables itself while a job runs,
-// so one orphan blocked every later run, and Cancel could not clear it because
-// the controller had died with the process holding it.
+// After a restart, running/queued jobs name a dead process and would block the
+// Lab forever, since the form disables itself while a job runs.
 describe("orphaned jobs on startup", () => {
-  /** A store over a database that already holds a job in `state`. */
   function reopenWith(state: string) {
     const db = new Database(":memory:");
     const first = createLabStore(db);
     const job = first.createJob("benchmark");
     first.updateJob(job.id, { state: state as never, detail: "48%" });
-    // A second store over the same file is what a restart looks like.
+    // A second store over the same file is a restart.
     return { store: createLabStore(db), id: job.id };
   }
 
@@ -137,8 +130,6 @@ describe("orphaned jobs on startup", () => {
     expect(job?.error).toContain("Interrupted");
   });
 
-  // Only the unsettled ones. A finished job is a record, and rewriting it would
-  // destroy the outcome it exists to report.
   it.each(["done", "failed", "cancelled"])("leaves a %s job alone", (state) => {
     const { store, id } = reopenWith(state);
     expect(store.getJob(id)?.state).toBe(state);
@@ -161,7 +152,6 @@ describe("runs", () => {
     store.setRunArtifacts(run.id, { outputDir: "/runs/1" });
     expect(store.getRun(run.id)).toMatchObject({ outputDir: "/runs/1" });
 
-    // Export lands later and must not blank the training output.
     store.setRunArtifacts(run.id, { ggufPath: "/runs/1/gguf" });
     expect(store.getRun(run.id)).toMatchObject({
       outputDir: "/runs/1",
@@ -184,8 +174,6 @@ describe("scores", () => {
     expect(stored?.scores).toHaveLength(2);
   });
 
-  // The two families must stay distinguishable, or a general score gets
-  // compared against a personal one and the comparison is meaningless.
   it("keeps runs of different families separate", () => {
     store.recordScores(result());
     store.recordScores(

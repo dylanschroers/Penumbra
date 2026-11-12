@@ -17,9 +17,6 @@ describe("syncTask wire schema", () => {
     rev: null,
   };
 
-  // A sync row is a *stored* row: SQLite hands back NULL, not `undefined`, for
-  // empty optional columns. The schema must accept null on notes/dueAt/rev or
-  // the server rejects every task with no notes / no due date.
   it("accepts null for the nullable stored columns", () => {
     expect(syncTask.safeParse(fullRow).success).toBe(true);
   });
@@ -35,14 +32,11 @@ describe("syncTask wire schema", () => {
 });
 
 describe("task input schemas", () => {
-  // createTaskInput fills defaults (a create needs a complete row)...
   it("defaults priority to medium on create", () => {
     const parsed = createTaskInput.parse({ title: "x" });
     expect(parsed.priority).toBe("medium");
   });
 
-  // ...but updateTaskInput injects nothing, so an omitted field means "leave
-  // unchanged" rather than "reset to the default".
   it("injects no defaults on update", () => {
     expect(updateTaskInput.parse({})).toEqual({});
   });

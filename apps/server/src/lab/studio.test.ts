@@ -3,13 +3,8 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { StudioClient, TrainingBusyError } from "./studio";
 
-// Driven against a real HTTP server rather than a stubbed fetch, so request
-// shape, headers, and SSE framing are all exercised for real.
-//
-// What this cannot prove: that Unsloth Studio behaves like this fake. The fake
-// encodes the same reading of Studio's API that the client does
-// (docs/MODEL_LAB.md → What Studio guarantees), so only a live Studio can
-// confirm it. It catches our bugs, not our misunderstandings.
+// Real HTTP server, not stubbed fetch. Encodes our reading of Studio's API, so
+// only a live Studio confirms it.
 
 interface Recorded {
   method: string;
@@ -23,7 +18,6 @@ function startFakeStudio(
     status?: number;
     body?: unknown;
     sse?: string;
-    /** A non-JSON body, for standing in as whatever is in front of Studio. */
     html?: string;
   },
 ) {
@@ -99,8 +93,6 @@ describe("configuration", () => {
     const c = new StudioClient({
       env: { UNSLOTH_BASE_URL: "gpu-host:8888", UNSLOTH_API_KEY: "sk-x" },
     });
-    // Also normalizes a scheme-less host, which would otherwise silently
-    // produce relative URLs.
     expect(c.baseURL).toBe("http://gpu-host:8888");
   });
 
@@ -110,7 +102,7 @@ describe("configuration", () => {
     expect(studio.recorded[0]?.auth).toBe("Bearer sk-secret");
   });
 
-  // Studio rejects an empty bearer as malformed, so it must be absent.
+  // Studio rejects an empty bearer as malformed.
   it("omits the header entirely when no key is set", async () => {
     const c = await client(() => ({ body: { runs: [] } }));
     await c.listRuns();
@@ -133,8 +125,7 @@ describe("startTraining", () => {
     });
   });
 
-  // Studio answers a second concurrent run with 200 + status:"error", not a
-  // non-2xx, so this would otherwise look like success.
+  // Studio answers a concurrent run with 200 + status:"error".
   it("raises TrainingBusyError when Studio refuses", async () => {
     const c = await client(() => ({
       body: { status: "error", message: "training already running" },
@@ -149,8 +140,6 @@ describe("startTraining", () => {
     await expect(c.startTraining(startBody)).rejects.toThrow("responded 500");
   });
 
-  // A live 422 names the offending field in its body. Reporting only the status
-  // code sends the reader off to reproduce the call by hand to learn why.
   it("includes the response body so a 422 explains itself", async () => {
     const c = await client(() => ({
       status: 422,
@@ -182,7 +171,6 @@ describe("trainingProgress", () => {
     expect(frames[1]?.data).toMatchObject({ step: 2, loss: 0.9 });
   });
 
-  // A garbled frame must not abort a training run that may have hours invested.
   it("skips a malformed frame and keeps going", async () => {
     const c = await client(() => ({
       sse:
@@ -215,8 +203,7 @@ describe("export", () => {
     await c.loadCheckpoint("/runs/1");
     await c.exportGguf("/runs/1/gguf", "Q4_K_M");
 
-    // The doubled segment is real: the router mounts at /api/export and
-    // declares the route as /export/gguf. /api/export/gguf answers 405.
+    // The doubled segment is real; /api/export/gguf answers 405.
     expect(studio.recorded.map((r) => r.url)).toEqual([
       "/api/export/load-checkpoint",
       "/api/export/export/gguf",
@@ -236,10 +223,7 @@ describe("reachable / probe", () => {
     expect(await c.probe()).toEqual({ state: "ready", served: null });
   });
 
-  // The model rides along on the readiness probe, which is what lets a panel
-  // that polls for reachability show a model appearing on another machine
-  // without a second call. Read through the shared rule, so a model merely
-  // downloaded is not reported as the one answering.
+  // Uses pickLoadedModel, so a merely downloaded model isn't reported.
   it("reports the resident model from the same listing", async () => {
     const c = await client(() => ({
       body: {
@@ -255,7 +239,6 @@ describe("reachable / probe", () => {
     });
   });
 
-  // Newer Studio builds list only what is loaded and carry no flag at all.
   it("reports the resident model when no entry carries a flag", async () => {
     const c = await client(() => ({
       body: { data: [{ id: "unsloth/gemma-4-12b-it" }] },
@@ -264,7 +247,6 @@ describe("reachable / probe", () => {
   });
 
   it("reports unauthorized on a 401 rather than stopped", async () => {
-    // Up, but the key is missing or wrong — a different fix from "not running".
     const c = await client(() => ({
       status: 401,
       body: { error: { message: "Not authenticated" } },
@@ -279,10 +261,8 @@ describe("reachable / probe", () => {
     expect(await c.reachable()).toBe(false);
   });
 
-  // The failure that used to read as "ready, nothing loaded". A proxy in front
-  // of Studio answers for itself — Colab's kernel proxy redirects a server to a
-  // Google sign-in page — and a 200 of HTML then broke every later call while
-  // the panel said the target was fine.
+  // A proxy in front of Studio (e.g. Colab's sign-in redirect) answers 200 with
+  // HTML.
   it("is not_studio when a 200 comes back that is not a model listing", async () => {
     const c = await client(() => ({
       html: "<!doctype html><title>Sign in - Google Accounts</title>",
@@ -291,8 +271,6 @@ describe("reachable / probe", () => {
     expect(await c.reachable()).toBe(false);
   });
 
-  // JSON, and still not Studio: a proxy that answers every path with its own
-  // status document is a 200 of valid JSON with no `data` in it.
   it("is not_studio when the body is JSON without a listing", async () => {
     const c = await client(() => ({ body: { status: "ok" } }));
     expect((await c.probe()).state).toBe("not_studio");

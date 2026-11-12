@@ -1,13 +1,8 @@
 /**
  * @vitest-environment node
  */
-// End-to-end Plane A sync: real client stores (createTestDb) reconciling through
-// the real server merge (createTaskSyncStore) over simulated rounds. Both merge
-// implementations are the shipping code — only the round *sequence* is authored
-// here, mirroring SyncClient.syncNow (apps/web/src/sync/SyncClient.ts) and
-// docs/SYNC.md: push, then pull, then adopt-and-repush on an unfamiliar
-// serverId. SyncClient's own wrapper (fetch, timers, status light) is
-// browser-bound and stays covered by app runs, not this test.
+// Real client stores and the real server merge over simulated rounds that
+// mirror SyncClient.syncNow. Fetch, timers, and status are not covered here.
 
 import { createTaskSyncStore, type TaskSyncStore } from "@penumbra/server/sync";
 import Database from "better-sqlite3";
@@ -19,9 +14,7 @@ function makeServer(): TaskSyncStore {
   return createTaskSyncStore(new Database(":memory:"));
 }
 
-/** One sync round for a client against a server: push local changes, pull
- *  remote ones, and reconcile once more if the server is an unfamiliar epoch
- *  (including the first sync ever). Mirrors SyncClient.syncNow. */
+/** Mirrors SyncClient.syncNow. */
 async function sync(client: DbApi, server: TaskSyncStore): Promise<void> {
   const drainPush = async () => {
     const { seqs, rows } = await client.collectOutbox();
@@ -46,21 +39,18 @@ async function sync(client: DbApi, server: TaskSyncStore): Promise<void> {
   }
 }
 
-/** Live tasks reduced to comparable content, order-independent. */
 async function snapshot(client: DbApi): Promise<string[]> {
   const tasks = await client.listTasks();
   return tasks.map((t) => `${t.title}:${t.status}:${t.priority}`).sort();
 }
 
-// createTask/updateTask/deleteTask stamp Date.now(); a fixed, advanceable clock
-// makes the last-write-wins scenarios deterministic instead of millisecond-racy.
+// A fixed clock makes LWW deterministic.
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
 });
 afterEach(() => vi.useRealTimers());
 
-/** Advance the shared fake clock. */
 function tick(seconds: number): void {
   vi.setSystemTime(new Date(Date.now() + seconds * 1000));
 }
@@ -101,7 +91,6 @@ describe("two-device convergence", () => {
     const { api: A } = createTestDb();
     const { api: B } = createTestDb();
 
-    // A works offline: three creates, no sync in between.
     await A.createTask({ title: "one" });
     await A.createTask({ title: "two" });
     await A.createTask({ title: "three" });
@@ -196,12 +185,9 @@ describe("epochs", () => {
     await sync(B, server1);
     expect(await snapshot(B)).toEqual(["keep me:todo:medium"]);
 
-    // The database behind the same URL is replaced: a fresh, empty epoch.
     const server2 = makeServer();
     expect(server2.instanceId).not.toBe(server1.instanceId);
 
-    // Each device sees an unfamiliar serverId, reconciles, and re-offers its
-    // rows; last-write-wins makes the re-exchange converge.
     await sync(A, server2);
     await sync(B, server2);
     await sync(A, server2);

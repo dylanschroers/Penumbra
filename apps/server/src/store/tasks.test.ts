@@ -12,13 +12,10 @@ beforeEach(() => {
   store = createServerTaskStore(db, sync);
 });
 
-/** What a client syncing from scratch would receive. */
 const pullAll = () => sync.pull(0).rows;
 
 describe("createTask", () => {
-  // The failure this guards is silent: a row written without a rev is never
-  // returned by pull (WHERE rev > ?), so the task exists on the server and is
-  // invisible to every client forever, with no error raised anywhere.
+  // A row without a rev is never pulled, silently.
   it("assigns a rev, so a syncing client actually receives the task", () => {
     const created = store.createTask({ title: "buy milk" });
 
@@ -37,9 +34,7 @@ describe("createTask", () => {
     expect(() => store.createTask({ title: "" })).toThrow();
   });
 
-  // Demonstrates the trap the store exists to avoid, so nobody "optimizes"
-  // the push away later: a row inserted directly keeps rev NULL, and pull's
-  // `WHERE rev > ?` silently never returns it.
+  // Pins the trap so the push isn't "optimized" away.
   it("a direct insert bypassing push would be invisible to clients", () => {
     const db = new Database(":memory:");
     const bypassed = createTaskSyncStore(db);
@@ -66,8 +61,6 @@ describe("listTasks", () => {
   it("returns live tasks newest first", () => {
     store.createTask({ title: "older" });
     store.createTask({ title: "newer" });
-    // createdAt has second-or-better resolution; assert membership and that a
-    // deleted row is absent rather than depending on same-millisecond ordering.
     expect(
       store
         .listTasks()
@@ -104,12 +97,11 @@ describe("updateTask", () => {
     expect(store.updateTask("nope", { status: "done" })).toBeUndefined();
   });
 
-  // push() keeps the stored row when it is strictly newer, so an edit that
-  // reused the old timestamp would be silently dropped.
+  // push() keeps the stored row when strictly newer, so the edit needs a fresh
+  // timestamp.
   it("bumps updatedAt so the edit wins the LWW merge", () => {
     const t = store.createTask({ title: "x" });
     const updated = store.updateTask(t.id, { title: "y" });
-    // ISO-8601 strings compare chronologically, which is what push() relies on.
     const after = updated?.updatedAt ?? "";
     expect(after >= t.updatedAt).toBe(true);
     expect(updated?.title).toBe("y");
@@ -121,8 +113,6 @@ describe("deleteTask", () => {
     const t = store.createTask({ title: "x" });
     expect(store.deleteTask(t.id)).toBe(true);
 
-    // The tombstone must reach clients — a hard delete would leave them holding
-    // a task the server no longer has.
     const row = pullAll().find((r) => r.id === t.id);
     expect(row?.deletedAt).toEqual(expect.any(String));
     expect(row?.rev).toBeGreaterThan(t.rev as number);

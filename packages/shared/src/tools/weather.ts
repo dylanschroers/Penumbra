@@ -1,21 +1,9 @@
 import { z } from "zod";
 import type { ToolContract } from "./contract";
 
-// The weather tool: contract *and* runner, which is the one exception to the
-// rule stated in contract.ts that implementations live per-runtime.
-//
-// That rule exists because a tool's `run` is platform-bound — the task tools
-// reach a store that is the browser's IndexedDB on Tier 0 and the server's
-// SQLite on Tier 1, so there is no one implementation to share. This tool
-// touches no store at all. It is a `fetch` and some formatting, identical on
-// both tiers, and duplicating it would mean two copies of a WMO code table
-// drifting apart. So the contract's runner ships beside it and each runtime
-// binds the same function.
-//
-// Open-Meteo is the provider because it needs no API key and sends CORS headers:
-// the first keeps "Penumbra holds no third-party credentials at all"
-// (docs/ARCHITECTURE.md → Security & privacy) true, and the second is what lets
-// Tier 0 call it from the webview at all.
+// Contract and runner together, unlike the other tools: it touches no store, so
+// both tiers share one implementation. Open-Meteo needs no key and sends CORS
+// headers, so Tier 0 can call it from the webview.
 
 export const getWeatherTool = {
   name: "get_weather",
@@ -32,18 +20,13 @@ export const getWeatherTool = {
   }),
 } satisfies ToolContract;
 
-/** The tool's whole network budget, per call. Generous enough for a geocode and
- *  a forecast over a slow link, short enough that an offline machine gets an
- *  answer rather than a hang — this is the tier whose point is working without
- *  a network, so failing fast is a feature. */
+/** Short so an offline machine gets an answer instead of a hang. */
 const REQUEST_TIMEOUT_MS = 5000;
 
 const GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search";
 const FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
 
-/** WMO weather interpretation codes, which is what Open-Meteo reports instead
- *  of a description. Only the codes it documents; anything else falls through
- *  to the temperature alone rather than inventing a condition. */
+/** Unknown codes fall through to temperature only, never an invented condition. */
 const WEATHER_CODES: Record<number, string> = {
   0: "clear",
   1: "mainly clear",
@@ -90,15 +73,7 @@ interface CurrentWeather {
   wind_speed_10m?: number;
 }
 
-/**
- * A non-2xx from the weather service, carrying the status.
- *
- * Typed so the caller can tell "it answered and refused" from "nothing
- * answered" — the distinction StudioHttpError draws for the same reason.
- * Collapsed into a plain Error, every HTTP failure read as a missing network
- * connection, which sends someone to check their wi-fi while the connection is
- * fine and the service is rate-limiting them.
- */
+/** Lets the caller tell "the service refused" from "nothing answered". */
 class WeatherHttpError extends Error {
   constructor(readonly status: number) {
     super(`weather service responded ${status}`);
@@ -116,20 +91,11 @@ async function getJson<T>(url: string): Promise<T> {
 
 const round = (n: number): number => Math.round(n);
 
-/** Celsius with Fahrenheit alongside. Both, rather than a `units` argument: an
- *  extra enum is one more slot for a small model to fill wrong, and the answer
- *  is short enough to carry both for whoever is reading. */
+/** Both units rather than a `units` argument: one fewer slot for the model. */
 const temperature = (c: number): string =>
   `${round(c)}°C (${round((c * 9) / 5 + 32)}°F)`;
 
-/**
- * Look up current conditions, as a sentence for the model to relay.
- *
- * Returns a message on every failure rather than throwing. `runTool` would
- * catch a throw and format it as "Tool get_weather failed: …", which reads to
- * the model as a bug rather than as an answer it can pass on — "no network" and
- * "no such place" are both ordinary outcomes here and deserve plain wording.
- */
+/** Never throws: failures are ordinary answers for the model to relay. */
 export async function fetchWeather(args: {
   location: string;
 }): Promise<string> {
@@ -147,8 +113,6 @@ export async function fetchWeather(args: {
       })}`,
     );
     place = geo.results?.[0];
-    // A place the geocoder does not know is not an error: say so and stop,
-    // rather than reporting the weather somewhere the user did not ask about.
     if (place?.latitude === undefined || place.longitude === undefined) {
       return `No place called "${query}" was found.`;
     }
@@ -163,10 +127,6 @@ export async function fetchWeather(args: {
     );
     current = forecast.current;
   } catch (err) {
-    // Three outcomes, three different things to do about them. Offline is the
-    // expected case on the tier this matters for, so it is worth naming rather
-    // than surfacing a DOMException — but only when it is actually what
-    // happened.
     const reason =
       err instanceof WeatherHttpError
         ? `it answered ${err.status}`
@@ -180,8 +140,7 @@ export async function fetchWeather(args: {
     return `The weather service returned no conditions for "${query}".`;
   }
 
-  // Region and country disambiguate the many Springfields, and the geocoder's
-  // spelling of the name is more trustworthy than the model's.
+  // The geocoder's spelling is more trustworthy than the model's.
   const label = [place.name ?? query, place.admin1, place.country]
     .filter(Boolean)
     .join(", ");

@@ -1,11 +1,8 @@
 import { STORAGE_NAMESPACE } from "@penumbra/shared";
 import { useCallback, useEffect, useState } from "react";
 
-// Weather is Plane B data (docs/ARCHITECTURE.md): truth lives at the provider,
-// online-only. We fetch live and cache the last result in localStorage so the
-// tile restores instantly and shows last-known values (marked stale) when
-// offline. API calls go straight to Open-Meteo (no key) for now; this would
-// graduate to the server's Integrations module once that exists.
+// Plane B (docs/ARCHITECTURE.md): fetched live, last result cached in
+// localStorage and shown as stale offline.
 
 export type Units = "metric" | "imperial";
 
@@ -43,7 +40,6 @@ interface Persisted {
 }
 
 function defaultUnits(): Units {
-  // Imperial is used mainly in the US; default from the browser's region.
   try {
     return new Intl.Locale(navigator.language).region === "US"
       ? "imperial"
@@ -63,9 +59,7 @@ function load(): Persisted {
         data: parsed.data ?? null,
       };
     }
-  } catch {
-    // Ignore unavailable/corrupt storage.
-  }
+  } catch {}
   return { units: defaultUnits(), data: null };
 }
 
@@ -138,9 +132,7 @@ export function useWeather() {
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ units, data }));
-    } catch {
-      // Ignore quota/serialization errors; the in-memory state still works.
-    }
+    } catch {}
   }, [units, data]);
 
   const search = useCallback(
@@ -206,8 +198,7 @@ export function useWeather() {
     );
   }, [units]);
 
-  // Switch units and refetch the current place so values come back in the new
-  // system (rather than converting client-side).
+  // Refetch in the new units rather than converting client-side.
   const changeUnits = useCallback(
     async (next: Units) => {
       setUnits(next);

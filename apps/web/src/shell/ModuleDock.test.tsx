@@ -11,11 +11,8 @@ import {
 } from "vitest";
 import { ModuleDock } from "./ModuleDock";
 
-// `trayOpen` decides both whether the tray is shown (via `dock--open`) and
-// whether the shell renders the compact views at all. It used to share that job
-// with a CSS `:hover` rule, and the two drifted quietly — an open tray full of
-// empty cards. So the ways it opens and shuts are pinned here, and the class it
-// drives is asserted alongside the reported value.
+// `trayOpen` decides both visibility and whether compact views render; it once
+// shared that with a CSS `:hover` rule and they drifted.
 
 let container: HTMLDivElement;
 let root: Root;
@@ -43,8 +40,7 @@ function renderDock(props: { dragActive?: boolean; openIds?: string[] } = {}) {
   });
 }
 
-/** The dock listens for *native* mouseenter/mouseleave (they don't bubble, so
- *  they go straight on the element). */
+/** Native events: mouseenter/mouseleave don't bubble. */
 function pointer(type: "mouseenter" | "mouseleave") {
   const dock = container.querySelector(".dock");
   act(() => {
@@ -64,7 +60,6 @@ afterEach(() => {
   container.remove();
 });
 
-/** What the tray is actually showing, as opposed to what it reported. */
 const isOpenInDom = () =>
   container.querySelector(".dock")?.classList.contains("dock--open") ?? false;
 
@@ -83,12 +78,8 @@ describe("ModuleDock tray state", () => {
     expect(onTrayOpenChange).toHaveBeenLastCalledWith(false);
   });
 
-  // Regression: the tray's visibility was a CSS `:hover` rule while mounting
-  // keyed off React's hover state. `:hover` re-evaluates when the layout shifts
-  // under a still pointer; mouseenter doesn't fire then. The dock animating into
-  // place under a resting cursor therefore opened the tray with nothing in it,
-  // and only moving the pointer away and back fixed it. Whatever the tray shows,
-  // it must have reported.
+  // `:hover` re-evaluates on layout shift but mouseenter doesn't, so the dock
+  // animating under a resting cursor opened an empty tray.
   it("never shows the tray without having reported it open", () => {
     renderDock();
     expect(isOpenInDom()).toBe(onTrayOpenChange.mock.lastCall?.[0]);
@@ -99,7 +90,6 @@ describe("ModuleDock tray state", () => {
   });
 
   it("picks up a pointer already resting on the dock when it mounts", () => {
-    // The dock animates in; if the cursor is already there, no event fires.
     const orig = Element.prototype.matches;
     Element.prototype.matches = function (selector: string) {
       if (selector === ":hover") return this.classList.contains("dock");
@@ -128,8 +118,7 @@ describe("ModuleDock tray state", () => {
     expect(onTrayOpenChange).toHaveBeenLastCalledWith(true);
   });
 
-  // The dock answers to the pointer and nothing else. It used to force itself
-  // shut on expand, which read as the tray flinching away from the toggle.
+  // The dock answers only to the pointer.
   it("stays open when a module is expanded or sent back", () => {
     renderDock({ openIds: ["tasks"] });
     pointer("mouseenter");
@@ -147,18 +136,13 @@ describe("ModuleDock tray state", () => {
     expect(isOpenInDom()).toBe(true);
   });
 
-  // Regression: the dock used React's onMouseEnter/onMouseLeave, which follow
-  // the React tree. A module's view is portalled in from AppShell, so crossing
-  // into it read as leaving the dock — which unmounted the view, put the pointer
-  // over an empty card, read as re-entering, and flickered forever. The pointer
-  // moving *within* the dock must not disturb the tray.
+  // React's synthetic leave fires when crossing into portalled module content,
+  // causing a mount/unmount flicker loop.
   it("stays open when the pointer crosses into portalled module content", () => {
     renderDock();
     pointer("mouseenter");
     expect(onTrayOpenChange).toHaveBeenLastCalledWith(true);
 
-    // What the browser actually emits when the pointer moves between elements
-    // inside the dock, and what React turns into a synthetic leave.
     const card = container.querySelector(".dock-card");
     act(() => {
       card?.dispatchEvent(

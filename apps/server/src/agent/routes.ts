@@ -165,7 +165,7 @@ export function registerAgentRoutes(
     // A client that disconnects must not leave a model generating and tools
     // firing. Partial effects stand — already-executed tool writes are not
     // rolled back — and the events already sent are the record of what ran
-    // (docs/AGENT_DESIGN.md §5).
+    // (docs/AGENT_DESIGN.md → The engine abstraction).
     // The response's close, not the request's: the request emits it once its
     // body has been read, before this listener exists, so it never reported a
     // dropped connection and an abandoned turn kept calling the model.

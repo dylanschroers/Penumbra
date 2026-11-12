@@ -2,11 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
 import { authHeaders } from "./serverAddress";
 
-// api() sets one header conditionally, and getting it wrong is invisible until a
-// real server rejects it: Fastify 400s an empty body sent with
-// application/json, so a JSON content-type on a bodyless request breaks launch,
-// revert, and cancel — none of which app.inject-based route tests can see,
-// because inject sends no such header.
+// Fastify 400s an empty body sent as application/json, and app.inject tests
+// can't see it.
 
 vi.mock("./serverAddress", () => ({
   getServerUrl: vi.fn(() => "http://server:3000"),

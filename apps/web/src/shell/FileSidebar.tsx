@@ -9,21 +9,14 @@ import {
   PlusIcon,
 } from "./fileIcons";
 
-// The left rail: a read/write file browser over the real OS filesystem (desktop
-// only). The user imports one or more root folders via the native picker; each
-// becomes its own collapsible section, and everything beneath it is reachable.
-// Nothing is open by default — a fresh sidebar is just the "Add folder" button.
-// Entries can be dragged onto a folder to move them (write access, via fs_move).
-//
-// The web build has no Tauri, so it renders a short placeholder instead.
+// Desktop-only file browser over the real filesystem. Each imported root is a
+// section; dragging onto a folder moves entries (fs_move).
 
-/** Last path segment — a folder/file's own display name. */
 function baseName(path: string): string {
   const parts = path.split(/[/\\]/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
 }
 
-/** Folders first, then case-insensitive by name. */
 function sortEntries(entries: DirEntry[]): DirEntry[] {
   return [...entries].sort((a, b) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
@@ -33,9 +26,7 @@ function sortEntries(entries: DirEntry[]): DirEntry[] {
 
 const INDENT = 12; // px per tree level
 
-// Drag-and-drop plumbing shared by every row. `draggingRef` holds the path being
-// dragged (a ref so a drag doesn't re-render the tree); `overPath` drives the
-// drop-target highlight.
+// `draggingRef` is a ref so a drag doesn't re-render the tree.
 interface Drag {
   overPath: string | null;
   onDragStart: (path: string) => (e: DragEvent) => void;
@@ -105,7 +96,6 @@ function FileRow({
       draggable
       onDragStart={drag.onDragStart(entry.path)}
     >
-      {/* Spacer aligns files with the chevron column of sibling folders. */}
       <span className="file-row__chevron file-row__chevron--spacer" />
       <FileIcon className="file-row__icon" />
       <span className="file-row__name">{entry.name}</span>
@@ -113,7 +103,6 @@ function FileRow({
   );
 }
 
-/** The children of one directory: loading / error / empty, else the rows. */
 function TreeChildren({
   path,
   depth,
@@ -220,9 +209,7 @@ export function FileSidebar({
   collapsed,
   onCollapsedChange,
 }: {
-  // Collapsed state is owned by the shell so the logo's minimize gesture can
-  // close the rail (and restore it) alongside the rest of the workspace; the
-  // header buttons here just drive the same setter.
+  // Owned by the shell so the logo's minimize gesture can close it too.
   collapsed: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
 }) {

@@ -101,7 +101,6 @@ describe("analyzeHead — validation", () => {
 
 describe("analyzeHead — truncation and formats", () => {
   it("drops the partial last line of a truncated JSONL head", () => {
-    // The second line is cut mid-record; must not count as a parse error.
     const head = `${JSON.stringify({ instruction: "a", output: "b" })}\n{"instruction":"c","outp`;
     const p = analyzeHead(head, "jsonl", true);
     expect(p.count).toBe(1);

@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Listing } from "../../fs/fsClient";
 import { type DirLister, scanDatasets } from "./datasetLibrary";
 
-// A tiny in-memory filesystem: map each directory path to its entries as
-// [name, isDir, size?] tuples. Missing paths throw, standing in for an
-// unreadable directory.
+// Missing paths throw, standing in for unreadable directories.
 type Node = [name: string, isDir: boolean, size?: number];
 
 function fakeFs(tree: Record<string, Node[]>): DirLister {
@@ -69,7 +67,6 @@ describe("scanDatasets", () => {
         ["real.jsonl", false, 1],
       ],
       "/d/.cache": [["hidden.jsonl", false, 1]],
-      // "/d/locked" is intentionally absent → throws when listed.
     });
     const found = await scanDatasets("/d", fs);
     expect(found.map((d) => d.name)).toEqual(["real.jsonl"]);

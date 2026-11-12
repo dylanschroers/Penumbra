@@ -1,9 +1,7 @@
 import type { CreateTaskInput, TaskPriority } from "@penumbra/shared";
 import { type FormEvent, useState } from "react";
 
-// Owns only its own field state. On submit it builds a CreateTaskInput and
-// hands it to the parent; the date input gives "YYYY-MM-DD", which we widen to
-// a full ISO string so it passes the shared Zod schema's .datetime() rule.
+// Widens the date input's "YYYY-MM-DD" to ISO for the schema's .datetime().
 export function AddTaskForm({
   onAdd,
 }: {

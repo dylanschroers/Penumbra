@@ -16,10 +16,8 @@ import {
   watchProcess,
 } from "./benchmark";
 
-// The personal suite is driven against a real HTTP model server, so the request
-// shape and scoring are exercised end to end without a model. The general
-// suite's subprocess handling is covered by parseLmEvalResults plus a live
-// binary probe in benchmark.lmeval.test.ts.
+// The personal suite runs against a real HTTP fake; the general suite is
+// covered by parseLmEvalResults and benchmark.lmeval.test.ts.
 
 const personalSuite: SuiteDefinition = {
   id: "penumbra-tools-v2",
@@ -29,14 +27,12 @@ const personalSuite: SuiteDefinition = {
   tasks: [],
 };
 
-/** The same family, but the id that puts the Model Lab contracts on the wire. */
 const labSuite: SuiteDefinition = {
   ...personalSuite,
   id: "penumbra-lab-v1",
   label: "Penumbra tool calling, with the Model Lab",
 };
 
-/** A model server that answers every request the same way. */
 function startFakeModel(reply: (body: Record<string, unknown>) => unknown) {
   const server: Server = createServer((req, res) => {
     let raw = "";
@@ -75,8 +71,7 @@ afterEach(() => model?.close());
 
 describe("personal suite", () => {
   it("scores a run and reports rates, not raw counts", async () => {
-    // Always answers in prose: every actionable case is a false negative and
-    // every chit-chat case is correct.
+    // Always prose: every action case is a false negative.
     model = startFakeModel(() => ({
       choices: [{ message: { content: "I can help with that." } }],
     }));
@@ -96,24 +91,16 @@ describe("personal suite", () => {
 
     const by = (task: string) =>
       result.scores.find((s) => s.task === task)?.value;
-    // That a prose-only model scores anything at all is the point. The set is
-    // grouped by tool with the negatives last, so the old prefix of 8 from 33
-    // was entirely create_task and list_tasks: selection came out 0, and the
-    // false-positive rate was computed over no negative case at all. A spread
-    // sample reaches them, so the correct refusals count and the 0 below is a
-    // measurement rather than an artifact of where the cut fell.
+    // A prose-only model must still score: the sample has to reach the negatives,
+    // which sit at the end of each set.
     expect(by("tool_selection")).toBeGreaterThan(0);
     expect(by("false_negatives")).toBeLessThan(1);
     expect(by("false_positives")).toBe(0);
-    // Rates are 0..1 so a short run compares against a long one.
     for (const s of result.scores) {
       if (s.metric !== "avg_ms") expect(s.value).toBeLessThanOrEqual(1);
     }
   });
 
-  // The lab suite exists to measure the configuration the server serves, so the
-  // two things that define it — the tools on the wire and the policy framing
-  // them — have to travel together with the id.
   it("advertises the lab contracts, behind the lab policy", async () => {
     const seen: Record<string, unknown>[] = [];
     model = startFakeModel((body) => {
@@ -139,8 +126,6 @@ describe("personal suite", () => {
     expect(names).toContain("create_task");
     expect(names).toContain("lab_history");
     expect(names).toContain("start_finetune");
-    // Advertising the lab tools under a prompt that never mentions them is a
-    // configuration the app does not ship, so it must not be what gets scored.
     expect(first.messages[0]?.content).toContain("Model Lab");
   });
 
@@ -171,10 +156,8 @@ describe("personal suite", () => {
     expect(first.messages[0]?.content).not.toContain("Model Lab");
   });
 
-  // Both case sets are grouped by tool with the negatives last, so a prefix of
-  // the combined set at the default sample count would be entirely base cases:
-  // a lab suite measuring no lab tool, and a false-positive rate computed over
-  // no negatives. The sample is spread instead.
+  // Both sets put negatives last, so a prefix would miss lab cases and
+  // negatives.
   it("samples lab cases and negatives at the default cap", async () => {
     const asked: string[] = [];
     model = startFakeModel((body) => {
@@ -196,20 +179,16 @@ describe("personal suite", () => {
 
     expect(asked).toHaveLength(20);
 
-    // Checked against the case sets themselves rather than by matching words,
-    // so rewording a case cannot quietly turn this green.
+    // Checked against the case sets, not by matching words.
     const sampled = new Set(asked);
     const picked = [...evalCases, ...labEvalCases].filter((c) =>
       sampled.has(c.text),
     );
     const labToolNames = new Set(labTools.map((t) => t.name));
 
-    // Reached the lab half at all: a prefix of this set would not have.
     expect(
       picked.some((c) => c.tool !== null && labToolNames.has(c.tool)),
     ).toBe(true);
-    // And carried negatives, without which a false-positive rate is 0 by
-    // construction rather than by measurement.
     expect(picked.some((c) => c.tool === null)).toBe(true);
   });
 
@@ -222,9 +201,7 @@ describe("personal suite", () => {
       servedModel: "fake",
       target: "local",
       suite: personalSuite,
-      // One case, so the sample is the first and is a create_task utterance.
-      // A larger cap now spreads across the set and would pick cases this
-      // fixed reply is wrong for, which is a different thing to assert.
+      // One case, so the sample is the first, a create_task utterance.
       samplesPerTask: 1,
       baseURL,
     });
@@ -236,8 +213,6 @@ describe("personal suite", () => {
     ).toBe(1);
   });
 
-  // Position as a number, not only as a sentence: a job row can draw a bar from
-  // the first and can only print the second.
   it("reports progress per case", async () => {
     model = startFakeModel(() => ({
       choices: [{ message: { content: "hi" } }],
@@ -259,8 +234,7 @@ describe("personal suite", () => {
     expect(updates.map((u) => u.progress)).toEqual([1 / 3, 2 / 3, 1]);
   });
 
-  // A rejected request scored as "declined to call a tool" would silently
-  // report a perfect false-positive rate for a broken endpoint.
+  // An HTTP error must not score as "declined to call a tool".
   it("fails loudly when the model server errors", async () => {
     const server: Server = createServer((_req, res) => {
       res.writeHead(500);
@@ -283,8 +257,7 @@ describe("personal suite", () => {
   });
 });
 
-// A POSIX box never sees this, which is exactly why it is pinned: the failure
-// is invisible off Windows and cost a full run to find.
+// Windows-only failure; pinned because POSIX CI can't see it.
 describe("lmEvalEnv", () => {
   it("forces UTF-8 so the child can print its own summary table", () => {
     const env = lmEvalEnv();
@@ -294,15 +267,11 @@ describe("lmEvalEnv", () => {
 
   it("passes the bearer through, defaulting to a placeholder", () => {
     expect(lmEvalEnv("sk-real").OPENAI_API_KEY).toBe("sk-real");
-    // lm_eval's OpenAI client refuses to start without one, and a local Studio
-    // may legitimately have no key.
+    // lm_eval's OpenAI client refuses to start without a key.
     expect(lmEvalEnv().OPENAI_API_KEY).toBe("dummy");
   });
 });
 
-// A stand-in for a spawned child: stdout/stderr are emitters, and kill() ends it
-// the way a real process does — the OS delivers `close` shortly after — so the
-// watchdog can settle. `signals` records which signals it was sent.
 function fakeChild(): ChildProcess & { signals: string[] } {
   const child = new EventEmitter() as ChildProcess & { signals: string[] };
   child.stdout = new EventEmitter() as ChildProcess["stdout"];
@@ -322,9 +291,7 @@ const frame = (pct: number, at: number, of: number) =>
   );
 
 describe("watchProcess", () => {
-  // The reported hang: the bar reaches 100%, lm_eval then wedges before exiting,
-  // and the job used to sit at "running 100%" forever with the GPU still held.
-  // The watchdog kills it so the run can settle and free the host.
+  // lm_eval can wedge after reaching 100%, holding the GPU.
   it("kills a child that goes silent past its budget", async () => {
     const child = fakeChild();
     const watched = watchProcess(child, { stallMs: 30 });
@@ -335,8 +302,6 @@ describe("watchProcess", () => {
     expect(child.signals).toContain("SIGTERM");
   });
 
-  // Any output restarts the clock, so a run that keeps emitting frames — even
-  // slowly — is never mistaken for a wedge.
   it("keeps running while output keeps arriving", async () => {
     const child = fakeChild();
     const watched = watchProcess(child, { stallMs: 80 });
@@ -398,16 +363,14 @@ describe("parseLmEvalResults", () => {
     });
   });
 
-  // stderr is a confidence interval, not a score; charting it as one would be
-  // actively misleading.
+  // stderr is a confidence interval, not a score.
   it("drops stderr entries and non-numeric aliases", () => {
     const metrics = parseLmEvalResults(raw).map((s) => s.metric);
     expect(metrics.some((m) => m.includes("stderr"))).toBe(false);
     expect(metrics).not.toContain("alias");
   });
 
-  // Seen in a live gsm8k run: a row count rendered beside accuracy as "1.000",
-  // which reads like a perfect score.
+  // sample_len is a row count; a live run showed it as "1.000".
   it("drops sample_len, which is a count rather than a score", () => {
     expect(parseLmEvalResults(raw).map((s) => s.metric)).not.toContain(
       "sample_len",

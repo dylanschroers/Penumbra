@@ -1,6 +1,4 @@
-/* The compute-targets panel, shared by the chat pill and the Model Lab pill.
-   Scoped to .ct so it can sit inside either popover without inheriting either
-   module's form styling. */
+/* Shared by the chat and Lab pills; scoped to .ct. */
 
 .ct {
   display: flex;
@@ -51,8 +49,6 @@
   color: var(--muted);
 }
 
-/* A filled dot for a target that can answer, hollow for one that cannot — the
-   same states the pills use. */
 .ct__dot {
   width: 0.5rem;
   height: 0.5rem;
@@ -66,8 +62,7 @@
   border-color: var(--primary);
 }
 
-/* Amber for the two "answering, but not usable" states: something is there, and
-   what it needs is a correction rather than a restart. */
+/* Amber: answering but unusable (bad key, not Studio). */
 .ct__dot--unauthorized,
 .ct__dot--not_studio {
   background: #fbbf24;
@@ -80,8 +75,6 @@
   word-break: break-all;
 }
 
-/* The loaded-model control. Sits above the address form because it is the thing
-   changed often, while an address is set once and then left alone. */
 .ct__models {
   display: flex;
   flex-direction: column;
@@ -105,8 +98,6 @@
   gap: 0.35rem;
 }
 
-/* The names are long and the row is narrow; let the field take the slack and
-   shrink below its content rather than pushing the panel wide. */
 .ct__models-row input {
   flex: 1;
   min-width: 0;
@@ -129,8 +120,6 @@
   gap: 0.35rem;
 }
 
-/* Launch-the-local-Studio control, shown only while it is down and only on the
-   server's own machine. */
 .ct__launch {
   display: flex;
   align-items: center;

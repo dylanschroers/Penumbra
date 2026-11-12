@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UnslothEngine } from "./UnslothEngine";
 
-// The OpenAI protocol loop is tested once, in @penumbra/shared's OpenAiEngine
-// tests. UnslothEngine only resolves Tier-1 configuration — address, model,
-// credentials — so that is all this file checks.
+// The protocol loop is tested in OpenAiEngine's tests; this covers Tier 1
+// config only.
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
@@ -13,7 +12,6 @@ function res(body: unknown, ok = true, status = 200): Response {
 
 const bindings = { tools: [], system: "sys", runTool: vi.fn() };
 
-/** Probe once and hand back the fetch arguments it produced. */
 async function probe(engine: UnslothEngine) {
   mockFetch.mockResolvedValueOnce(res({ data: [] }));
   await engine.getStatus();
@@ -43,8 +41,7 @@ describe("UnslothEngine", () => {
     expect(url).toBe("http://gpu-host:8888/v1/models");
     expect(headers.Authorization).toBe("Bearer sk-unsloth-abc");
 
-    // Routed by URL: a turn first asks /v1/models which model is actually
-    // serving it, so the chat call is no longer simply the next one.
+    // Routed by URL: a turn reads /v1/models before the chat call.
     mockFetch.mockImplementation(async (target: string) =>
       String(target).includes("/v1/models")
         ? res({ data: [] })
@@ -74,15 +71,12 @@ describe("UnslothEngine", () => {
     expect(headers.Authorization).toBe("Bearer sk-explicit");
   });
 
-  // A Studio instance on a trusted LAN can run without a key. Sending an empty
-  // bearer would be rejected as malformed, so the header must be absent.
+  // Studio rejects an empty bearer as malformed.
   it("omits the Authorization header when no key is configured", async () => {
     const { headers } = await probe(new UnslothEngine({ bindings, env: {} }));
     expect(headers.Authorization).toBeUndefined();
   });
 
-  // A Studio reachable only over a LAN or tunnel answers far slower than a
-  // localhost llama-server; too tight a probe reports a healthy Studio as down.
   it("waits longer for a status probe than the localhost default", async () => {
     const engine = new UnslothEngine({ bindings, env: {} });
     let signal: AbortSignal | undefined;
@@ -92,14 +86,12 @@ describe("UnslothEngine", () => {
     });
 
     await engine.getStatus();
-    // AbortSignal.timeout exposes no duration, so assert indirectly: the signal
-    // must still be live well past the 1.5s default.
+    // AbortSignal.timeout exposes no duration; check it outlives the 1.5s default.
     await new Promise((r) => setTimeout(r, 1800));
     expect(signal?.aborted).toBe(false);
   });
 
   it("allows more tool steps than the Tier-0 default", async () => {
-    // The model asks for a tool forever; the loop stops at Tier 1's budget.
     const runTool = vi.fn().mockResolvedValue("ok");
     mockFetch.mockResolvedValue(
       res({

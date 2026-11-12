@@ -7,73 +7,43 @@ import {
 } from "@penumbra/shared";
 import type Database from "better-sqlite3";
 
-// Where the editable half of the system prompt lives.
-//
-// Server-side, and deliberately not client-supplied. The prompt is the
-// highest-privilege text in a turn, and this server's agent executes write and
-// delete tools in-process (../http/auth → "an actuator rather than data"), so a
-// prompt arriving with each request would be a tool-running instruction channel
-// open to anything that can reach the route. RemoteEngine already states the
-// other half of this rule: it holds no bindings because the server owns the
-// tools, the prompt, and execution.
-//
-// The browser's embedded engine reads the same value through GET /agent/prompt
-// and caches it, so both tiers run one prompt rather than drifting apart — the
-// failure the compute refactor fixed for Studio credentials.
+// Server-side, never client-supplied: the prompt drives write tools, so
+// accepting it per request would open an instruction channel to anyone who can
+// reach the route. Tier 0 reads the same value via GET /agent/prompt.
 
-/** Same table the compute targets use: one settings store, not two. */
+/** Same settings table as the compute targets. */
 const KEY_PERSONA = "agent.persona";
-/** The reply-length cap. Stored beside the persona because it is the same kind
- *  of setting — how a turn runs, edited from the same panel, read fresh per
- *  turn — and a second store for one integer would be two places to look. */
 const KEY_MAX_TOKENS = "agent.maxTokens";
 
 export interface PromptState {
-  /** The persona in force, stored or default. */
   persona: string;
-  /** The shipped default, so the UI can offer a reset and show a diff. */
   fallback: string;
-  /** The fixed half, shown read-only: "see the system prompt" means all of it. */
   policy: string;
-  /** Which of the two is in force. Mirrors ComputeTarget.source. */
   source: "default" | "settings";
-  /** Longest persona the route will accept. */
   maxLength: number;
   /**
-   * Reply-length cap, or null to let each tier use its own default.
-   *
-   * Null rather than a number, because the two tiers do not want the same
-   * ceiling: 512 keeps a 1.7B model from running away on thinking tokens, and
-   * would cut a 12B model off mid-sentence. One shared override with no value
-   * means "each tier knows best", which is the right default and the only one
-   * that does not silently re-break the truncation this came from.
+   * Null lets each tier keep its own default: 512 suits a 1.7B model and cuts a
+   * 12B one off mid-sentence.
    */
   maxTokens: number | null;
 }
 
-/** An edit to the editable settings. An absent field is left as it was; a
- *  `maxTokens` of null clears the override rather than leaving it. */
+/** A null `maxTokens` clears the override. */
 export interface PromptPatch {
   persona?: string;
   maxTokens?: number | null;
 }
 
-/** Why an edit was refused. Named rather than boolean because the route turns
- *  each into a different error code, and the caller cannot tell which field was
- *  at fault from a bare failure. */
 export type PromptRefusal = "too_long" | "out_of_range";
 
 export type PromptUpdate =
   | { ok: true; state: PromptState }
   | { ok: false; error: PromptRefusal };
 
-/** Whether a persona would be accepted. The prompt shares a context window with
- *  the conversation, and one that fills it starves the turn. */
 export function personaAccepted(persona: string): boolean {
   return persona.length <= AGENT_PERSONA_MAX;
 }
 
-/** Whether a reply cap would be accepted. Null (no override) always is. */
 export function maxTokensAccepted(value: number | null): boolean {
   return (
     value === null ||
@@ -85,22 +55,12 @@ export function maxTokensAccepted(value: number | null): boolean {
 
 export interface PromptStore {
   current(): PromptState;
-  /** Store a persona. Returns the new state, or null when it is too long. */
+  /** Returns null when too long. */
   set(persona: string): PromptState | null;
-  /** Store a reply-length cap, or null to go back to each tier's own default.
-   *  Returns null when the value is out of range. */
+  /** Returns null when out of range. */
   setMaxTokens(value: number | null): PromptState | null;
-  /**
-   * Apply an edit to both settings at once.
-   *
-   * Every field is checked before any of them is written, which is the whole
-   * reason this exists beside the two setters: the route used to call them in
-   * turn, so a form carrying a good persona and an out-of-range cap saved the
-   * persona and then answered 400. A rejected edit now changes nothing, which
-   * is what a caller reading that status will assume.
-   */
+  /** Validates every field before writing any, so a refused edit changes nothing. */
   update(patch: PromptPatch): PromptUpdate;
-  /** Forget the override and fall back to the shipped default. */
   clear(): PromptState;
 }
 
@@ -121,9 +81,7 @@ CREATE TABLE IF NOT EXISTS lab_settings (
   const dropSetting = db.prepare("DELETE FROM lab_settings WHERE key = ?");
 
   function current(): PromptState {
-    // An empty stored persona is a deliberate "no style guidance", the same
-    // distinction targets.ts draws for a deliberately keyless Studio, so it must
-    // not read as absent and fall back to the default.
+    // An empty stored persona is deliberate, not absent.
     const stored = (
       readSetting.get(KEY_PERSONA) as { value: string } | undefined
     )?.value;
@@ -137,14 +95,11 @@ CREATE TABLE IF NOT EXISTS lab_settings (
       policy: AGENT_POLICY,
       source: stored === undefined ? "default" : "settings",
       maxLength: AGENT_PERSONA_MAX,
-      // A row that is missing or unreadable reads as "no override" rather than
-      // as a cap of NaN, which would reach the wire and cap nothing.
+      // NaN would reach the wire and cap nothing.
       maxTokens: Number.isFinite(parsed) ? parsed : null,
     };
   }
 
-  /** The writes themselves, past validation. Shared by the setters and by
-   *  `update`, so there is one place a value reaches the table from. */
   function writePersona(persona: string): void {
     writeSetting.run({ key: KEY_PERSONA, value: persona });
   }
@@ -166,8 +121,7 @@ CREATE TABLE IF NOT EXISTS lab_settings (
       return current();
     },
     update(patch) {
-      // Both checks first, then both writes. Split deliberately: interleaving
-      // them is exactly how half an edit lands.
+      // All checks before any write, so half an edit never lands.
       if (patch.persona !== undefined && !personaAccepted(patch.persona)) {
         return { ok: false, error: "too_long" };
       }

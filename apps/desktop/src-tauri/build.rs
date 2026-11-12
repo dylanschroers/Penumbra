@@ -1,7 +1,5 @@
 fn main() {
-    // Rerun when the sidecar asset drop-in dirs change, so fetching the model /
-    // llama-server after a build still gets them copied into target as
-    // resources (tauri-build only tracks its config files by default).
+    // tauri-build only tracks its own config, so rerun when assets are dropped in.
     println!("cargo:rerun-if-changed=binaries");
     println!("cargo:rerun-if-changed=models");
     tauri_build::build()

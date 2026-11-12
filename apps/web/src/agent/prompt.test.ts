@@ -7,10 +7,8 @@ import {
 import { beforeEach, describe, expect, it } from "vitest";
 import { cachedPersona, localPrompt } from "./prompt";
 
-// Tier 0's promise is "offline, always available", so the persona it runs with
-// has to be readable synchronously and without a server. The mirror in
-// localStorage is what makes that true; these cover what it answers when the
-// server has never been reached, and the empty-vs-absent distinction.
+// Tier 0 must read the persona synchronously and offline, via the
+// localStorage mirror.
 
 const KEY = `${STORAGE_NAMESPACE}.agent.persona.v1`;
 
@@ -26,9 +24,7 @@ describe("cachedPersona", () => {
     expect(cachedPersona()).toBe("Answer in one sentence.");
   });
 
-  // Absent means "never fetched"; empty means a persona deliberately cleared to
-  // mean "no style guidance". Collapsing the two would quietly reinstate the
-  // default the user removed.
+  // Absent means never fetched; empty means deliberately cleared.
   it("keeps a deliberately empty persona empty", () => {
     localStorage.setItem(KEY, "");
     expect(cachedPersona()).toBe("");
@@ -40,9 +36,6 @@ describe("cachedPersona", () => {
   });
 });
 
-// What the panel renders when no server has answered. The point is that it is
-// the real prompt rather than a placeholder: the same persona the engine reads,
-// and the policy constant the turn is actually composed from.
 describe("localPrompt", () => {
   it("assembles the whole prompt with no server", () => {
     expect(localPrompt()).toEqual({
@@ -51,7 +44,6 @@ describe("localPrompt", () => {
       policy: AGENT_POLICY,
       source: "default",
       maxLength: AGENT_PERSONA_MAX,
-      // No override mirrored, so each tier keeps its own default.
       maxTokens: null,
     });
   });
@@ -64,9 +56,7 @@ describe("localPrompt", () => {
     });
   });
 
-  // Presence of the key decides, not equality with the default: a user who set
-  // the persona to the default text still chose it, and "Reset to default" is
-  // enabled off `source`.
+  // Key presence decides, not equality with the default.
   it("counts a persona set to the default text as an override", () => {
     localStorage.setItem(KEY, AGENT_PERSONA_DEFAULT);
     expect(localPrompt().source).toBe("settings");

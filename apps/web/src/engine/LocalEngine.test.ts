@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocalEngine } from "./LocalEngine";
 
-// The OpenAI protocol loop is tested once, in @penumbra/shared's OpenAiEngine
-// tests. LocalEngine only supplies Tier-0 configuration, so that is all this
-// file checks.
+// The protocol loop is tested in OpenAiEngine's tests; this covers Tier 0
+// config only.
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 

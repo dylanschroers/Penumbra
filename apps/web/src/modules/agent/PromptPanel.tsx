@@ -13,44 +13,21 @@ import {
   savePrompt,
 } from "../../agent/prompt";
 
-// The system prompt, shown whole and edited in part.
-//
-// It opens from the same header as the compute panel because the two answer
-// adjacent questions — what is answering me, and how is it told to behave —
-// and configuration belongs where its effect is visible rather than in a
-// settings screen that would be the only place it is ever seen.
-//
-// The policy half is rendered read-only rather than hidden. "See the system
-// prompt" is not answered by showing only the part that happens to be editable,
-// and a user who can read the tool rules can tell whether an edit of theirs is
-// what broke task creation. It is fixed because everything load-bearing lives
-// there: the tool policy, and the honesty rules that stop a small model
-// inventing a name and a vendor for itself.
-//
-// It renders without a server. The panel used to fetch before showing anything,
-// which meant the tier that runs offline had a prompt nobody offline could read
-// — and every field it needs is already in the bundle or in localStorage
-// (../../agent/prompt → localPrompt). The fetch still happens, and still wins
-// when it answers; only *editing* requires the server, which owns the value.
+// The policy half is shown read-only so users can see the tool rules. Renders
+// offline from localPrompt(); the server's answer wins when it comes, and only
+// editing needs the server.
 
 export function PromptPanel() {
-  // Seeded from the client's own copy rather than starting empty, so the prompt
-  // is readable with no server at all — see localPrompt(). The fetch below
-  // upgrades it to the server's view when one answers.
   const [state, setState] = useState<PromptState>(localPrompt);
   const [draft, setDraft] = useState(() => localPrompt().persona);
-  /** The cap as typed. A string, not a number, so the field can be *empty* —
-   *  which is the "let each tier use its own default" case and is not the same
-   *  as any number the box could hold. */
+  /** A string so the field can be empty, meaning "each tier's own default". */
   const [cap, setCap] = useState(() => {
     const stored = localPrompt().maxTokens;
     return stored === null ? "" : String(stored);
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** No server reached yet. Editing is disabled meanwhile: the server owns the
-   *  stored persona, and writing one here would put the two tiers on different
-   *  prompts — the divergence this module exists to avoid. */
+  /** Editing needs the server, which owns the stored persona. */
   const [offline, setOffline] = useState(false);
 
   useEffect(() => {
@@ -69,7 +46,6 @@ export function PromptPanel() {
     };
   }, []);
 
-  /** Apply a server response: it is the source of truth for what was stored. */
   const applied = (next: PromptState) => {
     setState(next);
     setDraft(next.persona);
@@ -82,8 +58,7 @@ export function PromptPanel() {
     event.preventDefault();
     setBusy(true);
     try {
-      // An empty box clears the override; anything else is sent as a number and
-      // the server has the final say on the range.
+      // Empty clears the override; the server validates the range.
       const trimmed = cap.trim();
       applied(
         await savePrompt({
@@ -112,9 +87,7 @@ export function PromptPanel() {
   const over = draft.length > state.maxLength;
   const storedCap = state.maxTokens === null ? "" : String(state.maxTokens);
   const capNumber = Number(cap.trim());
-  // An empty box is valid — it means "no override". Anything present has to be
-  // a whole number in range, checked here so Save is disabled rather than the
-  // server refusing a value the field happily accepted.
+  // Validated here so Save disables rather than the server refusing.
   const capInvalid =
     cap.trim() !== "" &&
     (!Number.isInteger(capNumber) ||
@@ -180,10 +153,7 @@ export function PromptPanel() {
           </span>
           <span>{cap.trim() === "" ? "Default" : "Custom"} in force</span>
         </div>
-        {/* The defaults differ per tier on purpose, so "empty" is a real
-            setting rather than an unset field: 512 stops a 1.7B model running
-            away on thinking tokens, and would cut the server model off
-            mid-sentence. Leaving this blank keeps both. */}
+        {/* Blank keeps each tier's default: 512 suits the 1.7B model and would cut the server model off. */}
         <p className="prompt__hint">
           How many tokens one reply may use before it is cut off. Leave empty to
           let each model use its own default. A reply that hits the cap is
@@ -210,10 +180,6 @@ export function PromptPanel() {
         </button>
       </div>
 
-      {/* Said plainly rather than shown as a failure: this *is* the prompt the
-          local model will use, so the panel has not fallen back to something
-          approximate. Only the ability to change it is missing, and the staleness
-          is the one caveat worth naming. */}
       {offline ? (
         <p className="prompt__hint">
           The server is not reachable, so this is the prompt stored on this

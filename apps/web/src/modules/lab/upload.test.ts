@@ -8,7 +8,6 @@ const { uploadModel } = await import("./upload");
 
 const target = { serverURL: "http://host" };
 
-/** Serve a file of `size` bytes in whatever chunk lengths are asked for. */
 function fileOfSize(size: number) {
   return async (_path: string, offset: number, length: number) =>
     new ArrayBuffer(Math.max(0, Math.min(length, size - offset)));
@@ -22,8 +21,8 @@ beforeEach(() => {
 
 describe("uploadModel — a standalone gguf", () => {
   it("sends the picked file alone, without listing its folder", async () => {
-    // The folder around a quant holds a dozen more of the same weights; listing
-    // it would upload all of them (and listing a *file* fails outright).
+    // Listing a quant's folder would upload its siblings (and listing a file
+    // fails).
     readChunk.mockImplementation(fileOfSize(10));
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValue({

@@ -1,7 +1,5 @@
 import type { TaskRow, UpdateTaskInput } from "@penumbra/shared";
 
-// A single task row. Stateless: it renders the task and calls back up to the
-// hook for any change. The checkbox toggles between "todo" and "done".
 export function TaskItem({
   task,
   onUpdate,

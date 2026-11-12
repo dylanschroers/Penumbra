@@ -1,15 +1,12 @@
 /**
  * @vitest-environment node
  */
-// The storage-agnostic DbApi against a real in-memory SQLite (via ./testing).
-// Every test starts from a freshly migrated store, so these also exercise the
-// migrations end to end. No DOM here — plain Node is faster and more honest.
+// Real in-memory SQLite, so migrations run end to end.
 
 import type { SyncTask } from "@penumbra/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDb } from "./testing";
 
-// A full sync-wire row with sensible defaults; override what a test cares about.
 function syncRow(partial: Partial<SyncTask> & { id: string }): SyncTask {
   return {
     userId: "local",
@@ -26,8 +23,7 @@ function syncRow(partial: Partial<SyncTask> & { id: string }): SyncTask {
   };
 }
 
-// createTask/updateTask stamp Date.now(); a fixed, advanceable clock makes
-// ordering and updatedAt comparisons deterministic instead of millisecond-racy.
+// A fixed clock makes updatedAt ordering deterministic.
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
@@ -118,8 +114,7 @@ describe("outbox bookkeeping", () => {
     expect(rows).toHaveLength(1); // one distinct row
   });
 
-  // The core "no edit is ever lost" guarantee from docs/SYNC.md: a mutation
-  // that lands after collect but before clear has a higher seq and survives.
+  // A mutation landing between collect and clear has a higher seq and survives.
   it("keeps a mutation that lands mid-push", async () => {
     const { api } = createTestDb();
     await api.createTask({ title: "a" });
@@ -236,7 +231,6 @@ describe("epochs (adoptServer / cursor)", () => {
     expect(await api.getServerId()).toBe("server-abc");
     expect(await api.getCursor()).toBe(0); // revs nulled
     const { rows } = await api.collectOutbox();
-    // Every row re-offered, tombstone (id "2") included.
     expect(rows.map((r) => r.id).sort()).toEqual(["1", "2"]);
   });
 

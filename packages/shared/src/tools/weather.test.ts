@@ -1,16 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchWeather, getWeatherTool } from "./weather";
 
-// The failure paths matter more than the happy one here. This is the only tool
-// that leaves the machine, and it runs on the tier whose point is working
-// without a network — so "offline" and "no such place" have to come back as
-// sentences the model can relay, not as thrown errors that reach the user as
-// "Tool get_weather failed: TimeoutError".
+// Failures must come back as sentences the model can relay, not thrown errors.
 
 const geocode = (results: unknown[]) => ({ results });
 const forecast = (current: Record<string, unknown>) => ({ current });
 
-/** Answer the geocode call then the forecast call, in that order. */
 function mockFetch(...bodies: unknown[]): void {
   const fetchMock = vi.fn();
   for (const body of bodies) {
@@ -75,8 +70,6 @@ describe("fetchWeather", () => {
     expect(out).toBe("Paris: 20°C (68°F), clear.");
   });
 
-  // An unknown code must not become an invented condition — the temperature is
-  // still true, the description would not be.
   it("drops the condition it cannot name rather than guessing", async () => {
     mockFetch(
       geocode([{ name: "Lima", latitude: -12, longitude: -77 }]),
@@ -92,8 +85,7 @@ describe("fetchWeather", () => {
     );
   });
 
-  // The bug this pins: a service that answers and refuses is not a missing
-  // network, and saying so sends the user to check their wi-fi for nothing.
+  // An HTTP error means the service answered, not that the network is down.
   it("reports an HTTP failure as the service answering", async () => {
     vi.stubGlobal(
       "fetch",
