@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ColorPickerModule } from "../ColorPickerModule";
 import type { Tool } from "./engine";
 import { usePaint } from "./PaintProvider";
+import { hexToPixel } from "./raster";
 
 const TOOLS: { id: Tool; label: string; glyph: string }[] = [
   { id: "pencil", label: "Pencil", glyph: "✏️" },
@@ -71,9 +72,10 @@ export function PaintActionBar({
   actions: PaintActions;
   onResize: (w: number, h: number) => void;
 }) {
-  const { engine, zoom, setZoom } = usePaint();
+  const { engine, zoom, setZoom, secondary } = usePaint();
   useSyncExternalStore(engine.subscribe, engine.getVersion);
   const fileRef = useRef<HTMLInputElement>(null);
+  const rotateTarget = engine.selection ? "selection" : "canvas";
 
   return (
     <div className="paint__bar">
@@ -140,6 +142,25 @@ export function PaintActionBar({
       </button>
       <button type="button" className="paint__btn" onClick={actions.onPaste}>
         Paste
+      </button>
+      <span className="paint__sep" />
+      <button
+        type="button"
+        className="paint__btn"
+        aria-label={`Rotate ${rotateTarget} left`}
+        title={`Rotate the ${rotateTarget} 90° left`}
+        onClick={() => engine.rotate(false, hexToPixel(secondary))}
+      >
+        ↺
+      </button>
+      <button
+        type="button"
+        className="paint__btn"
+        aria-label={`Rotate ${rotateTarget} right`}
+        title={`Rotate the ${rotateTarget} 90° right`}
+        onClick={() => engine.rotate(true, hexToPixel(secondary))}
+      >
+        ↻
       </button>
       <span className="paint__sep" />
       <label className="paint__field">

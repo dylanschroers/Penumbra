@@ -39,6 +39,24 @@ export function pixelToHex(pixel: number): string {
   return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
 }
 
+/**
+ * The pixel under a pointer coordinate, along one axis.
+ *
+ * `start` is rounded because the canvas paints snapped to whole pixels however
+ * fractional its layout box, and WebKit reports integer pointer positions.
+ *
+ * Multiplying before dividing matters: (110 / 600) * 600 is 109.99999999999999,
+ * which floors a pixel short, while 110 * 600 / 600 is exact.
+ */
+export function clientToPixel(
+  client: number,
+  start: number,
+  cssSize: number,
+  pixels: number,
+): number {
+  return Math.floor(((client - Math.round(start)) * pixels) / cssSize);
+}
+
 export function unionRect(a: Rect | null, b: Rect | null): Rect | null {
   if (!a) return b;
   if (!b) return a;
@@ -69,6 +87,23 @@ export function readRect(r: Raster, rect: Rect): Uint32Array {
   for (let row = 0; row < rect.h; row++) {
     const start = (rect.y + row) * r.width + rect.x;
     out.set(r.px.subarray(start, start + rect.w), row * rect.w);
+  }
+  return out;
+}
+
+/** A `w`×`h` block turned 90°, which makes it `h`×`w`. */
+export function rotate90(
+  pixels: Uint32Array,
+  w: number,
+  h: number,
+  clockwise: boolean,
+): Uint32Array {
+  const out = new Uint32Array(pixels.length);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const at = clockwise ? x * h + (h - 1 - y) : (w - 1 - x) * h + y;
+      out[at] = pixels[y * w + x]!;
+    }
   }
   return out;
 }

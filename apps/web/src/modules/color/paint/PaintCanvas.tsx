@@ -8,7 +8,7 @@ import {
 } from "react";
 import { renderText } from "./imageIo";
 import { usePaint } from "./PaintProvider";
-import { hexToPixel } from "./raster";
+import { clientToPixel, hexToPixel } from "./raster";
 
 /** The on-screen canvas, its selection overlay, its text box and the status bar.
  *  `status` is the latest message from a toolbar action. */
@@ -69,13 +69,9 @@ export function PaintCanvas({ status }: { status: string }) {
 
   function toDoc(e: PointerEvent) {
     const box = canvasRef.current!.getBoundingClientRect();
-    // Rounded because the canvas paints snapped to whole pixels however fractional
-    // its layout box. WebKit's integer clientX would otherwise land one to the left.
-    const left = Math.round(box.left);
-    const top = Math.round(box.top);
     return {
-      x: Math.floor(((e.clientX - left) / box.width) * engine.width),
-      y: Math.floor(((e.clientY - top) / box.height) * engine.height),
+      x: clientToPixel(e.clientX, box.left, box.width, engine.width),
+      y: clientToPixel(e.clientY, box.top, box.height, engine.height),
     };
   }
 

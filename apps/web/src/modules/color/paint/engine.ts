@@ -14,6 +14,7 @@ import {
   type Raster,
   type Rect,
   readRect,
+  rotate90,
   strokeRect,
   unionRect,
 } from "./raster";
@@ -385,6 +386,41 @@ export class PaintEngine {
       float: block.px,
       hole: null,
       back: WHITE,
+    };
+    this.renderFloat();
+    this.flushView();
+    this.notify();
+  }
+
+  /** Rotate the selection 90° about its center, or the whole canvas without one.
+   *  A selection lifts first, so however many turns it takes, it lands as one
+   *  undo step, and four turns land as none. */
+  rotate(clockwise: boolean, back: number): void {
+    if (this.gesture) return;
+    const s = this.selection;
+    if (!s) {
+      const { width, height, px } = this.committed;
+      this.replace({
+        width: height,
+        height: width,
+        px: rotate90(px, width, height, clockwise),
+      });
+      return;
+    }
+    if (!s.float) {
+      s.float = readRect(this.committed, s.rect);
+      s.hole = { ...s.rect };
+      s.back = back;
+    }
+    const { x, y, w, h } = s.rect;
+    s.float = rotate90(s.float, w, h, clockwise);
+    // trunc, not floor: rounding the same way in both directions is what stops
+    // a block with an odd size difference creeping sideways as it turns.
+    s.rect = {
+      x: x + Math.trunc((w - h) / 2),
+      y: y + Math.trunc((h - w) / 2),
+      w: h,
+      h: w,
     };
     this.renderFloat();
     this.flushView();
