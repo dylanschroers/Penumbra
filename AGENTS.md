@@ -5,15 +5,24 @@ doing anything, then read [STATUS.md](STATUS.md).
 
 ## What this is
 
-Penumbra is a local-first personal assistant: a web and Tauri desktop client
-with full local SQLite, a Fastify sync/agent server, and a Model Lab that drives
-Unsloth Studio. Overview: [README.md](README.md). Design: [docs/](docs/).
+Penumbra is a local-first platform for managing projects and personal tasks:
+a web and Tauri desktop client with full local SQLite, a Fastify sync/agent
+server, and modules (tasks, assistant, weather, Paint, Model Lab).
+Overview: [README.md](README.md). Design: [docs/](docs/).
 
 ## Priorities
 
-TODO(owner): the two or three things that matter most right now.
+1. Keep `main` clean, working, and documented. Finish or park work rather than
+   leaving it half-done in a worktree.
+2. Next big feature: finances or server management, built in small slices
+   that are each useful on their own. The owner picks which.
 
-Out of scope unless asked: TODO(owner).
+Parked, don't extend unless asked: the Model Lab, and `feat/claude-loop`
+(agents managing other agents). Fix bugs in them only if they block something
+else.
+
+Spend tokens on the product, not on agent tooling. Read only what the task
+needs.
 
 ## Before you start
 

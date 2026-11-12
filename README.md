@@ -1,8 +1,9 @@
 # Penumbra
 
-A local-first personal assistant. Every device holds a full database, works with
-no network, and syncs when it reconnects. The assistant runs on a small model
-bundled with the desktop app, or on a larger one through your own server.
+A local-first platform for managing projects and personal tasks. Every device
+holds a full database, works with no network, and syncs when it reconnects. A
+built-in assistant works across the modules, on a small model bundled with the
+desktop app or a larger one through your own server.
 
 ![The Penumbra workspace: Model Lab, Tasks, and Weather open as floating windows over a dock, with the assistant panel on the right](docs/images/workspace.png)
 
@@ -11,7 +12,7 @@ bundled with the desktop app, or on a larger one through your own server.
 | Module | What it does | Needs |
 |---|---|---|
 | **Tasks** | Priorities, due dates, done state. Synced across devices. | Nothing |
-| **Assistant** | Tool-calling chat over your data, on the embedded model or your server. | Nothing (embedded), a server for Tier 1 |
+| **Assistant** | Tool-calling chat over your data, on the embedded model or your server. On desktop it can also work in folders you share from the sidebar, with each change approved. | Nothing (embedded), a server for Tier 1 |
 | **Weather** | Current conditions and a three-day forecast, also an agent tool. | Network |
 | **Model Lab** | Fine-tune, export, and benchmark models on a GPU host you run. | A server plus Unsloth Studio |
 | **Paint** | MS Paint style drawing with undo, PNG save, copy/paste, and a screen color picker. | Nothing (screen sampling needs the desktop app or a Chromium browser) |
@@ -79,6 +80,9 @@ pnpm fetch-assets
 `pnpm desktop:build` makes a native package. `bundle.targets` in
 `apps/desktop/src-tauri/tauri.conf.json` is pinned to `["deb"]`; widen it for
 other platforms.
+
+To run the server in Docker beside a GPU llama-server, see
+`deploy/compose.yaml`.
 
 To use a server on another machine, enter its address in the status pill top
 right. To change the build-time default, set `VITE_SERVER_URL` in

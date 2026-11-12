@@ -4,44 +4,46 @@ Current state of the work. Update the relevant entry before you finish a task:
 what landed, what's left, and what you could not verify. Delete entries once
 merged and cleaned up.
 
-Last updated: 2026-11-11
+Last updated: 2026-11-12
 
 ## main
 
-- 4 commits ahead of `origin/main`, not pushed.
-- Uncommitted in the main checkout: Paint rotate left/right (+ tests).
-  Unit tests and typecheck pass. Not checked in the running app.
+Merged on 2026-11-12, not yet pushed to origin:
 
-## Branches in flight
+- Paint: rotate the canvas or selection 90°.
+- Agent file tools: the assistant can list, read, search, write, move, and
+  delete within folders shared in the sidebar, each change approved in chat.
+- Server in Docker beside a GPU llama-server (`deploy/compose.yaml`); the
+  built server runs under plain `node`; the model's identity line names the
+  real serving backend (from `/v1/models` `owned_by`) instead of a fixed label.
+- Docs rewritten and trimmed; code comments trimmed; this file and AGENTS.md.
 
-| Branch | Worktree | Purpose | State | Not verified |
-|---|---|---|---|---|
-| `feat/agent-file-tools` | `agent-file-tools` | Agent file tools scoped to the sidebar's folders, with approval cards; gateway fixes | 1 commit, clean, not merged | Tests, typecheck, `cargo check`, running app |
-| `feat/claude-loop` | `claude-loop` | Run the official `claude -p` for plan/review, free models for bulk work. Builds on agent-file-tools | ~2,600 lines uncommitted (15 new files). TS typecheck and tests pass; wired into server and agent UI | `cargo check` (`agent_exec.rs`), running app, real `claude` binary |
-| `docs/trim` | `docs-trim` | Docs rewrite, comment trim, AGENTS.md, STATUS.md | Uncommitted. Lint, typecheck, tests pass; only comments changed in code | `cargo check` on 3 Rust files (comments only) |
-| `origin/feat/server-docker` | none | Server in Docker beside a GPU llama-server | 3 commits, 5 weeks old, not merged | Everything; keep or drop? |
+Not verified by hand:
 
-## Merge plan
+- Agent file tools in the desktop app (desktop-only; unit tests and
+  `cargo check` pass).
+- Paint rotate in the running app (unit tests pass).
+- `docker compose up` (Docker wasn't available; the built server was booted
+  and answered `/sync/tasks`).
 
-1. Commit Paint rotate on main.
-2. Merge `feat/agent-file-tools`.
-3. Commit `feat/claude-loop`, merge it.
-4. Rebase `docs/trim`, folding in agent-file-tools' two doc paragraphs
-   (ARCHITECTURE security note, AGENT_DESIGN file tools), then merge.
-5. Decide on `server-docker`.
-6. Push, with the owner's go-ahead.
+## Parked
 
-## Cleanup (merged, safe to remove with the owner's OK)
+| Branch | What | State |
+|---|---|---|
+| `feat/claude-loop` | Run the official `claude -p` for planning and review; free models for bulk work | Committed as WIP. Typecheck, tests, `cargo check` pass. Never run against a real `claude` binary or in the app. Based on the pre-merge file tools commit. |
 
-- Worktrees: `gomodel-chat`, `markdown-old-webkit`.
-- Local branches: `feat/gomodel-chat`, `fix/markdown-old-webkit`,
-  `feat/paint-module`, `feat/macos-native-window`.
-- Remote branches: `launch-studio`, `macos-native-window`,
-  `model-lab-agent-tools`, `per-device-tokens`, `eval-prefix-sampling`.
+The Model Lab is in main and works, but is parked: no new features.
+
+## Next
+
+Pick finances or server management, write a one-page plan split into small
+slices, then build one slice per session.
 
 ## Known gaps
 
-- No end-to-end smoke test. "Runs in the app" is checked by hand or ad hoc.
+- No end-to-end smoke test; "runs in the app" is checked by hand.
 - RELEASE BLOCKER: the Tauri bundle `identifier` in
   `apps/desktop/src-tauri/tauri.conf.json` is the placeholder
   `local.placeholder.assistant` (see `packages/shared/src/identity/index.ts`).
+- Files changed by the merged branches still have long-form comments; trim
+  them when next touched.
