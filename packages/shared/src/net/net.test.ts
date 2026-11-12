@@ -11,8 +11,6 @@ describe("normalizeBaseUrl", () => {
     );
   });
 
-  // The case that silently broke sync: a relative path answered by the dev
-  // server's SPA fallback with 200 and a body of HTML.
   it("adds a scheme to a bare host:port", () => {
     expect(normalizeBaseUrl("172.29.78.53:3000")).toBe(
       "http://172.29.78.53:3000",

@@ -1,20 +1,10 @@
-// What the shell reopens with: which modules are in the dock, and where each
-// open window sits on the desk.
-//
-// The grid canvas persisted its layout, and nothing replaced that when the grid
-// went — every reload came up with an empty dock and the user re-added the same
-// modules by hand.
-//
-// Both fields live under one key because they are read and written together and
-// two keys could drift apart: a window restored for a module that isn't open
-// would leave the desk showing something the dock never mounted.
+// Open modules and window placements, under one key so they can't drift
+// apart.
 
 import { STORAGE_NAMESPACE } from "@penumbra/shared";
 
 export const SESSION_KEY = `${STORAGE_NAMESPACE}.shell.session.v1`;
 
-/** Where a snapped window sits on the desk: a half, a corner quarter,
- *  maximized, or centred. */
 export type SnapZone =
   | "left"
   | "right"
@@ -36,8 +26,7 @@ const ZONES: readonly string[] = [
   "bottom-right",
 ];
 
-/** One open window: a snap zone, or free-floating at a remembered rect
- *  (px, relative to the desk). The rect fields are unused while snapped. */
+/** Rect fields are unused while snapped. */
 export interface WindowPlacement {
   id: string;
   zone: SnapZone | null;
@@ -59,12 +48,8 @@ function isFinite_(v: unknown): v is number {
 }
 
 /**
- * Read the stored session, keeping only what still makes sense.
- *
- * `allowedIds` is the registry's current dock-able set, and ids are checked
- * against it rather than trusted: a module since renamed or dropped would
- * otherwise come back as a dock card for something that no longer exists, and
- * `getModule` would return undefined for it every render thereafter.
+ * Ids are checked against the registry: a dropped module would otherwise come
+ * back as a dock card getModule can't resolve.
  */
 export function loadSession(allowedIds: readonly string[]): ShellSession {
   try {
@@ -75,9 +60,6 @@ export function loadSession(allowedIds: readonly string[]): ShellSession {
         )
       : [];
 
-    // A window has to name something in the open set — including after the
-    // filter above, so a window whose module was dropped from the registry
-    // doesn't survive as a pane over nothing.
     const windows: WindowPlacement[] = [];
     const raw: unknown[] = Array.isArray(parsed?.windows) ? parsed.windows : [];
     for (const entry of raw) {
@@ -108,12 +90,11 @@ export function loadSession(allowedIds: readonly string[]): ShellSession {
           h: rec.h,
         });
       } else {
-        // A free placement without a usable rect falls back to centred.
         windows.push({ id, zone: "center", x: 0, y: 0, w: 0, h: 0 });
       }
     }
 
-    // Legacy record: v1 stored a single `focused` id. Reopen it centred.
+    // v1 stored a single `focused` id; reopen it centred.
     if (
       windows.length === 0 &&
       typeof parsed?.focused === "string" &&
@@ -131,18 +112,13 @@ export function loadSession(allowedIds: readonly string[]): ShellSession {
 
     return { open, windows };
   } catch {
-    // Unavailable (SSR/tests) or corrupt — start empty, as the shell did before
-    // it persisted anything.
     return EMPTY;
   }
 }
 
-/** Write the session back. Silent on failure: a workspace that doesn't survive
- *  the reload is worth less than one that takes the app down with it. */
+/** Silent on failure. */
 export function saveSession(session: ShellSession): void {
   try {
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  } catch {
-    // Non-fatal.
-  }
+  } catch {}
 }

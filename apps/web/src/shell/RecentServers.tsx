@@ -5,19 +5,11 @@ import {
   type ServerHistoryEntry,
 } from "../serverAddress";
 
-// The "Recent servers" disclosure in the status pill: the last few servers the
-// app connected to, collapsed by default, each one click away from being
-// reconnected.
-//
-// History is written on a proven connection, not on every address change (see
-// serverAddress.recordConnection), so this is "servers that answered" and holds
-// no typos. The current server is excluded — there is nothing to switch to
-// there. Tokens are stored with each entry so a reconnect needs no re-paste, but
-// are never rendered: the row shows only where, not the secret.
+// History is "servers that answered" (written on a proven connection).
+// Tokens are stored per entry but never rendered.
 
 const SHOWN = 3;
 
-/** "just now" / "2h ago" — enough to tell a fresh entry from a stale one. */
 function ago(at: string): string {
   const mins = Math.floor((Date.now() - Date.parse(at)) / 60_000);
   if (Number.isNaN(mins) || mins < 1) return "just now";
@@ -35,14 +27,12 @@ export function RecentServers({
   onPick: (entry: ServerHistoryEntry) => void;
 }) {
   const [open, setOpen] = useState(false);
-  // Bumped on forget so the list re-reads localStorage without a parent render.
   const [, setVersion] = useState(0);
 
   const history = getServerHistory()
     .filter((e) => e.url !== currentUrl)
     .slice(0, SHOWN);
 
-  // Nothing to offer until the app has connected somewhere else at least once.
   if (history.length === 0) return null;
 
   return (

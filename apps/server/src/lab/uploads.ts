@@ -9,19 +9,11 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
-// Where the client's local models and datasets land on the Studio host, so a
-// run started from a laptop can point Studio at a path Studio can actually read
-// (the transfer half of "models live on the client"; docs/MODEL_LAB.md →
-// Deployment topology). Files arrive chunked via POST /lab/upload and are used
-// verbatim as model_name / local_datasets.
-//
-// This host writes them; Studio, co-located, reads them. The bearer that guards
-// the route is the whole trust boundary — so the one thing that must be airtight
-// here is that a client-supplied name can never write outside the upload root.
+// Client-local models and datasets land here so Studio can read them. The
+// client controls the name, so writes must never escape the upload root.
 
 const UPLOAD_KINDS = new Set(["datasets", "models"]);
 
-/** The upload root on this host. Override with PENUMBRA_UPLOAD_DIR. */
 export function uploadRoot(): string {
   return (
     process.env.PENUMBRA_UPLOAD_DIR ?? join(homedir(), ".penumbra", "uploads")
@@ -29,10 +21,8 @@ export function uploadRoot(): string {
 }
 
 /**
- * Resolve `<root>/<kind>/<rel>` and prove the result stays inside the kind
- * directory. Rejects an unknown kind, an empty or absolute `rel`, and any `..`
- * that would climb out (path traversal) — the client controls `rel`, so this is
- * the security boundary.
+ * The security boundary: rejects unknown kinds, empty or absolute `rel`, and
+ * `..` escapes.
  */
 export function resolveDest(root: string, kind: string, rel: string): string {
   if (!UPLOAD_KINDS.has(kind)) throw new Error(`bad upload kind: ${kind}`);
@@ -41,25 +31,18 @@ export function resolveDest(root: string, kind: string, rel: string): string {
   }
   const kindDir = resolve(root, kind);
   const dest = resolve(kindDir, rel);
-  // `resolve` collapses `..`, so an escape shows up as a path no longer under
-  // kindDir. The `+ sep` guards against a sibling like `<root>/models-evil`.
+  // The `+ sep` stops a sibling like `<root>/models-evil`.
   if (dest !== kindDir && !dest.startsWith(kindDir + sep)) {
     throw new Error("path escapes the upload root");
   }
   return dest;
 }
 
-/**
- * Leave the volume this much room rather than filling it to the last byte — a
- * disk at zero free breaks far more than an upload.
- */
 export const SPACE_HEADROOM = 256 * 1024 * 1024;
 
 /**
- * Free bytes on the volume holding `dir`, less the headroom. The upload root may
- * not exist yet, so probe upwards to the first path that does. Returns Infinity
- * when no ancestor can be measured: an unknown figure must not veto an upload
- * that would have succeeded — the write itself still reports ENOSPC.
+ * Probes upward because the root may not exist yet. Infinity when unmeasurable:
+ * the write still reports ENOSPC.
  */
 export async function freeSpace(dir: string): Promise<number> {
   let probe = resolve(dir);
@@ -75,24 +58,17 @@ export async function freeSpace(dir: string): Promise<number> {
   }
 }
 
-/** True when `path` names a readable file on this host. Used to tell a path we
- *  hold from a name only the trainer can resolve. */
+/** Distinguishes a path we hold from a name only the trainer can resolve. */
 export async function isLocalFile(path: string): Promise<boolean> {
   const s = await stat(path).catch(() => null);
   return s?.isFile() ?? false;
 }
 
-/** True when `err` is a filesystem "disk is full". */
 export function isOutOfSpace(err: unknown): boolean {
   return (err as NodeJS.ErrnoException | null)?.code === "ENOSPC";
 }
 
-/**
- * Which of `files` still need uploading: any whose size on the host differs from
- * the client's (missing counts as differing). This is the "check the server for
- * a copy" step — a model already present in full is skipped. Pure; `sizeOf`
- * returns the host's size for a rel, or undefined when absent.
- */
+/** Files whose host size differs from the client's (missing counts). */
 export function computeNeed(
   files: { rel: string; size: number }[],
   sizeOf: (rel: string) => number | undefined,
@@ -100,8 +76,7 @@ export function computeNeed(
   return files.filter((f) => sizeOf(f.rel) !== f.size).map((f) => f.rel);
 }
 
-/** Sizes of every file under `dir`, keyed by path relative to `dir` (POSIX
- *  separators). Empty when the directory does not exist yet. */
+/** POSIX separators. Empty when `dir` doesn't exist. */
 export async function dirFileSizes(
   dir: string,
 ): Promise<Record<string, number>> {
@@ -128,23 +103,13 @@ export async function dirFileSizes(
   return sizes;
 }
 
-/** A dataset sitting on this host, ready to train from. */
 export interface DatasetFile {
-  /** Path relative to the dataset root, which is what the client uploaded it as. */
   name: string;
-  /** Absolute path — what a run passes Studio. */
   path: string;
   size: number;
 }
 
-/**
- * The datasets already uploaded here.
- *
- * Unfiltered by extension on purpose: `resolveDest` is what decides that
- * something may be written under `datasets/`, so anything here was uploaded as
- * a dataset, and second-guessing that would hide a file whose name this
- * happened not to recognize. An absent root simply lists nothing.
- */
+/** Not filtered by extension: `resolveDest` already decided what may be here. */
 export async function listDatasets(): Promise<DatasetFile[]> {
   const dir = join(uploadRoot(), "datasets");
   const sizes = await dirFileSizes(dir);
@@ -153,11 +118,7 @@ export async function listDatasets(): Promise<DatasetFile[]> {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/**
- * Write one chunk of an upload at `offset`. The first chunk (offset 0) creates
- * or truncates the file, so a re-upload starts clean; later chunks write at
- * their position. Chunks arrive in order from a single client.
- */
+/** Offset 0 truncates, so a re-upload starts clean. Chunks arrive in order. */
 export async function writeChunk(
   dest: string,
   offset: number,

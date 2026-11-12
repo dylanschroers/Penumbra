@@ -43,36 +43,24 @@ import {
   writeChunk,
 } from "./uploads";
 
-/** A chunk write body's headroom — chunks are a few MB; keep the ceiling well
- *  above that but bounded. */
 const UPLOAD_CHUNK_LIMIT = 16 * 1024 * 1024;
 
-// The Model Lab's HTTP surface. Jobs start, return immediately with an id, and
-// report progress over SSE — training runs for minutes to hours, so nothing
-// here blocks a request on completion.
-//
-// Behind the same gate as the agent routes, and for stronger reasons: these
-// spawn training, write files, and can evict the loaded model.
+// Jobs return an id immediately; progress is polled. Gated like /agent/*.
 
-/** Identify a Studio run across the several id fields it may carry, so runs
- *  seen before a training start can be told apart from the one it produces. */
+/** Snapshotting runs before training lets the new one be identified. */
 function runKey(run: StudioRun): string {
   return run.run_id ?? run.id ?? run.output_dir ?? JSON.stringify(run);
 }
 
-/** Quantizing a large model is slow, but not unbounded. */
 const EXPORT_TIMEOUT_MS = 60 * 60 * 1000;
 
-/** Background work started: the job to watch, and the run it created if it
- *  created one. */
 export interface LabStarted {
   ok: true;
   jobId: string;
   runId?: string;
 }
 
-/** Work refused before anything started. `error` is the stable code a route
- *  turns into a status; `message` is the sentence a caller can relay. */
+/** `error` is a stable code for the status; `message` is relayable text. */
 export interface LabRefused {
   ok: false;
   error: string;
@@ -80,55 +68,35 @@ export interface LabRefused {
 }
 
 /**
- * What the Model Lab can do, for callers inside this process.
- *
- * Returned by `registerLabRoutes` rather than built as a separate module
- * because both callers must share one piece of job orchestration: `inFlight`
- * is what decides whether a job can be cancelled, so a second copy would leave
- * a benchmark the agent started running with the Lab's Cancel button unable to
- * reach it. The agent binds this (../agent/tools.ts) instead of calling this
- * server's own HTTP surface, which would mean holding the bearer to talk to
- * itself.
+ * Returned by `registerLabRoutes` so the agent and the routes share one
+ * `inFlight` map: Cancel must reach jobs started from chat.
  */
 export interface LabService {
-  /** What the benchmark target can serve, and which of it is resident. */
   models(): Promise<{
     target: TargetId;
     models: AvailableModel[];
     inventoryError: string | null;
   }>;
-  /** Datasets already uploaded to this host. */
   datasets(): Promise<DatasetFile[]>;
   finetune(input: FinetuneRequest): Promise<LabStarted | LabRefused>;
   benchmark(input: BenchmarkInput): Promise<LabStarted | LabRefused>;
   jobs(): LabJob[];
   job(id: string): LabJob | undefined;
-  /** Completed fine-tunes, newest first. The same rows `GET /lab/runs` serves:
-   *  a job says how the training went, a run says what it left behind. */
   runs(): LabRun[];
-  /** Recorded benchmark results, newest first. Kept apart from the job that
-   *  produced them because a job row is a progress line and these are the
-   *  numbers — `GET /lab/scores` reads the same table. */
   scores(): BenchmarkResult[];
 }
 
 /**
- * A benchmark to run.
- *
- * `model` is optional here where the wire schema requires it, because it is
- * only a label: Studio serves whatever is resident regardless of what the
- * request names. An omitted one is filled with the model that will actually
- * answer, which is the value that should have been sent anyway.
+ * `model` is only a label (Studio serves what's resident); an omitted one is
+ * filled with the model that will answer.
  */
 export type BenchmarkInput = Omit<BenchmarkRequest, "model"> & {
   model?: string;
 };
 
-/** Refusals that mean the request was wrong rather than the compute being
- *  unable — the rest describe the state of a machine, which is a 409. */
+/** Everything else describes machine state: 409. */
 const BAD_REQUEST = new Set(["unknown_suite"]);
 
-/** Render a service result as the response the route contract promises. */
 function sendStarted(
   reply: FastifyReply,
   result: LabStarted | LabRefused,
@@ -146,19 +114,11 @@ function sendStarted(
 
 export interface LabRouteOptions {
   store: LabStore;
-  /** Where compute lives and which target each role uses. Addresses and keys
-   *  are read at the moment they are needed, so a rotated key or a retargeted
-   *  role takes effect on the next request with nothing to invalidate. */
+  /** Read at use time, so key rotation and retargeting apply on the next request. */
   targets: TargetStore;
-  /** Builds a Studio client for a target. Injectable so tests can supply fakes
-   *  without standing up a live Studio or tunnel. */
   makeClient?: (id: TargetId, creds: TargetCredentials) => StudioClient;
-  /** Overrides where benchmarked models are served from. Unset means the target
-   *  assigned to the benchmark role. */
   inferenceURL?: string;
   token?: string;
-  /** Issued device tokens, accepted alongside the shared secret. Optional so a
-   *  test can stand these routes up without a device store. */
   devices?: DeviceStore;
 }
 
@@ -175,17 +135,12 @@ export function registerLabRoutes(
 ): LabService {
   const preHandler = requireAuth({ token, devices });
 
-  /** The Studio for a target, or null when it has no address yet. Built per
-   *  call rather than cached: a client is a URL and a header map, so there is
-   *  nothing to keep alive — and nothing that can go stale against the store. */
   function clientFor(id: TargetId): StudioClient | null {
     if (!targets.list().find((t) => t.id === id)?.configured) return null;
     return makeClient(id, targets.credentials(id));
   }
 
-  /** Choose the Studio to train on. "auto" prefers local and falls back to a
-   *  reachable Colab; an explicit provider is honored as asked. Returns the
-   *  chosen client and a label, or an error code the route turns into a 409. */
+  /** "auto": local, then a reachable Colab. */
   async function pickTrainer(
     provider: "auto" | "local" | "colab" | undefined,
   ): Promise<
@@ -196,8 +151,7 @@ export function registerLabRoutes(
     const colab = clientFor("colab");
 
     if (provider === "local") {
-      // Local always has an address (an environment default at worst), so this
-      // branch cannot be unconfigured — but the type says it can.
+      // Unreachable in practice: local always has an address.
       if (!local) {
         return {
           ok: false,
@@ -217,7 +171,6 @@ export function registerLabRoutes(
       }
       return { ok: true, client: colab, via: "colab" };
     }
-    // auto: local first, then a reachable Colab.
     if (local && (await local.reachable())) {
       return { ok: true, client: local, via: "local" };
     }
@@ -232,19 +185,9 @@ export function registerLabRoutes(
     };
   }
 
-  /**
-   * Controllers for jobs that can still be stopped, keyed by job id.
-   *
-   * In memory rather than in the job row: a controller belongs to a running
-   * process in *this* server, so one that outlived a restart would name work
-   * nobody can reach. A job left running by a restart is already handled as a
-   * job whose progress simply stops.
-   */
+  /** In memory, not in the row: a controller dies with this process. */
   const inFlight = new Map<string, AbortController>();
 
-  /** Run work in the background, keeping the job record current. The job row is
-   *  the source of truth: the client may be gone, and must still be able to read
-   *  what happened. A controller, when given, makes the job stoppable. */
   const runJob = (
     job: LabJob,
     work: (report: (patch: Partial<LabJob>) => void) => Promise<void>,
@@ -254,16 +197,12 @@ export function registerLabRoutes(
     store.updateJob(job.id, { state: "running" });
     void work((patch) => store.updateJob(job.id, patch))
       .then(() => {
-        // A job that failed already set its own state; don't overwrite it.
         if (store.getJob(job.id)?.state === "running") {
           store.updateJob(job.id, { state: "done", progress: 1 });
         }
       })
       .catch((err) => {
-        // The work rejects either way, so the signal is what tells a deliberate
-        // stop from a break. Recorded as cancelled, with no scores written: a
-        // partial run is not a result, and half a suite recorded as a whole one
-        // is exactly the mislabeled row the rest of this file guards against.
+        // Cancelled, with no scores written: a partial suite is not a result.
         if (controller?.signal.aborted) {
           store.updateJob(job.id, {
             state: "cancelled",
@@ -277,14 +216,8 @@ export function registerLabRoutes(
   };
 
   /**
-   * Stop a running job.
-   *
-   * Only the work that holds a controller can be stopped, which today is a
-   * benchmark: it owns its subprocess (or its own request loop) and killing it
-   * leaves nothing behind. Training is not cancellable here on purpose — the
-   * run belongs to Studio, so stopping it means telling Studio, and abandoning
-   * this side would leave a job row saying "cancelled" over a GPU still
-   * training.
+   * Only benchmarks hold a controller. Training belongs to Studio; abandoning it
+   * here would show "cancelled" over a GPU still training.
    */
   app.post<{ Params: { id: string } }>(
     "/lab/jobs/:id/cancel",
@@ -293,18 +226,13 @@ export function registerLabRoutes(
       const job = store.getJob(req.params.id);
       if (!job) return reply.code(404).send({ error: "not_found" });
       if (job.state !== "running" && job.state !== "queued") {
-        // Already finished: nothing to stop, and saying so beats reporting a
-        // success that did nothing.
         return reply
           .code(409)
           .send({ error: "not_running", message: `job is ${job.state}` });
       }
       const controller = inFlight.get(job.id);
       if (!controller) {
-        // Training holds no controller by design. Anything else claiming to run
-        // without one is an orphan whose process is gone — a restart mid-run,
-        // caught here rather than left to sit as a permanently "running" row
-        // that blocks the next run and refuses to be stopped.
+        // A benchmark without a controller is an orphan from a restart.
         if (job.kind === "benchmark") {
           store.updateJob(job.id, {
             state: "failed",
@@ -318,28 +246,20 @@ export function registerLabRoutes(
         });
       }
       controller.abort();
-      // 202: the state flips when the work unwinds, not now.
+      // 202: state flips when the work unwinds.
       return reply.code(202).send({ ok: true });
     },
   );
 
-  // What the Lab needs that isn't compute: whether the general suite can run,
-  // and what suites exist. Target addresses, keys, and readiness moved to
-  // /compute/targets — chat needs them too, and they were never Lab-specific.
   app.get("/lab/status", { preHandler }, async () => ({
     lmEval: (await lmEvalAvailable()) ? "installed" : "missing",
     suites: SUITES,
   }));
 
-  // --- Upload: bring a client-local model or dataset onto this host ---------
-  //
-  // The picker on a laptop yields a path only the laptop can read; training runs
-  // here. These routes land the file under the upload root so the finetune can
-  // then pass Studio a path Studio can open. Chunked so a multi-GB model streams
-  // rather than buffering whole.
+  // Uploads land client-local files on this host so Studio can open them.
+  // Chunked, so multi-GB models stream.
 
-  // Which files of a model the host still needs — lets the client skip an
-  // upload when a full copy is already here. Body: { name, files:[{rel,size}] }.
+  // Returns which files the host still needs. Body: { name, files:[{rel,size}] }.
   app.post("/lab/models/plan", { preHandler }, async (req, reply) => {
     const body = req.body as {
       name?: unknown;
@@ -356,7 +276,6 @@ export function registerLabRoutes(
         if (typeof f?.rel !== "string" || typeof f?.size !== "number") {
           return reply.code(400).send({ error: "bad_request" });
         }
-        // Prove every rel is safe before we agree to receive it.
         resolveDest(uploadRoot(), "models", join(body.name, f.rel));
         files.push({ rel: f.rel, size: f.size });
       }
@@ -371,8 +290,7 @@ export function registerLabRoutes(
     } catch {
       return reply.code(400).send({ error: "bad_path" });
     }
-    // Say up front that a multi-GB model won't fit, rather than filling the disk
-    // and failing mid-transfer on a chunk write.
+    // Refuse up front rather than fail mid-transfer.
     const free = await freeSpace(uploadRoot());
     if (bytes > free) {
       return reply
@@ -382,8 +300,7 @@ export function registerLabRoutes(
     return plan;
   });
 
-  // One chunk of a file. Query: kind (datasets|models), rel, offset. Body: the
-  // raw bytes (application/octet-stream). Returns the host path being written.
+  // Query: kind (datasets|models), rel, offset. Body: raw bytes.
   app.post<{ Querystring: { kind?: string; rel?: string; offset?: string } }>(
     "/lab/upload",
     { preHandler, bodyLimit: UPLOAD_CHUNK_LIMIT },
@@ -401,8 +318,6 @@ export function registerLabRoutes(
       try {
         await writeChunk(dest, Number(offset) || 0, req.body);
       } catch (err) {
-        // A full disk is the client's problem to report, not a server fault:
-        // name it instead of letting a bare 500 reach the upload UI.
         if (isOutOfSpace(err)) {
           return reply.code(507).send({ error: "insufficient_space" });
         }
@@ -417,27 +332,16 @@ export function registerLabRoutes(
   app.get("/lab/scores", { preHandler }, async () => store.listScores());
 
   /**
-   * What the benchmark target can serve, for the picker.
-   *
-   * Read from the target a run would actually go to, not from "local": with
-   * benchmarking assigned to Colab, offering this host's models would name
-   * models that machine has never seen. An unreachable target answers with an
-   * empty list rather than an error — the form stays usable, and the pill
-   * already reports why nothing is there.
-   *
-   * `loaded` is the point of the endpoint as much as the list is. Studio serves
-   * whatever is resident regardless of the id sent, so the entry marked loaded
-   * is the one a benchmark would really measure — and it is offered even when
-   * the inventory does not list it, since otherwise the form hides the only
-   * model this target can score.
+   * From the target the benchmark role resolves to. Unreachable: empty list,
+   * not an error. The loaded model is offered even if the inventory omits it,
+   * since it's what a benchmark would actually measure.
    */
   const models: LabService["models"] = async () => {
     const id = targets.effective("benchmark");
     const client = clientFor(id);
     if (!client) return { target: id, models: [], inventoryError: null };
 
-    // Same read the compute panel's list goes through, so the two views of one
-    // inventory cannot disagree about a model's name or which is resident.
+    // Same reader as the compute panel, so the two can't disagree.
     return { target: id, ...(await readInventory(client)) };
   };
 
@@ -452,8 +356,6 @@ export function registerLabRoutes(
     },
   );
 
-  // Poll-based progress. The job row already holds every state change, so a
-  // client that reconnects simply reads the current value — no replay needed.
   app.get<{ Params: { id: string } }>(
     "/lab/jobs/:id/events",
     { preHandler },
@@ -491,18 +393,12 @@ export function registerLabRoutes(
   );
 
   const finetune: LabService["finetune"] = async (input) => {
-    // Decide where this trains before creating a job, so a request with no
-    // usable trainer fails fast with a clear code instead of a dead job row.
     const pick = await pickTrainer(input.provider);
     if (!pick.ok) return pick;
     const trainer = pick.client;
 
-    // A model path means something only on the machine holding the file. Colab
-    // is a different machine: it reads an unrecognized model name as a
-    // HuggingFace repo id and rejects a path as an invalid one ("Repo id must
-    // use alphanumeric chars…"). Datasets don't have this problem — those are
-    // pushed to the trainer before the run — but there is no upload endpoint
-    // for a model, so say plainly what's needed instead.
+    // Colab reads a local model path as an invalid HF repo id. Datasets are pushed
+    // first, but models have no upload path to Colab.
     if (pick.via === "colab" && looksLocalPath(input.baseModel)) {
       return {
         ok: false,
@@ -521,20 +417,16 @@ export function registerLabRoutes(
       outputDir: null,
       ggufPath: null,
       hubRepo: null,
-      // Whose disk the checkpoint will land on. Export has to come back to the
-      // same trainer, and by then "auto" may resolve elsewhere.
+      // Export must return to this trainer; "auto" may resolve elsewhere later.
       provider: pick.via,
     });
 
     runJob(job, async (report) => {
       report({ detail: `training via ${pick.via}` });
 
-      // Studio only opens a dataset that lives under one of its own dataset
-      // roots, and our upload root is elsewhere by design (a drive with room,
-      // sometimes another machine). So a dataset file this host holds is handed
-      // to Studio first, and the path Studio hands back is what trains. A value
-      // this host can't stat is not ours to send — it's an HF id or a name only
-      // Studio can resolve, and passes through untouched.
+      // Studio only opens datasets under its own dataset roots, so a file on this
+      // host is uploaded to Studio first. Anything this host can't stat (HF id, a
+      // name Studio resolves) passes through.
       let datasetPath =
         input.dataset.kind === "local" ? input.dataset.path : null;
       if (datasetPath && (await isLocalFile(datasetPath))) {
@@ -542,13 +434,11 @@ export function registerLabRoutes(
         datasetPath = await trainer.uploadDataset(datasetPath);
       }
 
-      // Snapshot the runs that already exist, so the output dir recorded below
-      // is provably the one this training produced.
+      // Snapshot existing runs so the new output dir is provably ours.
       const existingRuns = new Set((await trainer.listRuns()).map(runKey));
 
       try {
-        // QLoRA and 4-bit are forced here, not offered: the GPU host cannot run
-        // anything heavier, so a client must not be able to ask for it.
+        // Forced: the GPU host can't run anything heavier.
         await trainer.startTraining({
           model_name: input.baseModel,
           training_type: "LoRA/QLoRA",
@@ -587,29 +477,19 @@ export function registerLabRoutes(
           break;
         }
       }
-      // A stream that simply ends — Studio restarted, the tunnel dropped — is
-      // not a finished run. Falling through would mark an interrupted training
-      // "done" and then attach some other run's checkpoint to it.
+      // A stream that just ends (Studio restart, tunnel drop) is not a finished run.
       if (!sawComplete) {
         throw new Error("training stream ended before reporting completion");
       }
 
-      // Studio reports the output directory only via its runs list, which is
-      // not guaranteed to end with ours. Match against the runs that existed
-      // beforehand so a previous run's checkpoint can't be recorded as this
-      // one's. If nothing new appears, record nothing: the run then has no
-      // outputDir and export refuses it, which is the safe failure.
+      // Output dirs only come from Studio's runs list, which may not end with ours.
+      // If nothing new appears, record nothing; export then refuses the run.
       const after = await trainer.listRuns();
       const ours = after.find((r) => !existingRuns.has(runKey(r)));
 
-      // The stream is not the verdict. Studio emits `complete` whenever
-      // training stops being active — a CUDA failure 20 seconds in ends the
-      // stream exactly like a finished run does — so the outcome has to come
-      // from the run record. Without this a crashed run reads as "done" with
-      // no model behind it.
-      //
-      // Only an explicit failure fails the job: a status this client doesn't
-      // know must not turn a good run into a bad one.
+      // `complete` isn't success either: Studio sends it whenever training stops,
+      // crashes included, so the run record decides. Only an explicit failure
+      // fails the job.
       const failed =
         ours?.status === "error" ||
         ours?.status === "stopped" ||
@@ -647,11 +527,8 @@ export function registerLabRoutes(
         .send({ error: "no_checkpoint", message: "run has no output dir yet" });
     }
 
-    // `outputDir` is a path on the machine that trained the run, so the export
-    // has to go back to that same trainer — handing a Colab checkpoint path to
-    // the local Studio just fails on a path it cannot see. A Colab session is
-    // ephemeral, so it may well be gone; say that plainly here rather than
-    // failing deep inside a job with a network error.
+    // `outputDir` lives on the trainer that produced it; a Colab session may be
+    // gone.
     const exporter = clientFor(run.provider);
     if (!exporter) {
       return reply.code(409).send({
@@ -670,27 +547,20 @@ export function registerLabRoutes(
       });
     }
 
-    // Attributed to the run, so the Runs tab can show this job's progress on
-    // the row the button belongs to instead of only in the global list.
     const job = store.createJob("export", run.id);
     runJob(job, async (report) => {
       const saveDir = `${run.outputDir}/gguf`;
-      // Every line says where the artifact is going. The trainer's disk is not
-      // this machine, which is the single most surprising thing about export.
+      // The trainer's disk is not this machine, so every line names it.
       const where = `${saveDir} on ${run.provider}`;
       report({ detail: `loading checkpoint — ${where}` });
       await exporter.loadCheckpoint(run.outputDir as string);
 
-      // Baseline the op counter immediately before the export, so the check
-      // below tracks *this* operation rather than the load-checkpoint that
-      // precedes it. Studio reports the outcome of the last op, so without a
-      // baseline an earlier success reads as ours and the job finishes
-      // instantly against a stale artifact.
+      // Baseline right before the export: Studio reports the last op, so an earlier
+      // success would otherwise read as ours.
       const baseline = (await exporter.exportStatus()).last_op_seq ?? 0;
 
-      // A push to the Hub is the only way an artifact leaves an ephemeral
-      // trainer: Studio writes exports to its own disk and serves none of them
-      // for download, so a Colab VM keeps them until the runtime recycles.
+      // Studio serves no exports for download; a Hub push is the only way off an
+      // ephemeral trainer.
       const hub = parsed.data.repoId
         ? {
             repoId: parsed.data.repoId,
@@ -698,9 +568,6 @@ export function registerLabRoutes(
             private: parsed.data.private,
           }
         : undefined;
-      // The destination is part of every line from here on: an export that
-      // wrote to a machine you can't reach, with no push, is the failure mode
-      // worth seeing while it happens rather than afterwards.
       const target = hub
         ? `${parsed.data.quantization} → ${where}, pushing to ${hub.repoId}`
         : `${parsed.data.quantization} → ${where}, no hub push`;
@@ -708,19 +575,15 @@ export function registerLabRoutes(
       try {
         await exporter.exportGguf(saveDir, parsed.data.quantization, hub);
       } catch (err) {
-        // Quantization routinely outlives the HTTP request that starts it — a
-        // Cloudflare tunnel cuts the connection at ~100s with a 524 — while the
-        // work carries on inside Studio. Losing the kickoff response is not the
-        // same as the export failing, so consult the status endpoint (the
-        // actual source of truth) and only give up if nothing started.
+        // A Cloudflare tunnel cuts the kickoff at ~100s (524) while Studio keeps
+        // working, so check status before giving up.
         const s = await exporter.exportStatus();
         const started = s.is_export_active || (s.last_op_seq ?? 0) > baseline;
         if (!started) throw err;
         report({ detail: `exporting ${target} (still running, polling)` });
       }
 
-      // Export runs asynchronously inside Studio, and there is no `status`
-      // field to poll: settled means "not active, and the op counter moved".
+      // No `status` field: settled means not active and the op counter moved.
       const started = Date.now();
       const deadline = started + EXPORT_TIMEOUT_MS;
       for (;;) {
@@ -728,9 +591,7 @@ export function registerLabRoutes(
         if (!s.is_export_active && (s.last_op_seq ?? 0) > baseline) {
           if (s.last_op_status === "success") {
             const path = s.last_op_output_path ?? saveDir;
-            // Recorded, not just reported: for a trainer whose disk is
-            // temporary, the repo is the only lasting answer to "where did the
-            // weights go", and a job detail line is not a record.
+            // For an ephemeral trainer the repo is the only lasting record.
             store.setRunArtifacts(run.id, {
               ggufPath: path,
               hubRepo: hub?.repoId ?? null,
@@ -746,10 +607,7 @@ export function registerLabRoutes(
             s.last_op_error ?? `export ${s.last_op_status ?? "failed"}`,
           );
         }
-        // Bounded: a counter that never moves must not poll forever.
         if (Date.now() > deadline) throw new Error("export timed out");
-        // Quantization is minutes of silence otherwise; an elapsed clock is the
-        // difference between "working" and "hung" from the outside.
         const mins = Math.floor((Date.now() - started) / 60_000);
         const secs = Math.floor(((Date.now() - started) % 60_000) / 1000);
         report({
@@ -779,15 +637,10 @@ export function registerLabRoutes(
       };
     }
 
-    // Resolved before the job exists, so a run with nowhere to go fails fast
-    // with a clear code instead of leaving a dead job row.
     const targetId = targets.effective("benchmark");
     const via = targets.credentials(targetId);
 
-    // What is *actually* loaded there. Studio ignores the `model` field of a
-    // request and serves whatever it has resident, so a benchmark naming one
-    // model while another is loaded produces a complete, plausible, wrong score
-    // with no error anywhere. Asking first is the only way to know.
+    // Studio ignores the request's `model`, so ask what's actually loaded.
     const served = await clientFor(targetId)
       ?.loadedModel()
       .catch(() => null);
@@ -799,14 +652,9 @@ export function registerLabRoutes(
       };
     }
 
-    // Nothing named means the scores are labeled with what will answer, which
-    // is the only label that can be right (see BenchmarkInput).
     const model = input.model ?? served;
 
     const job = store.createJob("benchmark");
-    // A benchmark is the one job worth stopping mid-flight: the wrong suite or
-    // the wrong sample count can otherwise tie up the GPU for an hour with a
-    // result nobody wants.
     const controller = new AbortController();
     runJob(
       job,
@@ -817,9 +665,6 @@ export function registerLabRoutes(
               ? `benchmarking ${served} on ${targetId}`
               : `benchmarking ${served} on ${targetId} (requested ${model})`,
         });
-        // The scores describe `served`, wherever it ran. Carried into the record
-        // rather than only into a job line, because the comparison these feed is
-        // the whole point of keeping them.
         const result = await runBenchmark({
           model,
           servedModel: served,
@@ -829,10 +674,7 @@ export function registerLabRoutes(
           baseURL: inferenceURL ?? via.baseURL,
           apiKey: via.apiKey,
           signal: controller.signal,
-          // Relayed as given. The suite knows where it is; this route only
-          // writes it down. `progress` is null on a line that says nothing
-          // about position, and the store's COALESCE keeps the last real value
-          // rather than blanking a bar that was right.
+          // `progress` may be null; the store's COALESCE keeps the last value.
           onProgress: (update) => report(update),
         });
         store.recordScores(result);

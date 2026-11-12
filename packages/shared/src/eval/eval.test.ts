@@ -18,7 +18,6 @@ const score = (c: EvalCase, o: Partial<CaseOutcome>) =>
   scoreCase(c, outcome(o));
 
 describe("cases", () => {
-  // A typo'd tool name would silently score every run as a failure.
   it("only expects tools that actually exist", () => {
     const names = new Set(agentTools.map((t) => t.name));
     for (const c of evalCases) {
@@ -30,9 +29,8 @@ describe("cases", () => {
     expect(evalCases.filter((c) => c.tool === null).length).toBeGreaterThan(0);
   });
 
-  // The base set is graded against agentTools alone and is pinned, so a lab
-  // utterance landing in it would both fail the check above and silently change
-  // what every past penumbra-tools-v2 score means.
+  // Pinned: a lab utterance here would change what past penumbra-tools-v2
+  // scores mean.
   it("keeps lab utterances out of the pinned base set", () => {
     const lab = new Set(labTools.map((t) => t.name));
     for (const c of evalCases) {
@@ -50,17 +48,11 @@ describe("lab cases", () => {
     }
   });
 
-  // The point of the set. A lab tool added with no case is a tool nobody has
-  // measured, and the tool count is the thing §7 says to re-measure — so the
-  // omission fails here rather than being noticed after a regression ships.
   it("covers every lab tool with at least one case", () => {
     const covered = new Set(labEvalCases.map((c) => c.tool));
     for (const tool of labTools) expect(covered).toContain(tool.name);
   });
 
-  // Crossovers are what a two-domain tool set gets wrong, and they only count
-  // if the expected answer is a *base* tool: an utterance full of lab words
-  // that must not reach an actuator.
   it("keeps crossovers into the base tools", () => {
     const base = new Set(agentTools.map((t) => t.name));
     const crossovers = labEvalCases.filter(
@@ -76,10 +68,8 @@ describe("lab cases", () => {
   });
 });
 
-// The general suite runs over an OpenAI-compatible *chat* endpoint, which
-// cannot return loglikelihoods. Multiple-choice tasks therefore fail outright
-// rather than scoring badly, and every name must resolve in the installed
-// harness — the plan's original list did not (see suites.ts).
+// Chat endpoints return no loglikelihoods, so multiple-choice tasks fail
+// outright.
 describe("general suite", () => {
   const general = SUITES.find((s) => s.kind === "general");
 
@@ -138,8 +128,6 @@ describe("scoreCase", () => {
     expect(s.argsOk).toBe(true);
   });
 
-  // Grading a wrong tool's arguments would score them against a schema they
-  // were never meant for.
   it("does not grade args when the wrong tool was chosen", () => {
     const c: EvalCase = { ...create, args: { priority: "high" } };
     expect(
@@ -218,8 +206,6 @@ describe("toTrainingExamples", () => {
     });
   });
 
-  // The whole point of rejection sampling: wrong turns must never become
-  // training data, or the finetune learns the mistake.
   it("skips a wrong tool choice instead of fabricating a gold call", () => {
     const { examples, skipped } = toTrainingExamples(
       [score(create, { name: "list_tasks" })],

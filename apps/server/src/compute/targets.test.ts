@@ -2,12 +2,7 @@ import Database from "better-sqlite3";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createTargetStore } from "./targets";
 
-// Two things are being pinned here. The precedence rules carried over from the
-// Studio credential store this replaces — getting those wrong means either the
-// UI silently does nothing (env winning) or a deployment can't set a default.
-// And the split between what a target is *assigned* and what it *resolves to*,
-// which is what keeps a Colab that was never set up, or has been removed, from
-// taking chat down with it.
+// Precedence (stored settings over env) and assigned vs resolved targets.
 let db: Database.Database;
 beforeEach(() => {
   db = new Database(":memory:");
@@ -34,7 +29,6 @@ describe("local target", () => {
     const targets = createTargetStore(db, env);
     targets.set("local", { apiKey: "rotated" });
     expect(targets.credentials("local")).toEqual({
-      // Untouched, so it still resolves from the environment.
       baseURL: "http://env:8888",
       apiKey: "rotated",
     });
@@ -45,7 +39,6 @@ describe("local target", () => {
       baseURL: "http://studio.lan:8888",
       apiKey: "rotated",
     });
-    // A second store over the same database is what the next boot sees.
     expect(createTargetStore(db, env).credentials("local")).toEqual({
       baseURL: "http://studio.lan:8888",
       apiKey: "rotated",
@@ -53,8 +46,7 @@ describe("local target", () => {
   });
 
   it("treats an empty key as a deliberate no-bearer, not a missing one", () => {
-    // A trusted-LAN Studio runs without a key, and that choice has to stick
-    // rather than falling through to whatever .env still holds.
+    // A deliberately keyless Studio must not fall back to the env key.
     const targets = createTargetStore(db, env);
     targets.set("local", { apiKey: "" });
     expect(targets.credentials("local").apiKey).toBeUndefined();
@@ -82,8 +74,7 @@ describe("colab target", () => {
     expect(colab).toMatchObject({ id: "colab", configured: false });
   });
 
-  // Colab reads no environment, so an unconfigured one must not inherit the
-  // local Studio's address from it and look reachable.
+  // Colab must not inherit local's env address.
   it("takes nothing from the environment", () => {
     expect(createTargetStore(db, env).credentials("colab")).toEqual({
       baseURL: "",
@@ -109,7 +100,6 @@ describe("colab target", () => {
     expect(targets.list()[1]).toMatchObject({ configured: false });
   });
 
-  // The point of persisting it: a restart used to mean re-pasting the tunnel.
   it("survives a restart, key and all", () => {
     createTargetStore(db, env).set("colab", {
       baseURL: "https://x.trycloudflare.com",
@@ -131,8 +121,7 @@ describe("colab target", () => {
     });
   });
 
-  // Now the only way a Colab address goes away, which is why it has to clear
-  // the stored key too rather than leaving one behind for the next address.
+  // The only way a Colab address goes away, so the key must go with it.
   it("forgets it on clear, across a restart", () => {
     const targets = createTargetStore(db, env);
     targets.set("colab", {
@@ -181,8 +170,6 @@ describe("assignments", () => {
     expect(targets.assignment("benchmark")).toBe("colab");
   });
 
-  // The case the split exists for: a role can be assigned to Colab before any
-  // tunnel has been given, and chat has to answer from somewhere meanwhile.
   it("resolves to local when the assigned target has no address", () => {
     const targets = createTargetStore(db, env);
     targets.assign("chat", "colab");

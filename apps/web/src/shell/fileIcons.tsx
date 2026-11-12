@@ -1,10 +1,6 @@
-// Line icons for the file sidebar. Stroked with `currentColor` and no fill, so
-// they take on the row's text colour (muted for files, brighter on hover) and
-// sit with the app theme far better than the emoji the first pass used. All are
-// a 16×16 viewBox at a consistent 1.5 stroke weight.
+// 16×16 stroked line icons using currentColor.
 
 interface IconProps {
-  /** Pixel size; defaults to 16. */
   size?: number;
   className?: string;
 }
@@ -23,11 +19,9 @@ function svgProps(size: number, className?: string) {
   };
 }
 
-// These icons are decorative — every icon button carries its own aria-label, so
-// `aria-hidden` is declared on each <svg> directly (the linter can't see it
-// through the spread helper).
+// Decorative: icon buttons carry their own aria-label. aria-hidden is set on
+// each <svg> because the linter can't see through the spread.
 
-/** Disclosure chevron; the sidebar rotates it 90° via CSS when expanded. */
 export function ChevronIcon({ size = 14, className }: IconProps) {
   return (
     <svg {...svgProps(size, className)} aria-hidden="true">

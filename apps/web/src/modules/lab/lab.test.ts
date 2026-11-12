@@ -2,9 +2,7 @@ import { looksLocalPath, toDatasetSource } from "@penumbra/shared";
 import { describe, expect, it } from "vitest";
 import { formatWhen, OFFLINE_TAB, SERVER_TABS, TABS } from "./LabModule";
 
-// A new tab is classified by omission: leaving it out of SERVER_TABS silently
-// declares it works with no server, and the failure is a tab that stays clickable
-// and then shows nothing but a fetch error.
+// A tab left out of SERVER_TABS is silently treated as working offline.
 describe("tab gating", () => {
   it("classifies every tab as server-reliant or not", () => {
     const offline = TABS.filter((t) => !SERVER_TABS.has(t));
@@ -21,9 +19,6 @@ describe("tab gating", () => {
   });
 });
 
-// Getting this wrong sends a filesystem path to Studio as a HuggingFace repo id
-// (or vice versa), and the training job fails minutes later with an opaque
-// error from the other side.
 describe("toDatasetSource", () => {
   it("treats owner/name as a HuggingFace repo", () => {
     expect(toDatasetSource("tatsu-lab/alpaca")).toEqual({
@@ -36,8 +31,6 @@ describe("toDatasetSource", () => {
     expect(toDatasetSource("./bench/trainset.jsonl")).toMatchObject({
       kind: "local",
     });
-    // The case the first cut got wrong: an absolute path has a slash but no
-    // leading dot, and was being sent as an HF id.
     expect(toDatasetSource("/data/train.jsonl")).toMatchObject({
       kind: "local",
     });
@@ -52,10 +45,8 @@ describe("toDatasetSource", () => {
     expect(toDatasetSource("data.parquet")).toMatchObject({ kind: "local" });
   });
 
-  // The shape every path on a Windows host has, and the one the extension list
-  // cannot catch: `list_datasets` reports whatever was uploaded, not only the
-  // four extensions below, so a corpus directory or a .txt reached Studio as a
-  // repo id.
+  // `list_datasets` reports any uploaded file, so Windows paths without a known
+  // extension must still count as local.
   it("treats a Windows or UNC path as local, extension or not", () => {
     for (const p of [
       String.raw`C:\Users\me\.penumbra\uploads\datasets\corpus`,
@@ -68,9 +59,7 @@ describe("toDatasetSource", () => {
     }
   });
 
-  // The two predicates are not independent: anything one calls a path the other
-  // must call a file, or a value skips the upload on the client and is then
-  // read as a repo id on the server.
+  // Anything one calls a path the other must call a file.
   it("never calls a path that looksLocalPath accepts a repo id", () => {
     for (const p of [
       "/data/corpus",
@@ -92,8 +81,6 @@ describe("toDatasetSource", () => {
   });
 });
 
-// A false negative here is what makes a run fail: the file is never uploaded to
-// the training host, and Studio is handed a path that only this device can read.
 describe("looksLocalPath", () => {
   it("recognizes posix and drive-letter paths", () => {
     expect(looksLocalPath("/data/train.jsonl")).toBe(true);
@@ -102,8 +89,7 @@ describe("looksLocalPath", () => {
     expect(looksLocalPath("F:/Projects/train.jsonl")).toBe(true);
   });
 
-  // The regression: Windows `canonicalize` hands back a verbatim path, which
-  // matched none of the original branches and so skipped the upload entirely.
+  // Windows `canonicalize` returns verbatim paths.
   it("recognizes Windows verbatim and UNC paths", () => {
     expect(looksLocalPath("\\\\?\\F:\\Projects\\attack_blueteam.jsonl")).toBe(
       true,
@@ -117,8 +103,6 @@ describe("looksLocalPath", () => {
   });
 });
 
-// Telling which run is the latest is the whole reason the runs list carries a
-// time, so the near ages are the ones that have to read right.
 describe("formatWhen", () => {
   const now = Date.parse("2026-07-27T12:00:00Z");
   const ago = (ms: number) => new Date(now - ms).toISOString();
@@ -138,7 +122,6 @@ describe("formatWhen", () => {
     expect(formatWhen(old, now)).toBe(new Date(old).toLocaleDateString());
   });
 
-  // A clock skew between the server and this device must not print "-1 mins".
   it("does not report a future timestamp as a negative age", () => {
     expect(formatWhen(new Date(now + 30_000).toISOString(), now)).toBe(
       "just now",

@@ -3,15 +3,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ResizeHandles } from "./ResizeHandles";
 
-// The grips are the only way to resize the window once `decorations: false`
-// removes the native frame, and every way they can fail is silent: a wrong
-// direction resizes the opposite edge, a grip rendered while maximized fights
-// the OS, and a missed unsubscribe leaks a listener per mount. None of that
-// shows up in a screenshot, so it is pinned here.
-//
-// Direction is asserted through `data-direction`, which exists for this: the
-// class name drives CSS placement and the direction drives the drag, and a test
-// that read the class would pass while the two disagreed.
+// With `decorations: false` these grips are the only way to resize, and their
+// failures are silent. Direction is read from `data-direction`, not the class.
 
 const win = vi.hoisted(() => ({
   startResizeDragging: vi.fn(),
@@ -22,7 +15,6 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => win }));
 
 let container: HTMLDivElement;
 let root: Root;
-/** The handler the component gave onResized, so a test can fire a size change. */
 let onResized: (() => void) | undefined;
 let unlisten: ReturnType<typeof vi.fn>;
 
@@ -46,7 +38,6 @@ afterEach(() => {
   container.remove();
 });
 
-/** Mount, settling the async maximized probe the effect kicks off. */
 async function render() {
   await act(async () => {
     root.render(<ResizeHandles />);
@@ -59,7 +50,6 @@ const grips = () => [
 
 const directions = () => grips().map((g) => g.dataset.direction);
 
-/** A press on one grip. `button` defaults to left, the only one that drags. */
 function press(direction: string, button = 0) {
   const grip = grips().find((g) => g.dataset.direction === direction);
   expect(grip, `no grip for ${direction}`).toBeTruthy();
@@ -87,10 +77,7 @@ describe("resize grips", () => {
 
   it("puts the corners after the edges, so they win the overlap", async () => {
     await render();
-    // The grips share a z-index and are absolutely positioned on top of each
-    // other at the corners; paint order is what decides which takes the
-    // pointer. Reordering the list would silently make corner drags resize a
-    // single edge instead.
+    // Corners overlap edges; paint order decides which takes the pointer.
     const corners = directions()
       .map((d, i) => ({ d, i }))
       .filter(
@@ -138,7 +125,6 @@ describe("resize grips", () => {
     await render();
     await act(async () => root.unmount());
     expect(unlisten).toHaveBeenCalled();
-    // Re-created in afterEach's unmount otherwise; a fresh root keeps that safe.
     root = createRoot(container);
   });
 });

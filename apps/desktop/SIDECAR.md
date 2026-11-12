@@ -1,73 +1,38 @@
 # Local model sidecar (Tier 0)
 
-The desktop app bundles a small model and runs it locally so guidance works with
-**no server and no network** (docs/AGENT_DESIGN.md → "Local model delivery"). At
-launch the Rust side spawns the bundled `llama-server`, which serves an
-OpenAI-compatible API on `127.0.0.1:8080`; the web client's `LocalEngine` talks
-to it directly.
+At launch, `src-tauri/src/lib.rs` spawns the bundled `llama-server` with
+`std::process::Command`, serving an OpenAI-compatible API on `127.0.0.1:8080`.
+The web client's `LocalEngine` talks to it directly.
 
-## How it's wired
+## Assets
 
-- `tauri.conf.json` → `bundle.resources` — ships everything in `binaries/`
-  (the server **and its shared libraries**) and `models/` into the app bundle.
-  Directory globs, so a build without the assets still succeeds; the sidecar
-  simply doesn't start.
-- `src/lib.rs` — on startup, resolves the bundled `llama-server`
-  (`llama-server.exe` on Windows) + model from the resource dir and spawns the
-  server (via `std::process::Command`) with the guidance flags
-  (`--jinja --reasoning-format none --reasoning-budget 0`). It is
-  **best-effort**: if the binary or weights are missing it logs a line and the
-  app runs normally (the model just shows offline). Backend spawning is not
-  capability-gated, so no `capabilities/` change is needed.
-- **Shutdown is hardened** so a dead app never leaves the sidecar squatting on
-  `:8080`: on Linux the child is armed with `PR_SET_PDEATHSIG` (the kernel kills
-  it when the app dies, including on a crash or SIGKILL), and a `RunEvent::Exit`
-  handler kills it on graceful shutdown / on platforms without that primitive.
-- `LocalEngine` (web) defaults to `http://127.0.0.1:8080` — matches the port.
-
-### Why not `externalBin`
-
-`llama-server` is **not a single file** — it loads sibling shared libraries
-(`.so` via rpath `$ORIGIN` on Linux, `.dll` next to the `.exe` on Windows,
-`.dylib` on macOS). Tauri's `externalBin` ships one file, which would strand the
-libraries. So instead we bundle the whole `binaries/` dir as `resources` and
-spawn the binary from there with `shell().command(path)`, so it finds its
-libraries next to itself.
-
-## The assets (not committed)
-
-Large, platform-specific files are git-ignored. One command fetches both,
-idempotently, on Linux, macOS, and Windows (Git Bash):
+The weights and binaries are git-ignored. Fetch them once (Linux, macOS, or
+Windows with Git Bash):
 
 ```bash
-pnpm fetch-assets   # scripts/fetch-assets.mjs → finds a bash, runs fetch-assets.sh
+pnpm fetch-assets
 ```
 
-It downloads the pinned Qwen3-1.7B Q4_K_M weights → `src-tauri/models/model.gguf`
-and the matching `llama-server` build + its libraries → `src-tauri/binaries/`.
-On platforms without a pinned release build it fetches the model and points you
-to `binaries/README.md` for the manual step.
+This puts the pinned Qwen3-1.7B Q4_K_M at `src-tauri/models/model.gguf` and the
+matching `llama-server` plus its shared libraries in `src-tauri/binaries/`. The
+pinned release tag and model URL are at the top of `scripts/fetch-assets.sh`.
+Where no release build is pinned, it fetches only the model; put `llama-server`
+(or `llama-server.exe`) and its `.so`/`.dylib`/`.dll` files in `binaries/` by
+hand from a [llama.cpp release](https://github.com/ggml-org/llama.cpp/releases),
+with no target-triple suffix.
 
-The app builds and runs without the assets — the Assistant pill just shows
-**Model offline** — so fetching is only needed to exercise the local model.
+Without the assets the app still builds and runs; the assistant just reports
+the model offline.
 
-## Run it
+## Gotchas
 
-```bash
-pnpm desktop        # requires the Rust toolchain (cargo)
-```
-
-The Assistant module's pill turns from **Model offline** to **Ready ·
-qwen3-1.7b** once `llama-server` has loaded the model.
-
-## Notes
-
-- **Toolchain:** needs `cargo` on PATH. On Linux also the Tauri system
-  libraries (webkit2gtk etc.). The web app and `pnpm dev` don't.
-- **Port:** if you change it, keep `lib.rs` (`LLM_PORT`) and the web client's
-  `VITE_LOCAL_LLM_URL` in sync.
-- **Pinned versions:** the llama.cpp release tag and model URL live at the top
-  of `scripts/fetch-assets.sh`; bump them deliberately.
-- **Web/mobile:** this native sidecar is the desktop path. Web downloads the
-  model once and runs it in-browser; mobile uses a native module — both behind
-  the same `LocalEngine` interface (docs/AGENT_DESIGN.md).
+- **Not `externalBin`.** `llama-server` loads sibling shared libraries, and
+  `externalBin` ships a single file. So `binaries/` and `models/` ship whole as
+  `bundle.resources` and the binary is spawned from there.
+- **Shutdown.** On Linux the child gets `PR_SET_PDEATHSIG`, so it dies with the
+  app even on SIGKILL. A `RunEvent::Exit` handler covers graceful exit
+  elsewhere. Otherwise a crashed app leaves the sidecar holding `:8080`.
+- **Port.** Changing it means changing `LLM_PORT` in `lib.rs` and
+  `VITE_LOCAL_LLM_URL` in the web client together.
+- **Toolchain.** `pnpm desktop` needs `cargo`, plus the Tauri system libraries
+  (webkit2gtk etc.) on Linux.

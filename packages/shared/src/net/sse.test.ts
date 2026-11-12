@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readSseFrames, type SseFrame } from "./sse";
 
-/** Build a ReadableStream that emits the given strings as UTF-8 chunks, so a
- *  test can control exactly where the byte boundaries fall. */
 function streamOf(...chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream({
@@ -35,7 +33,6 @@ describe("readSseFrames", () => {
   });
 
   it("reassembles a frame split across chunks", async () => {
-    // The blank-line separator itself straddles the chunk boundary.
     const frames = await collect(
       readSseFrames(streamOf('event: agent\ndata: {"n"', ":1}\n", "\n")),
     );
@@ -66,7 +63,6 @@ describe("readSseFrames", () => {
   });
 
   it("drops an unterminated trailing frame", async () => {
-    // No closing blank line, so the last frame never completes.
     const frames = await collect(
       readSseFrames(
         streamOf("event: agent\ndata: {}\n\nevent: partial\ndata:"),

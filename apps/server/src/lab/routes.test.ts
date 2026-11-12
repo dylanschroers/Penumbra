@@ -12,20 +12,15 @@ import { createLabStore, type LabStore } from "./jobs";
 import { type LabService, registerLabRoutes } from "./routes";
 import type { HubTarget, StudioClient, TrainingStart } from "./studio";
 
-/** Studio stand-in; only the methods a given test exercises are supplied.
- *
- *  The export shape here mirrors a live Studio, verified with src/lab/probe.mts:
- *  there is no `status` field — an export is settled when it is no longer
- *  active AND the monotonic op counter has moved past where it was. An earlier
- *  version of this fake returned `{status:"complete"}`, which does not exist,
- *  and hid a polling loop that would have hung forever. */
+/**
+ * Mirrors a live Studio's export shape: there is no `status`. An export is
+ * settled when not active and the op counter has moved.
+ */
 function fakeStudio(over: Partial<StudioClient> = {}): StudioClient {
   let opSeq = 0;
   const base = {
     baseURL: "http://studio",
     reachable: async () => true,
-    // Studio serves what it has loaded regardless of the request, so a
-    // benchmark asks before it runs; the default here is "something is loaded".
     loadedModel: async () => "loaded-model",
     startTraining: async () => {},
     uploadDataset: async (path: string) => path,
@@ -33,7 +28,6 @@ function fakeStudio(over: Partial<StudioClient> = {}): StudioClient {
     async *trainingProgress() {},
     loadCheckpoint: async () => {},
     listLocalModels: async () => [],
-    // A real export advances the op counter when it finishes.
     exportGguf: async () => {
       opSeq += 1;
     },
@@ -45,8 +39,6 @@ function fakeStudio(over: Partial<StudioClient> = {}): StudioClient {
     }),
     ...over,
   };
-  // Derive the tri-state probe from reachable unless a test sets it explicitly,
-  // so fakes that only care about up/down don't each have to spell it out.
   const probe =
     over.probe ??
     (async () => ((await base.reachable()) ? "ready" : "stopped"));
@@ -59,21 +51,15 @@ let targets: TargetStore;
 
 beforeEach(() => {
   store = createLabStore(new Database(":memory:"));
-  // An empty environment, so the local target resolves to Studio's default
-  // address and nothing leaks in from the machine running the tests.
+  // Empty env so nothing leaks in from the test machine.
   targets = createTargetStore(new Database(":memory:"), {});
 });
 afterEach(() => app?.close());
 
-/** Make the Colab target exist. The store decides *whether* a target is
- *  configured; `build` decides what answers for it. Splitting the two is what
- *  lets a test route training to Colab without a live tunnel. */
 function configureColab(baseURL = "https://tunnel.example") {
   targets.set("colab", { baseURL, apiKey: "colab-secret" });
 }
 
-/** The in-process handle the routes hand back, for the tests that exercise it.
- *  Set by every `build`, since it is the same object the routes call. */
 let lab: LabService;
 
 async function build(
@@ -95,9 +81,10 @@ async function build(
   return app;
 }
 
-/** A model server that answers anything with a plain reply. The personal suite
- *  talks real HTTP, so a benchmark that must *finish* needs something to
- *  answer; the fake StudioClient above only covers the control plane. */
+/**
+ * The personal suite talks real HTTP, so a benchmark that must finish needs a
+ * server.
+ */
 function startFakeModel() {
   const server = createServer((req, res) => {
     req.resume();
@@ -123,7 +110,6 @@ afterEach(async () => {
   fakeModel = undefined;
 });
 
-/** Jobs run in the background; wait for one to settle. */
 async function settle(id: string, tries = 40) {
   for (let i = 0; i < tries; i++) {
     const job = store.getJob(id);
@@ -133,8 +119,6 @@ async function settle(id: string, tries = 40) {
   return store.getJob(id);
 }
 
-/** A finished fine-tune with a checkpoint on disk, ready to export. The
- *  provider decides which trainer the export goes back to. */
 function seedRun(
   store: LabStore,
   outputDir: string,
@@ -158,8 +142,6 @@ const finetuneBody = {
 };
 
 describe("auth", () => {
-  // /lab is a stronger actuator than /agent/chat: it spawns training and writes
-  // files. It must never be the one unauthenticated endpoint on the box.
   it("refuses a non-loopback caller with no token configured", async () => {
     const app = await build();
     const res = await app.inject({
@@ -190,9 +172,6 @@ describe("GET /lab/status", () => {
     expect(["installed", "missing"]).toContain(body.lmEval);
   });
 
-  // Target addresses, keys, and readiness live at /compute/targets now: chat
-  // needs them too, so reporting them from a Lab route made the Lab the owner
-  // of a setting it merely shares.
   it("no longer carries compute configuration", async () => {
     const app = await build();
     const body = (await app.inject({ url: "/lab/status" })).json();
@@ -202,12 +181,7 @@ describe("GET /lab/status", () => {
   });
 });
 
-// Configuring a target now lives at /compute/targets — see
-// ../compute/routes.test.ts. What stays here is what the *Lab* does with the
-// targets once they exist: route training, and refuse when it cannot.
 describe("Colab as a trainer", () => {
-  // The whole point: when the local GPU host is offline, training routes to the
-  // configured Colab tunnel instead of failing.
   it("trains via Colab when the local Studio is unreachable", async () => {
     let colabTrained = false;
     const colab = fakeStudio({
@@ -249,9 +223,7 @@ describe("Colab as a trainer", () => {
     expect(res.json().error).toBe("colab_not_configured");
   });
 
-  // Colab resolves an unknown model name against HuggingFace, so a path from
-  // this machine comes back as "Repo id must use alphanumeric chars…" minutes
-  // later. There is no model-upload endpoint to fix it with, so refuse early.
+  // Colab reads a local path as a HF repo id and fails minutes later.
   it("refuses a local model path when the run would go to Colab", async () => {
     const app = await build(
       fakeStudio({ reachable: async () => false }),
@@ -296,7 +268,6 @@ describe("Colab as a trainer", () => {
     });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("no_trainer");
-    // Nothing was started, so no job row was left behind.
     expect(store.listJobs()).toEqual([]);
   });
 });
@@ -328,8 +299,6 @@ describe("POST /lab/finetune", () => {
     expect(store.listJobs()).toEqual([]);
   });
 
-  // The GPU host cannot run anything heavier, so a client must not be able to
-  // ask for full fine-tuning or 16-bit.
   it("forces QLoRA and 4-bit regardless of the request", async () => {
     let sent: Record<string, unknown> = {};
     const app = await build(
@@ -356,7 +325,7 @@ describe("POST /lab/finetune", () => {
   });
 
   it("records the output dir the run produced", async () => {
-    // A real Studio's run list *grows*: the new run only exists afterwards.
+    // A real run list grows: the new run only appears afterwards.
     let trained = false;
     const app = await build(
       fakeStudio({
@@ -383,9 +352,7 @@ describe("POST /lab/finetune", () => {
     expect(store.getRun(runId)?.outputDir).toBe("/runs/42");
   });
 
-  // Studio ends the progress stream with `complete` whenever training stops
-  // being active, crash included — so a run that died on a CUDA error looked
-  // exactly like a finished one and the job reported "done" with no model.
+  // Studio sends `complete` on crashes too.
   it("fails the job when the run record says the training errored", async () => {
     let trained = false;
     const app = await build(
@@ -452,8 +419,6 @@ describe("POST /lab/finetune", () => {
     expect(job?.error).toContain("stopped");
   });
 
-  // Studio's list is not guaranteed to end with our run, and an earlier run's
-  // checkpoint attached to this job would later be exported as if it were ours.
   it("ignores a pre-existing run rather than claiming its checkpoint", async () => {
     const stale = { run_id: "old", output_dir: "/runs/OLD" };
     const app = await build(
@@ -461,7 +426,6 @@ describe("POST /lab/finetune", () => {
         async *trainingProgress() {
           yield { event: "complete", data: {} };
         },
-        // The list never grows: no run of ours was produced.
         listRuns: async () => [stale],
       }),
     );
@@ -474,18 +438,14 @@ describe("POST /lab/finetune", () => {
     ).json();
 
     await settle(jobId);
-    // No checkpoint recorded, so export refuses it — the safe failure.
     expect(store.getRun(runId)?.outputDir).toBeNull();
   });
 
-  // Studio restarting or a tunnel dropping ends the stream without "complete".
-  // Treating that as success would report unfinished training as done.
   it("fails when the progress stream ends without completing", async () => {
     const app = await build(
       fakeStudio({
         async *trainingProgress() {
           yield { event: "progress", data: { step: 3, total_steps: 20 } };
-          // stream simply ends
         },
       }),
     );
@@ -565,14 +525,11 @@ describe("POST /lab/export", () => {
     expect(store.getRun(run.id)?.ggufPath).toBe("/runs/7/gguf");
   });
 
-  // `outputDir` is a path on the machine that trained the run. Exporting a
-  // Colab run against the local Studio hands it a path that host has never
-  // seen, and either fails confusingly or, worse, finds something else there.
+  // `outputDir` is a path on the trainer that produced it.
   it("exports a Colab-trained run against the Colab trainer", async () => {
     let localExported = false;
     const colabSaveDirs: string[] = [];
-    // The op counter has to move for an export to read as settled — that is how
-    // Studio reports "this operation finished", and the route baselines it.
+    // The op counter must move for an export to read as settled.
     let seq = 0;
     const colab = fakeStudio({
       baseURL: "https://tunnel.example",
@@ -625,7 +582,6 @@ describe("POST /lab/export", () => {
 
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("trainer_gone");
-    // Nothing was attempted, so no export job was left behind.
     expect(store.listJobs().some((j) => j.kind === "export")).toBe(false);
   });
 
@@ -643,9 +599,7 @@ describe("POST /lab/export", () => {
     expect(res.json().error).toBe("trainer_unreachable");
   });
 
-  // The Hub push is the only way an artifact leaves an ephemeral trainer, so
-  // the fields have to reach Studio together — repo_id without push_to_hub is
-  // silently ignored, and the export looks like it worked.
+  // repo_id without push_to_hub is silently ignored.
   it("passes the hub target through when a repo is named", async () => {
     const calls: { saveDir: string; hub?: HubTarget }[] = [];
     let seq = 0;
@@ -686,8 +640,6 @@ describe("POST /lab/export", () => {
     });
   });
 
-  // Without this the Runs tab can't tell which row an export belongs to, and
-  // pressing the button looked like it did nothing.
   it("attributes the export job to the run it exports", async () => {
     const app = await build();
     const run = seedRun(store, "/runs/7");
@@ -702,7 +654,6 @@ describe("POST /lab/export", () => {
 
     await settle(jobId);
     expect(store.getJob(jobId)?.runId).toBe(run.id);
-    // A finetune creates its run rather than acting on one.
     const finetuneJob = store.listJobs().find((j) => j.kind === "finetune");
     expect(finetuneJob?.runId).toBeNull();
   });
@@ -732,8 +683,6 @@ describe("POST /lab/export", () => {
 
     expect(store.getRun(pushed.id)?.hubRepo).toBe("me/qwen3-tuned");
     expect(store.getJob(a.jobId)?.detail).toContain("pushed to me/qwen3-tuned");
-    // The one that went nowhere has to say so — that is the whole question a
-    // user has after an export against an ephemeral trainer.
     expect(store.getRun(kept.id)?.hubRepo).toBeNull();
     expect(store.getJob(b.jobId)?.detail).toContain("not pushed anywhere");
   });
@@ -757,13 +706,11 @@ describe("POST /lab/export", () => {
     await settle(jobId);
     const written = JSON.stringify([store.getJob(jobId), store.getRun(run.id)]);
     expect(written).not.toContain("hf_secret");
-    // The repo is fine to show — it's where the artifact went.
     expect(store.getJob(jobId)?.detail).toContain("me/qwen3-tuned");
   });
 
-  // Quantization outlives the request that starts it (a Cloudflare tunnel cuts
-  // at ~100s with a 524) while Studio keeps working. Losing the kickoff
-  // response must not fail a job whose export is running.
+  // A Cloudflare tunnel cuts the kickoff at ~100s (524) while Studio keeps
+  // quantizing.
   it("keeps polling when the kickoff response is lost but the export started", async () => {
     let seq = 0;
     let active = false;
@@ -771,7 +718,6 @@ describe("POST /lab/export", () => {
       fakeStudio({
         exportGguf: async () => {
           active = true;
-          // Simulate the work finishing shortly after the connection drops.
           setTimeout(() => {
             active = false;
             seq = 5;
@@ -799,7 +745,6 @@ describe("POST /lab/export", () => {
     expect(store.getRun(run.id)?.ggufPath).toBe("/runs/10/gguf");
   });
 
-  // But a kickoff that genuinely failed, with nothing running, is a failure.
   it("fails when the kickoff errored and no export started", async () => {
     const app = await build(
       fakeStudio({
@@ -828,7 +773,6 @@ describe("POST /lab/export", () => {
   });
 
   it("fails the job when Studio reports the export errored", async () => {
-    // Counter advances (the export ran), but the outcome is a failure.
     let seq = 0;
     const app = await build(
       fakeStudio({
@@ -857,13 +801,11 @@ describe("POST /lab/export", () => {
     expect(job?.error).toContain("not enough disk space");
   });
 
-  // Studio reports the *last* operation, so a previous export's success would
-  // otherwise be read as ours and finish the job instantly against a stale
-  // artifact. The op counter is what tells them apart.
+  // Studio reports the last operation, so an earlier success would look like
+  // ours without the op counter.
   it("does not accept a stale success from an earlier export", async () => {
     const app = await build(
       fakeStudio({
-        // Already-successful op, and the counter never moves for ours.
         exportStatus: async () => ({
           is_export_active: false,
           last_op_seq: 42,
@@ -887,12 +829,9 @@ describe("POST /lab/export", () => {
   });
 });
 
-// Stopping a run you started by mistake. The suites already honour a signal —
-// the personal loop checks it per case, the general one SIGTERMs lm_eval — so
-// what is tested here is that a controller reaches them and that the outcome is
-// recorded as a deliberate stop rather than a break.
+// Tests that the controller reaches the suites and the job is recorded as
+// cancelled.
 describe("POST /lab/jobs/:id/cancel", () => {
-  /** Start a benchmark and hand back its job id. */
   async function startBenchmark(app: FastifyInstance) {
     const res = await app.inject({
       method: "POST",
@@ -908,9 +847,7 @@ describe("POST /lab/jobs/:id/cancel", () => {
   }
 
   it("stops a running benchmark and records it as cancelled", async () => {
-    // Accepts the request and never answers, so the run is genuinely in flight
-    // when the cancel lands. A refused port would finish first and the test
-    // would pass or fail on a race rather than on the behaviour.
+    // Never answers, so the run is genuinely in flight when cancel lands.
     const hanging = createServer(() => {});
     const url = await new Promise<string>((resolve) =>
       hanging.listen(0, "127.0.0.1", () =>
@@ -932,14 +869,12 @@ describe("POST /lab/jobs/:id/cancel", () => {
       });
       expect(res.statusCode).toBe(202);
 
-      // The signal reaches the in-flight fetch, so this settles rather than
-      // waiting out a request that was never going to answer.
       await vi.waitFor(async () => {
         const job = (await app.inject({ url: `/lab/jobs/${id}` })).json();
         expect(job.state).toBe("cancelled");
       });
 
-      // A partial suite is not a result; nothing may be written for one.
+      // A partial suite writes no scores.
       expect((await app.inject({ url: "/lab/scores" })).json()).toEqual([]);
     } finally {
       hanging.closeAllConnections();
@@ -947,9 +882,7 @@ describe("POST /lab/jobs/:id/cancel", () => {
     }
   });
 
-  // A row can outlive the process that owned it, and the user's instinct is to
-  // press Cancel. Answering 409 there left the job "running" forever, blocking
-  // every later run with no way out of the UI.
+  // An orphaned row must be cancellable, or it blocks every later run.
   it("clears a job whose process is gone rather than refusing", async () => {
     const app = await build();
     const orphan = store.createJob("benchmark");
@@ -999,9 +932,8 @@ describe("POST /lab/jobs/:id/cancel", () => {
   });
 });
 
-// The picker's list. Free text here used to be a trap: Studio ignores the
-// `model` a request names and answers from whatever is resident, so a typo
-// returned a full score attributed to another model rather than an error.
+// Studio ignores the requested `model`, so a typo used to score another
+// model.
 describe("GET /lab/models", () => {
   const inventory = [
     {
@@ -1033,8 +965,6 @@ describe("GET /lab/models", () => {
       "unsloth/gemma-4-12b-it-GGUF",
       "loaded-model",
     ]);
-    // `loadedModel` is the fake's default, and is the only entry a benchmark
-    // would actually measure.
     expect(
       body.models.filter((m: { loaded: boolean }) => m.loaded),
     ).toHaveLength(1);
@@ -1046,11 +976,8 @@ describe("GET /lab/models", () => {
     });
   });
 
-  // The form has to stay usable when the inventory cannot be read: a short
-  // picker is recoverable, an error that blanks the Lab is not. What is loaded
-  // still comes from /v1/models, so the run the form exists for is still
-  // offered — and the reason the rest is missing is reported rather than
-  // swallowed.
+  // An unreadable inventory must not blank the form; the loaded model is still
+  // offered.
   it("keeps the loaded model, and says why, when the target will not list", async () => {
     const app = await build(
       fakeStudio({
@@ -1068,9 +995,7 @@ describe("GET /lab/models", () => {
     expect(res.json().inventoryError).toContain("500");
   });
 
-  // The case that blocked benchmarking on Colab: a reachable target with a
-  // model loaded, whose disk inventory lists nothing. The picker was empty, the
-  // form disabled itself, and the GPU sat there with a model on it.
+  // Colab case: a model is loaded but the disk inventory is empty.
   it("offers a resident model the inventory never mentions", async () => {
     const app = await build(fakeStudio({ listLocalModels: async () => [] }));
     const body = (await app.inject({ url: "/lab/models" })).json();
@@ -1117,9 +1042,7 @@ describe("POST /lab/benchmark", () => {
     expect(res.statusCode).toBe(202);
   });
 
-  // Studio ignores the `model` field and serves whatever is resident, so a run
-  // against an empty backend does not error — it scores nothing, or scores
-  // whatever answers. Refusing up front is the only place this can be caught.
+  // Studio would answer from an empty backend without erroring.
   it("refuses when the target has no model loaded", async () => {
     const app = await build(fakeStudio({ loadedModel: async () => null }));
     const res = await app.inject({
@@ -1130,7 +1053,6 @@ describe("POST /lab/benchmark", () => {
 
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("no_model_loaded");
-    // Nothing was started, so no job row was left behind.
     expect(store.listJobs()).toEqual([]);
   });
 
@@ -1155,9 +1077,7 @@ describe("POST /lab/benchmark", () => {
     ).json();
     expect((await settle(jobId))?.state).toBe("done");
 
-    // The typed name is kept as the request, but the scores are attributed to
-    // the model that answered — the two differ here precisely because Studio
-    // ignores the field.
+    // Request keeps the typed name; scores go to the model that answered.
     expect(store.listScores()[0]).toMatchObject({
       model: "whatever-i-typed",
       servedModel: "qwen3-8b",
@@ -1207,10 +1127,8 @@ describe("GET /lab/jobs/:id", () => {
   });
 });
 
-// Studio refuses an absolute dataset path that isn't under one of its own
-// dataset roots ("dataset path must be relative or under a dataset root"), and
-// our upload root is deliberately somewhere else. Getting this wrong fails the
-// run at Studio's door, minutes after the user pressed start.
+// Studio refuses absolute dataset paths outside its own dataset roots, and our
+// upload root is elsewhere.
 describe("POST /lab/finetune — local datasets", () => {
   let dir: string;
   beforeEach(async () => {
@@ -1220,7 +1138,6 @@ describe("POST /lab/finetune — local datasets", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  /** A Studio that records what it was asked to train on. */
   function trainingSpy(over: Partial<StudioClient> = {}) {
     const seen: { uploaded: string[]; start: TrainingStart[] } = {
       uploaded: [],
@@ -1264,8 +1181,6 @@ describe("POST /lab/finetune — local datasets", () => {
   });
 
   it("passes through a name only Studio can resolve", async () => {
-    // A relative dataset name is Studio's to resolve under its own roots; this
-    // host has no such file and must not try to upload one.
     const { studio, seen } = trainingSpy();
     const app = await build(studio);
 
@@ -1359,8 +1274,6 @@ describe("POST /lab/models/plan", () => {
   });
 
   it("refuses up front when the model can't fit", async () => {
-    // The whole point of the preflight: no chunk is written, so the disk never
-    // fills and the client gets a reason instead of a mid-transfer 500.
     const app = await build();
     const res = await app.inject({
       method: "POST",
@@ -1376,10 +1289,8 @@ describe("POST /lab/models/plan", () => {
   });
 });
 
-// The handle the routes return is the same orchestration the routes use, not a
-// second copy. That matters beyond tidiness: `inFlight` decides what can be
-// cancelled and the job rows are what the UI polls, so a lab started from a
-// conversation must land in exactly the places the Lab's own screen reads.
+// Chat and the Lab UI must share one orchestration: `inFlight` decides what
+// can be cancelled.
 describe("the in-process service", () => {
   it("starts runs the HTTP surface then reports", async () => {
     const app = await build();
@@ -1399,15 +1310,12 @@ describe("the in-process service", () => {
     expect(runs.json().map((r: { id: string }) => r.id)).toContain(
       started.runId,
     );
-    // Both readers agree because there is only one store behind them.
     expect(lab.jobs().map((j) => j.id)).toEqual(
       jobs.json().map((j: { id: string }) => j.id),
     );
   });
 
-  // The route requires a model name; the service does not, because Studio
-  // serves what is resident whatever the request says. An unnamed one must be
-  // filled with what will actually answer, or the scores carry no label at all.
+  // Unnamed benchmarks get labeled with the model that will answer.
   it("labels an unnamed benchmark with the model that will answer", async () => {
     fakeModel = startFakeModel();
     const baseURL = await fakeModel.listen();

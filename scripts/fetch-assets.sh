@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Fetch the Tier-0 embedded-model assets (llama-server binary + GGUF weights)
-# into the desktop app's git-ignored drop-in dirs. Idempotent — safe to re-run.
-# Works on Linux, macOS, and Windows (Git Bash). See apps/desktop/SIDECAR.md.
+# Fetch the Tier 0 llama-server binary and GGUF weights into the desktop app's
+# git-ignored dirs. Idempotent. See apps/desktop/SIDECAR.md.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,14 +8,13 @@ TAURI="$ROOT/apps/desktop/src-tauri"
 BIN_DIR="$TAURI/binaries"
 MODEL_DIR="$TAURI/models"
 
-# Pinned versions — bump deliberately (keep in sync with SIDECAR.md).
+# Pinned versions: bump deliberately.
 LLAMA_VERSION="b9950"
 MODEL_URL="https://huggingface.co/bartowski/Qwen_Qwen3-1.7B-GGUF/resolve/main/Qwen_Qwen3-1.7B-Q4_K_M.gguf"
 MODEL_PATH="$MODEL_DIR/model.gguf"
 
 mkdir -p "$BIN_DIR" "$MODEL_DIR"
 
-# --- model weights (platform-agnostic) ---
 if [ -f "$MODEL_PATH" ]; then
   echo "✓ model present: $MODEL_PATH"
 else
@@ -30,8 +28,6 @@ else
   echo "✓ model saved: $MODEL_PATH"
 fi
 
-# --- llama-server binary + its shared libs (platform-specific) ---
-# Pick the release asset and the names the binary + libraries carry here.
 os="$(uname -s)"; arch="$(uname -m)"
 server_bin="llama-server"
 case "$os/$arch" in
@@ -63,7 +59,7 @@ else
   case "$asset" in
     *.tar.gz) tar -xzf "$tmp/$asset" -C "$tmp" ;;
     *.zip)
-      # Git Bash doesn't always ship unzip; Windows' own bsdtar reads zips.
+      # Git Bash doesn't always ship unzip; Windows' bsdtar reads zips.
       if command -v unzip >/dev/null 2>&1; then
         unzip -q "$tmp/$asset" -d "$tmp"
       elif [ -x "/c/Windows/System32/tar.exe" ]; then
@@ -73,7 +69,6 @@ else
         exit 1
       fi ;;
   esac
-  # The archive extracts to a build dir holding the binary next to its libs.
   src="$(dirname "$(find "$tmp" -name "$server_bin" -type f | head -1)")"
   cp "$src/$server_bin" "$BIN_DIR/"
   cp "$src"/*."$libs"* "$BIN_DIR/" 2>/dev/null || true

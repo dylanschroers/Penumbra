@@ -7,10 +7,8 @@ import { useCallback, useEffect, useState } from "react";
 import { getDb } from "../../db/client";
 import { requestSync, SYNC_EVENT } from "../../sync/SyncClient";
 
-// The single place the UI touches the repository. Holds the task list in React
-// state and re-reads it after every mutation, so the screen always reflects
-// what's actually stored. The local DB is instant, so plain "mutate then
-// refetch" is enough — no optimistic-update machinery needed.
+// Mutate then refetch; the local DB is fast enough that optimistic updates
+// aren't needed.
 export function useTasks() {
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -29,8 +27,7 @@ export function useTasks() {
 
   useEffect(() => {
     void refresh();
-    // A pull that changed local data fires this — re-read so remote edits from
-    // another device show up live.
+    // Fired when a pull changed local data.
     const onSynced = () => void refresh();
     window.addEventListener(SYNC_EVENT, onSynced);
     return () => window.removeEventListener(SYNC_EVENT, onSynced);

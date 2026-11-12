@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { trustProxyFromEnv } from "./trustProxy";
 
-// This value decides what req.ip means, and req.ip decides who the auth gate
-// treats as local. The case that must never regress is a boolean being honoured
-// as "trust everyone" — that is the hole the whole setting exists to close.
+// The regression to guard: a boolean honoured as "trust everyone".
 
 describe("trustProxyFromEnv", () => {
   it("defaults to false, preserving the socket peer as req.ip", () => {
@@ -24,8 +22,7 @@ describe("trustProxyFromEnv", () => {
     );
   });
 
-  // The footgun: "true" would trust X-Forwarded-For from any peer, so a direct
-  // client could spoof a loopback address. Rejected loudly at boot instead.
+  // "true" would let a direct client spoof a loopback X-Forwarded-For.
   it("refuses a boolean rather than trusting every proxy", () => {
     expect(() => trustProxyFromEnv("true")).toThrow(/boolean/);
     expect(() => trustProxyFromEnv("TRUE")).toThrow();

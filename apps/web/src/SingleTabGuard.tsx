@@ -1,11 +1,8 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { closeDb } from "./db/client";
 
-// Ensures only one tab uses the local SQLite store at a time. The OPFS SAHPool
-// VFS takes an exclusive lock on its files, so a second tab opening the DB throws
-// NoModificationAllowedError. We coordinate with the Web Locks API: the first tab
-// holds an exclusive lock and owns the store; other tabs render a takeover screen
-// instead of the app (so their worker never opens the DB — see the lazy getDb()).
+// The OPFS SAHPool VFS locks its files exclusively, so a Web Lock picks one
+// owner tab; others render a takeover screen and never open the DB.
 const LOCK_NAME = "penumbra-db-owner";
 const CHANNEL_NAME = "penumbra-db-control";
 const TAKEOVER = "request-takeover";
@@ -19,7 +16,6 @@ export function SingleTabGuard({ children }: { children: ReactNode }) {
   const channelRef = useRef<BroadcastChannel | null>(null);
 
   useEffect(() => {
-    // No Web Locks (very old browser): fail open and behave as before.
     if (!("locks" in navigator)) {
       ownerRef.current = true;
       setStatus("owner");
@@ -30,14 +26,12 @@ export function SingleTabGuard({ children }: { children: ReactNode }) {
     channelRef.current = channel;
     const abort = new AbortController();
 
-    // If the lock isn't granted almost immediately, another tab owns it.
     const blockedTimer = window.setTimeout(() => {
       if (!ownerRef.current) setStatus("blocked");
     }, 150);
 
-    // One queued request does double duty: it grants ownership now if the lock is
-    // free, and otherwise stays queued so we auto-promote the instant the current
-    // owner releases (its tab closed, or it handed off via takeover below).
+    // One queued request grants ownership now if free, or promotes this tab when
+    // the owner releases.
     navigator.locks
       .request(
         LOCK_NAME,
@@ -48,15 +42,12 @@ export function SingleTabGuard({ children }: { children: ReactNode }) {
             releaseRef.current = release;
             ownerRef.current = true;
             setStatus("owner");
-            // Promise stays pending → we hold the lock until release() runs.
           }),
       )
-      .catch(() => {
-        // AbortError fires when the cleanup aborts a still-queued request.
-      });
+      .catch(() => {});
 
-    // An owner asked to hand off must free the OPFS handles *before* releasing the
-    // lock, or the next owner hits NoModificationAllowedError.
+    // Free the OPFS handles before releasing the lock, or the next owner hits
+    // NoModificationAllowedError.
     channel.onmessage = (event) => {
       if (event.data === TAKEOVER && ownerRef.current) {
         ownerRef.current = false;
@@ -77,8 +68,6 @@ export function SingleTabGuard({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Nudge the current owner to release; our still-queued lock request then
-  // promotes this tab to owner automatically.
   const takeOver = () => channelRef.current?.postMessage(TAKEOVER);
 
   if (status === "owner") return <>{children}</>;

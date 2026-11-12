@@ -2,30 +2,18 @@ import type { AuthContext, Device, IssuedDevice } from "@penumbra/shared";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 
-// Drives the device-management section of the status pill.
-//
-// Everything here goes through api(), so it follows the address and bearer the
-// pill edits — device management runs against the same server chat and the Lab
-// do, never a second one.
-//
-// The admin controls are shown only when the server reports the caller as
-// loopback (../../server/src/devices/routes → GET /auth/context). That is the
-// current stand-in for an admin flag: the client cannot judge its own vantage
-// point, so the server attests to it, and until a real flag exists "you are on
-// the server's own machine" is what grants management.
+// Admin controls show only when the server reports the caller as loopback
+// (GET /auth/context).
 
 export interface Devices {
-  /** Null until the first context fetch settles. */
   context: AuthContext | null;
   devices: Device[];
-  /** The just-minted token, held so it can be shown exactly once. The server
-   *  never returns it again. */
+  /** Shown exactly once; the server never returns it again. */
   minted: IssuedDevice | null;
   error: string | null;
   busy: boolean;
   mint: (label: string) => Promise<void>;
   revoke: (id: string) => Promise<void>;
-  /** Clear the shown-once token, once the user has copied it. */
   dismissMinted: () => void;
 }
 
@@ -37,11 +25,7 @@ export function useDevices(enabled: boolean): Devices {
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
-    // Context first, and on its own: it decides whether the list is even worth
-    // asking for, and a failure here is different from a failure listing. An
-    // older server with no /auth/context 404s, which is read as "no device
-    // management" — the section hides rather than showing an error for a server
-    // that simply predates the feature.
+    // An older server without /auth/context 404s; the section hides.
     let ctx: AuthContext;
     try {
       ctx = await api<AuthContext>("/auth/context");
@@ -51,13 +35,11 @@ export function useDevices(enabled: boolean): Devices {
       return;
     }
     setContext(ctx);
-    // Off-loopback the list is admin-only and would 403 anyway; don't ask.
+    // Off-loopback the list would 403.
     if (!ctx.loopback) {
       setDevices([]);
       return;
     }
-    // Listing can fail on its own without unsettling the context above, so its
-    // error shows in the (now visible) panel instead of hiding it.
     try {
       setDevices(await api<Device[]>("/auth/devices"));
       setError(null);
@@ -66,8 +48,7 @@ export function useDevices(enabled: boolean): Devices {
     }
   }, []);
 
-  // Only while the menu is open: this component is always mounted, and there is
-  // no reason to poll the server for a panel nobody is looking at.
+  // Only while the menu is open.
   useEffect(() => {
     if (enabled) void refresh();
   }, [enabled, refresh]);
@@ -97,8 +78,7 @@ export function useDevices(enabled: boolean): Devices {
       setBusy(true);
       try {
         await api<void>(`/auth/devices/${id}`, { method: "DELETE" });
-        // A token shown for a device just revoked would be a live-looking
-        // credential that no longer works — clear it if it was this one.
+        // Clear a shown token if its device was just revoked.
         setMinted((m) => (m?.device.id === id ? null : m));
         setError(null);
         await refresh();

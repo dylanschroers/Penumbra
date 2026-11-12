@@ -11,10 +11,8 @@ import {
   setServerUrlValue,
 } from "./serverAddress";
 
-// The address and the bearer are one fact split across two fields, and both are
-// read per request by api(), RemoteEngine, and the uploads. What is pinned here
-// is the part that fails silently: a bearer that is absent, empty, or stale
-// produces a 401 or a 403 from routes the status pill never checks.
+// Absent, empty, or stale bearers fail silently as 401/403 on routes the pill
+// never checks.
 
 const TOKEN_KEY = `${STORAGE_NAMESPACE}.server.agent-token.v1`;
 
@@ -36,8 +34,7 @@ describe("agent token", () => {
   it("sends no Authorization header when there is no bearer", () => {
     setAgentToken("");
     expect(getAgentToken()).toBeUndefined();
-    // Omitted rather than empty: an empty bearer reads as malformed, and a
-    // loopback server running without a token would reject it.
+    // An empty bearer reads as malformed.
     expect(authHeaders()).toEqual({});
   });
 
@@ -50,8 +47,7 @@ describe("agent token", () => {
     setAgentToken("secret");
     setAgentToken("");
     expect(getAgentToken()).toBeUndefined();
-    // The distinction that matters: an empty stored value is a choice, and must
-    // not fall back to whatever VITE_AGENT_TOKEN was compiled in.
+    // An empty stored token is a choice; it must not revive VITE_AGENT_TOKEN.
     expect(localStorage.getItem(TOKEN_KEY)).toBe("");
   });
 
@@ -67,8 +63,6 @@ describe("agent token", () => {
     expect(localStorage.getItem(TOKEN_KEY)).toBe("persisted");
   });
 
-  // Changing one must not silently drop the other: toggling between two known
-  // servers would otherwise lose a working credential every time.
   it("leaves the address alone", () => {
     setServerUrlValue("http://studio.lan:3000");
     setAgentToken("secret");
@@ -93,8 +87,6 @@ describe("server history", () => {
     expect(urls).toEqual(["http://a:3000"]);
   });
 
-  // Reconnecting moves a known server to the front and refreshes its token
-  // rather than adding a duplicate.
   it("dedupes and refreshes the token on reconnect", () => {
     recordConnection("http://a:3000", "old");
     recordConnection("http://b:3000", "");
@@ -110,7 +102,6 @@ describe("server history", () => {
   it("keeps at most five servers", () => {
     for (let i = 0; i < 8; i++) recordConnection(`http://h${i}:3000`, "");
     expect(getServerHistory()).toHaveLength(5);
-    // The five most recent, not the five oldest.
     expect(getServerHistory()[0]?.url).toBe("http://h7:3000");
   });
 

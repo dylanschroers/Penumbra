@@ -24,30 +24,17 @@ import {
   type TargetStore,
 } from "./targets";
 
-// Which Studios the server can reach, and which one each role uses.
-//
-// These live outside /lab/* because chat depends on them too — the Studio a
-// conversation runs against is the same setting the Lab was quietly owning.
-// Same gate as the agent and lab routes: this configures where a model runs and
-// costs GPU, so it is an actuator, not data.
+// Outside /lab/* because chat uses targets too. Gated like the other actuator
+// routes.
 
-/** How long a load may keep working after its response was lost. Matches the
- *  timeout StudioClient.loadModel gives the request itself: past that, whatever
- *  is happening over there is no longer this request's business. */
+/** Matches StudioClient.loadModel's own timeout. */
 const LOAD_SETTLE_MS = 15 * 60_000;
 
-/** Between settle polls. Long enough to be free, short enough that a load that
- *  finished right after the drop is not left sitting. */
 const LOAD_POLL_MS = 3000;
 
 /**
- * Whether a failed load may still be running on the other side.
- *
- * Studio answering for itself — a 4xx on a bad id, a 500 on an OOM — is a
- * verdict, and waiting on it would stall for nothing. A gateway status or no
- * response at all is the *connection* giving up, which says nothing about the
- * load: that is the Cloudflare 524 the export path documents, hit here by any
- * load slow enough to matter.
+ * Studio's own 4xx/5xx is a verdict. A gateway status or no response is the
+ * connection giving up (e.g. a Cloudflare 524), not the load.
  */
 function mayStillBeLoading(err: unknown): boolean {
   if (!(err instanceof StudioHttpError)) return true;
@@ -60,14 +47,9 @@ function mayStillBeLoading(err: unknown): boolean {
 }
 
 /**
- * Wait out a load whose response never came back.
- *
- * Weights page in for minutes while `/api/inference/load` holds the connection
- * open, while the load carries on inside Studio regardless of what happens to
- * the connection. So ask Studio what it is doing, and give up only once it is
- * doing nothing *and* nothing new is resident.
- *
- * Returns the model that ended up serving, or null if none did.
+ * `/api/inference/load` holds the connection while weights page in, and the
+ * load continues if it drops. Poll Studio and give up only once it is idle
+ * with nothing new resident. Returns what ended up serving, or null.
  */
 async function settleLoad(
   client: StudioClient,
@@ -76,8 +58,8 @@ async function settleLoad(
   timeoutMs: number,
 ): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
-  // A load that has not registered yet looks exactly like one that never
-  // started, so a single quiet poll is not an answer. Three is.
+  // A load that hasn't registered yet looks like none, so require three quiet
+  // polls.
   let quiet = 0;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, pollMs));
@@ -95,26 +77,13 @@ async function settleLoad(
 export interface ComputeRouteOptions {
   targets: TargetStore;
   token?: string;
-  /** Builds the Studio client for a target. Injected so tests can drive these
-   *  routes without a live Studio, the same seam the lab routes use. */
   makeClient?: (id: TargetId, creds: TargetCredentials) => StudioClient;
-  /** How a load whose response was lost is waited out. Overridden only by tests,
-   *  which have no patience for real polling. */
   loadPollMs?: number;
   loadSettleMs?: number;
-  /** Issued device tokens, accepted alongside the shared secret. Optional so a
-   *  test can stand these routes up without a device store. */
   devices?: DeviceStore;
-  /** Spawns the local Studio. Injected so a test can assert the launch without
-   *  starting a real GPU server. */
   launch?: () => LaunchOutcome;
-  /** Whether a launch command is configured at all. Injected so a test can
-   *  drive the button-visibility and refusal paths without touching the env. */
   launchConfigured?: boolean;
-  /** Stops the local Studio. Injected so a test can assert it without a real
-   *  server to shut down. */
   stop?: () => StopOutcome;
-  /** Whether a stop command is configured at all. */
   stopConfigured?: boolean;
 }
 
@@ -135,9 +104,6 @@ export function registerComputeRoutes(
 ): void {
   const preHandler = requireAuth({ token, devices });
 
-  /** The Studio for a target, or null when it has no address yet. Built per
-   *  call for the same reason the lab's is: a client is a URL and a header map,
-   *  so there is nothing to keep alive and nothing that can go stale. */
   const clientFor = (id: TargetId): StudioClient | null =>
     targets.list().find((t) => t.id === id)?.configured
       ? makeClient(id, targets.credentials(id))
@@ -147,17 +113,11 @@ export function registerComputeRoutes(
     "/compute/targets",
     { preHandler },
     async (req): Promise<ComputeState> => {
-      // Probed in parallel: an unreachable target should cost one timeout, not
-      // one per target in series.
       const listed = targets.list();
-      // Only a loopback caller can launch, so the flag is decided per request:
-      // the same listing off-machine reports canLaunch false and hides the
-      // button rather than offering one the launch route would refuse.
+      // Per request: only loopback callers can launch.
       const onMachine = isLoopback(req.ip);
       const launchable = launchConfigured && onMachine;
       const stoppable = stopConfigured && onMachine;
-      // An unconfigured target has no address to probe, and "stopped" with
-      // nothing serving is the honest answer for one that does not exist yet.
       const idle = { state: "stopped" as const, served: null };
       const probes = await Promise.all(
         listed.map((t) =>
@@ -171,11 +131,8 @@ export function registerComputeRoutes(
         targets: listed.map((t, i) => ({
           ...t,
           state: probes[i]?.state ?? "stopped",
-          // Free, because readiness is decided by reading the very listing that
-          // names it. This is what makes a model loaded on Colab show up here
-          // on the next poll instead of waiting for someone to re-open a panel.
+          // Same `/v1/models` read that decides readiness, so it's free.
           servedModel: probes[i]?.served ?? null,
-          // Local only: there is no spawning a process on a remote target.
           canLaunch: t.id === "local" && launchable,
           canStop: t.id === "local" && stoppable,
         })),
@@ -190,18 +147,8 @@ export function registerComputeRoutes(
   );
 
   /**
-   * What this target can serve, and which of it is resident.
-   *
-   * Per target rather than per role: the panel edits both cards, and asking
-   * "what does the benchmark role have" would list the wrong machine's models
-   * on the other one. /lab/models answers the role question for the benchmark
-   * form; both map through the same helper so they cannot disagree.
-   *
-   * A target that is unconfigured or unreachable answers with an empty list
-   * rather than an error, so the card stays usable and keeps reporting its own
-   * state as the reason. An inventory that fails on a target that *is* answering
-   * reports why in `inventoryError`, which is a different problem and a
-   * different fix.
+   * Per target, not per role. An unconfigured or unreachable target answers an
+   * empty list; a failed inventory on a live target sets `inventoryError`.
    */
   app.get<{ Params: { id: string } }>(
     "/compute/targets/:id/models",
@@ -217,15 +164,8 @@ export function registerComputeRoutes(
   );
 
   /**
-   * Make a model resident on this target.
-   *
-   * One GPU holds one model, so this evicts what was loaded — including the
-   * model a conversation is mid-thread with. That is the point of the control,
-   * and the transcript marker is what stops the switch being silent.
-   *
-   * Held open until Studio answers rather than returning a job id: a load is
-   * seconds to minutes, the client has nothing else to do meanwhile, and an
-   * error here is worth reporting directly instead of being buried in a job row.
+   * Evicts whatever was loaded (one GPU, one model). Held open rather than
+   * returning a job id: loads take seconds to minutes.
    */
   app.post<{ Params: { id: string } }>(
     "/compute/targets/:id/load",
@@ -245,16 +185,13 @@ export function registerComputeRoutes(
         });
       }
 
-      // What was serving before, so a load whose response is lost can be told
-      // apart from one that never happened — the same baseline trick export
-      // takes against Studio's op counter.
+      // Baseline so a lost response can be told apart from a load that never
+      // happened.
       const before = await client.loadedModel().catch(() => null);
 
       try {
-        // Studio will not guess between a GGUF repo's quantizations, so when
-        // the caller did not name one, its own default is resolved first. A
-        // repo that turns out not to be GGUF simply reports none, and the load
-        // proceeds without.
+        // Studio won't pick a GGUF quant, so resolve the repo default. Non-GGUF repos
+        // report none.
         let variant = parsed.data.variant;
         if (!variant) {
           variant = (await client
@@ -268,8 +205,6 @@ export function registerComputeRoutes(
           ? await settleLoad(client, before, loadPollMs, loadSettleMs)
           : null;
         if (!settled) {
-          // Surfaced rather than swallowed: "it did not load" with no reason
-          // sends you to Studio's logs for what this call already knows.
           return reply.code(502).send({
             error: "load_failed",
             message: err instanceof Error ? err.message : String(err),
@@ -278,23 +213,16 @@ export function registerComputeRoutes(
         return { loaded: settled };
       }
 
-      // Reported back from the backend, not echoed from the request: Studio is
-      // the authority on what it ended up serving.
+      // Read back from Studio, not echoed from the request.
       const served = await client.loadedModel().catch(() => null);
       return { loaded: served };
     },
   );
 
   /**
-   * Start the local Studio.
-   *
-   * Loopback-only, on top of the gate. Spawning a process on the host is more
-   * than a device token grants, so even a valid one from another machine cannot
-   * reach this — only a caller on the server's own box, which is also the only
-   * box where starting a local process means anything.
-   *
-   * 202 and done: Studio takes ~45s to bind, and the /compute/targets poll is
-   * what turns the card ready. Nothing here waits on it.
+   * Loopback-only on top of the gate: a device token doesn't grant spawning
+   * processes. Returns 202; Studio takes ~45s to bind and the targets poll shows
+   * it ready.
    */
   app.post<{ Params: { id: string } }>(
     "/compute/targets/:id/launch",
@@ -319,10 +247,7 @@ export function registerComputeRoutes(
         });
       }
 
-      // Don't spawn a second process over one that is already there. "ready",
-      // "unauthorized" (up, wrong key), and "not_studio" (something else on the
-      // port) all mean the port is taken and a fresh Studio would only fail to
-      // bind; only a target that answers nothing is worth starting.
+      // "ready", "unauthorized", and "not_studio" all mean the port is taken.
       const client = clientFor("local");
       const probe = client
         ? await client.probe()
@@ -336,8 +261,6 @@ export function registerComputeRoutes(
 
       const outcome = launch();
       if (!outcome.ok) {
-        // A double-click during startup is a 409 (it is coming); a failed spawn
-        // is a 500 (it is not).
         const code = outcome.reason === "already_launching" ? 409 : 500;
         return reply
           .code(code)
@@ -347,15 +270,7 @@ export function registerComputeRoutes(
     },
   );
 
-  /**
-   * Stop the local Studio.
-   *
-   * Same gate as launch — loopback-only, local-only. Fire-and-forget: the stop
-   * command signals Studio to shut down, and the /compute/targets poll turns the
-   * card stopped. No already-stopped guard: stopping something already down is a
-   * harmless no-op, and racing a probe against a shutdown is not worth the round
-   * trip.
-   */
+  /** Same gate as launch. Fire-and-forget; stopping a stopped Studio is a no-op. */
   app.post<{ Params: { id: string } }>(
     "/compute/targets/:id/stop",
     { preHandler },
@@ -388,8 +303,7 @@ export function registerComputeRoutes(
     },
   );
 
-  // Point a target somewhere, or hand it a rotated key. The value is written,
-  // never read back — a GET reports only `hasKey`.
+  // Write-only: GET reports only `hasKey`.
   app.post("/compute/targets/:id", { preHandler }, async (req, reply) => {
     const id = targetId.safeParse(
       (req.params as { id?: string } | undefined)?.id,
@@ -398,8 +312,8 @@ export function registerComputeRoutes(
 
     const parsed = targetConfigInput.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
-    // An empty patch would silently do nothing, which reads as a save that
-    // worked. Colab additionally needs an address before a key means anything.
+    // An empty patch would look like a save that worked. Colab needs an address
+    // before a key.
     if (parsed.data.baseURL === undefined && parsed.data.apiKey === undefined) {
       return reply.code(400).send({ error: "bad_request" });
     }
@@ -415,7 +329,6 @@ export function registerComputeRoutes(
     return { ok: true };
   });
 
-  // Forget a target: back to the environment for local, unconfigured for Colab.
   app.delete("/compute/targets/:id", { preHandler }, async (req, reply) => {
     const id = targetId.safeParse(
       (req.params as { id?: string } | undefined)?.id,
@@ -429,9 +342,7 @@ export function registerComputeRoutes(
     const parsed = assignInput.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
     targets.assign(parsed.data.role, parsed.data.target);
-    // The effective target is returned because it can differ from what was just
-    // asked for: assigning an unconfigured Colab resolves back to local, and a
-    // caller that assumed otherwise would misreport where answers come from.
+    // Can differ from what was asked: an unconfigured Colab resolves to local.
     return {
       ok: true,
       assignment: parsed.data.target,

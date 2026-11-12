@@ -4,14 +4,9 @@ import { AppShell } from "./shell/AppShell";
 import { useTextScale } from "./shell/useTextScale";
 import { startSync } from "./sync/SyncClient";
 
-// UI-overhaul prototype: the app now boots into the launcher shell (logo →
-// assistant → module dock/focus). The previous free-grid Workspace still lives
-// in src/workspace and can be swapped back here while we evaluate the direction.
 export function App() {
-  // Sync runs only here: App mounts inside SingleTabGuard, so this is the one
-  // tab that owns the local store. The cleanup stops the loop on unmount.
+  // Sync runs only in the tab that owns the store (inside SingleTabGuard).
   useEffect(() => startSync(), []);
-  // Ctrl/Cmd +/-/0 scales the whole UI (the chat included), persisted.
   useTextScale();
 
   return <AppShell />;

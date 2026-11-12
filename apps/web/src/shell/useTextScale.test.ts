@@ -9,12 +9,9 @@ import {
   useTextScale,
 } from "./useTextScale";
 
-// The pure half of the text zoom: clamping and key mapping. The effect that
-// wires these to keydown and <html> is a thin shell over them — thin, but it
-// runs from App's first effect with no error boundary above it, so the way it
-// behaves when storage is unavailable is pinned below too.
+// The effect runs from App's first effect with no error boundary, so its
+// behaviour without storage is pinned too.
 
-/** Mount the hook on its own, the way App does. */
 function mount(): () => void {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -51,7 +48,6 @@ describe("text scale", () => {
       s = next;
     }
     expect(s).toBe(0.7);
-    // Already at the floor: another shrink is a no-op, not a value below MIN.
     expect(scaleForKey(MIN_SCALE, "-")).toBe(MIN_SCALE);
   });
 
@@ -74,8 +70,6 @@ describe("text scale", () => {
         new KeyboardEvent("keydown", { key: "0", ctrlKey: true }),
       );
     });
-    // Back to 1×: the inline size is dropped rather than pinned at 100%, and
-    // the stored value goes with it.
     expect(document.documentElement.style.fontSize).toBe("");
     expect(localStorage.getItem("app.shell.text-scale.v1")).toBeNull();
     unmount();
@@ -91,11 +85,8 @@ describe("text scale", () => {
     unmount();
   });
 
-  // Storage *throws* where it is blocked (a locked-down webview, Safari private
-  // browsing) rather than returning null. This runs from App's first effect and
-  // nothing catches above it, so an unguarded read would blank the entire app
-  // over a zoom preference — and the boot watchdog would reload twice into the
-  // same wall before showing an error.
+  // Blocked storage throws rather than returning null; unguarded, this would
+  // blank the app.
   it("still starts when localStorage is unavailable", () => {
     const blocked = () => {
       throw new Error("storage is blocked");
@@ -107,7 +98,6 @@ describe("text scale", () => {
     const unmount = mount();
     expect(document.documentElement.style.fontSize).toBe("");
 
-    // And a zoom still works for the session, it just will not be remembered.
     act(() => {
       window.dispatchEvent(
         new KeyboardEvent("keydown", { key: "+", ctrlKey: true }),

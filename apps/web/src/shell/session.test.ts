@@ -41,9 +41,6 @@ describe("shell session", () => {
     expect(loadSession(ALLOWED)).toEqual({ open: [], windows: [] });
   });
 
-  // The reason ids are validated rather than trusted: a stored id that is no
-  // longer in the registry would render a dock card for a module getModule
-  // cannot resolve.
   it("drops modules the registry no longer offers", () => {
     saveSession({ open: ["tasks", "retired-module"], windows: [] });
     expect(loadSession(ALLOWED).open).toEqual(["tasks"]);

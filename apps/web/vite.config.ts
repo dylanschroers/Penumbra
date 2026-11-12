@@ -1,26 +1,17 @@
-// vitest/config re-exports vite's defineConfig and adds typing for the `test`
-// block below, so the test environment is configured in the same file Vite
-// already reads — no separate vitest.config.
-
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],
-  // Web-package tests run against happy-dom, a lightweight in-process DOM, so
-  // code that touches `window` (e.g. the agent tools' change notification)
-  // runs without a real browser. Node is the default env otherwise.
+  // happy-dom so code touching `window` runs without a browser.
   test: {
     environment: "happy-dom",
   },
-  // strictPort: the Tauri shell hardcodes this port as its devUrl, so failing
-  // fast beats Vite silently hopping to 5174 and leaving the webview dead.
+  // Tauri hardcodes this port as its devUrl.
   server: { port: 5173, strictPort: true },
-  // The worker is an ES module (it uses import/export).
   worker: { format: "es" },
   optimizeDeps: {
-    // Don't pre-bundle sqlite-wasm: it ships a .wasm asset that Vite must serve
-    // as-is, and pre-bundling can detach the .js from its .wasm.
+    // Pre-bundling can detach the .js from its .wasm.
     exclude: ["@sqlite.org/sqlite-wasm"],
   },
 });

@@ -1,8 +1,5 @@
-// The client half of Plane A sync. Runs on the main thread, drives the four
-// sync primitives the DB worker exposes, and talks to the server's /sync/tasks
-// endpoints. One round is "push local changes, then pull remote ones"; it runs
-// on startup, on an interval, when the network returns, and (debounced) right
-// after a local edit. See docs/SYNC.md.
+// Push then pull, on startup, every 15s, on `online`, and debounced after a
+// local edit. See docs/SYNC.md.
 
 import type { PullTasksResult } from "@penumbra/shared";
 import { getDb } from "../db/client";
@@ -13,33 +10,23 @@ import {
   setServerUrlValue,
 } from "../serverAddress";
 
-// The server base URL is runtime-settable (see setServerUrl) so the user can
-// point the app at a server by IP from the UI. It lives in ../serverAddress
-// because sync is no longer the only thing that needs it — holding a private
-// copy here is what let the status pill report on one server while the Lab and
-// Tier-1 chat talked to another.
+// Re-exported from ../serverAddress, the single owner of the address.
 
 export { getServerUrl } from "../serverAddress";
 
 const INTERVAL_MS = 15_000;
 const DEBOUNCE_MS = 800;
 
-/** Fired on window after a pull actually changed local data, so the UI can
- * re-read. Carried as an event (not a callback) to keep sync decoupled from
- * React. */
+/** An event, not a callback, to keep sync decoupled from React. */
 export const SYNC_EVENT = "penumbra:synced";
 
-/** Fired on window when the connection status changes; detail is a SyncStatus.
- * "pending" until the first round settles, then whatever the last round
- * proved. Same event-not-callback reasoning as SYNC_EVENT. */
+/** "pending" until the first round settles. */
 export const SYNC_STATUS_EVENT = "penumbra:sync-status";
 
 export type SyncStatus = "pending" | "connected" | "disconnected";
 
 let status: SyncStatus = "pending";
 
-/** The last known connection status (for initial render; updates arrive via
- * SYNC_STATUS_EVENT). */
 export function getSyncStatus(): SyncStatus {
   return status;
 }
@@ -67,12 +54,10 @@ async function pushOnce(): Promise<void> {
     body: JSON.stringify({ rows }),
   });
   if (!res.ok) throw new Error(`push failed: ${res.status}`);
-  // Only clear the seqs we collected: a mutation that landed mid-push gets a
-  // higher seq and survives to the next round, so no edit is lost.
+  // Clear only the collected seqs: a mutation that landed mid-push survives.
   await db.clearOutbox(seqs);
 }
 
-/** `changed` is true when pulled rows changed local data. */
 async function pullOnce(): Promise<{ changed: boolean; serverId: string }> {
   const db = getDb();
   const cursor = await db.getCursor();
@@ -83,8 +68,6 @@ async function pullOnce(): Promise<{ changed: boolean; serverId: string }> {
   return { changed, serverId };
 }
 
-/** Start a round, or hand back the one already running. Callers that only want
- *  to nudge can ignore the promise; flushSync awaits it. */
 function syncNow(): Promise<void> {
   if (!active) return Promise.resolve();
   if (syncing) return inFlight ?? Promise.resolve();
@@ -102,12 +85,9 @@ async function runRound(): Promise<void> {
     await pushOnce();
     let { changed, serverId } = await pullOnce();
 
-    // A serverId we haven't adopted means the database behind the URL was
-    // replaced (or this store has never synced): our cursor and cleared outbox
-    // belong to a dead epoch. Reconcile — forget revs, re-offer every row —
-    // then run one more push+pull against the new epoch. If the id changes
-    // again mid-round, the next round picks it up. A response with no serverId
-    // at all is a pre-epoch server build: don't treat that as a new epoch.
+    // An unfamiliar serverId means the database was replaced (or first sync):
+    // reconcile and run another push+pull. No serverId at all is a pre-epoch
+    // server; ignore it.
     if (serverId && serverId !== (await getDb().getServerId())) {
       await getDb().adoptServer(serverId);
       await pushOnce();
@@ -117,18 +97,13 @@ async function runRound(): Promise<void> {
     if (changed) {
       window.dispatchEvent(new CustomEvent(SYNC_EVENT));
     }
-    // Every round ends in a pull, so reaching here proves the server answered.
-    // Record the server only on the transition into "connected", not every
-    // round — otherwise the interval would rewrite history every 15s. The token
-    // rides along so a later reconnect needs no re-paste; sync itself is ungated
-    // and does not use it.
+    // Record history only on the transition to connected, not every 15s.
     if (status !== "connected") {
       recordConnection(getServerUrl(), getAgentToken() ?? "");
     }
     setStatus("connected");
   } catch (err) {
-    // Offline or server down is the normal local-first case: stay quiet-ish and
-    // let the next trigger retry. The outbox preserves unpushed work.
+    // Offline is normal; the outbox keeps unpushed work for the next round.
     setStatus("disconnected");
     console.warn("[sync]", err);
   } finally {
@@ -137,38 +112,30 @@ async function runRound(): Promise<void> {
 }
 
 /**
- * Run a full sync round and wait for it. A Tier-1 agent turn executes tools
- * against the *server's* store, so the client flushes first — otherwise the
- * model reasons about state up to INTERVAL_MS stale (see
- * docs/SYNC.md → Server-side writes). A round already in flight may have
- * started before the caller's edits, so wait it out and run a fresh one.
+ * A Tier 1 turn runs against the server's store, so flush first
+ * (docs/SYNC.md → Server-side writes). A round already in flight may predate
+ * the caller's edits, so wait it out and run a fresh one.
  */
 export async function flushSync(): Promise<void> {
   if (syncing) await inFlight;
   await syncNow();
 }
 
-/** Point the client at a new server and test it: persist the address, flip the
- *  status to "pending", then run a fresh sync round whose success/failure updates
- *  the status (and the UI listening on SYNC_STATUS_EVENT). */
+/** Persists the address and runs a round whose result updates the status. */
 export async function setServerUrl(url: string): Promise<void> {
-  // Moves the address for the whole app, not just sync — the Lab, the compute
-  // panel, and Tier-1 chat all read the same value on their next request.
+  // Moves the address app-wide.
   setServerUrlValue(url);
   setStatus("pending");
   await flushSync();
 }
 
-/** Nudge a sync soon, coalescing bursts of edits into one round. */
 export function requestSync(): void {
   if (!active) return;
   clearTimeout(debounce);
   debounce = setTimeout(() => void syncNow(), DEBOUNCE_MS);
 }
 
-/** Start the sync loop for this tab. Idempotent. Returns a stop function.
- * Call only from the tab that owns the local store (the single-tab guard
- * guarantees that's the one rendering the app). */
+/** Idempotent. Call only from the tab that owns the store. */
 export function startSync(): () => void {
   if (active) return stopSync;
   active = true;
@@ -176,8 +143,6 @@ export function startSync(): () => void {
   void syncNow();
   const timer = setInterval(() => void syncNow(), INTERVAL_MS);
   const onOnline = () => void syncNow();
-  // Flip the light immediately when the network drops, rather than waiting for
-  // the next round's fetch to fail.
   const onOffline = () => setStatus("disconnected");
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOffline);

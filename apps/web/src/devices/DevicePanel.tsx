@@ -1,18 +1,9 @@
 import { type FormEvent, useState } from "react";
 import type { Devices } from "./useDevices";
 
-// The device-management half of the status pill's menu.
-//
-// Rendered only when the server reports the caller as loopback — i.e. the app is
-// open on the server's own machine. Off-machine this is nothing, by design and
-// for now: managing who may reach the server is admin, and until there is an
-// admin flag "same machine" is the only thing that stands in for one.
-//
-// Kept in its own file rather than inlined so the pill stays about the
-// connection and this stays about who may use it — and so it can lift out whole
-// into the fuller network-settings surface that is coming.
+// Rendered only for loopback callers: "same machine" stands in for an admin
+// flag for now.
 
-/** A last-seen worth reading at a glance, not to the second. */
 function seen(at: string | null): string {
   if (!at) return "never used";
   const ms = Date.now() - Date.parse(at);
@@ -33,8 +24,7 @@ function DeviceRow({
   onRevoke: () => void;
   disabled: boolean;
 }) {
-  // Revoking cuts a device off, so it takes two clicks: the first arms, the
-  // second does it. Cheaper than a modal and it cannot fire by a stray click.
+  // Two clicks to revoke: the first arms.
   const [arming, setArming] = useState(false);
 
   if (device.revokedAt) {
@@ -70,7 +60,6 @@ export function DevicePanel({ devices }: { devices: Devices }) {
   const [label, setLabel] = useState("");
   const [copied, setCopied] = useState(false);
 
-  // Nothing until the server has answered, and nothing off its own machine.
   if (!devices.context?.loopback) return null;
 
   function add(event: FormEvent) {
@@ -85,9 +74,7 @@ export function DevicePanel({ devices }: { devices: Devices }) {
     try {
       await navigator.clipboard.writeText(token);
       setCopied(true);
-    } catch {
-      // Clipboard blocked; the token is on screen to copy by hand.
-    }
+    } catch {}
   }
 
   return (
@@ -111,8 +98,7 @@ export function DevicePanel({ devices }: { devices: Devices }) {
         </p>
       )}
 
-      {/* Shown once, because the server will never return it again. Held until
-          dismissed so it cannot scroll away before it is copied. */}
+      {/* Shown once (the server never returns it again) and held until dismissed. */}
       {devices.minted && (
         <div className="devices__minted">
           <p className="devices__minted-label">

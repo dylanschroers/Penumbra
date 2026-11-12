@@ -1,10 +1,4 @@
-// Collapsible sections for the Model Lab. The lab stacks tall panels — two file
-// libraries, a dataset preview, forms, a score table — and only one or two
-// matter at a time, so each folds away behind its header.
-//
-// What's persisted is the *collapsed* set, not the open one: a section the user
-// has never touched is open, so adding a section later doesn't silently start it
-// hidden.
+// Persists the collapsed set, so new sections start open.
 
 import { migrateStorageKey, STORAGE_NAMESPACE } from "@penumbra/shared";
 import { type ReactNode, useCallback, useState } from "react";
@@ -21,7 +15,6 @@ function readCollapsed(): Set<string> {
       Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : [],
     );
   } catch {
-    // Unavailable (SSR/tests) or corrupt — start with everything open.
     return new Set();
   }
 }
@@ -31,7 +24,6 @@ export interface SectionState {
   toggle(id: string): void;
 }
 
-/** Which sections are folded away, remembered across launches. */
 export function useSections(): SectionState {
   const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
 
@@ -41,9 +33,7 @@ export function useSections(): SectionState {
       if (!next.delete(id)) next.add(id);
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify([...next]));
-      } catch {
-        // Not being able to remember it is no reason to refuse the toggle.
-      }
+      } catch {}
       return next;
     });
   }, []);
@@ -54,11 +44,7 @@ export function useSections(): SectionState {
   };
 }
 
-/**
- * One titled, foldable block. `meta` is the line that stays visible when the
- * section is closed — a count, a state — so a folded section still says whether
- * it holds anything worth opening.
- */
+/** `meta` stays visible when closed. */
 export function Section({
   id,
   title,

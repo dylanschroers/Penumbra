@@ -36,7 +36,6 @@ describe("ResolvingEngine", () => {
     });
   });
 
-  // The whole point of the fallback: no server must still mean a working agent.
   it("falls back when the preferred candidate is absent", async () => {
     const engine = new ResolvingEngine([
       { name: "remote", engine: stub(stopped, "remote") },
@@ -75,7 +74,6 @@ describe("ResolvingEngine", () => {
     expect(local.getStatus).not.toHaveBeenCalled();
   });
 
-  // A backend arriving or leaving must be picked up without a reload.
   it("re-resolves on each probe as availability changes", async () => {
     const remote = stub(stopped, "remote");
     const engine = new ResolvingEngine([
@@ -101,8 +99,6 @@ describe("ResolvingEngine", () => {
     expect(await firstEvent(engine)).toEqual({ kind: "answer", text: "local" });
   });
 
-  // With nothing ready we still have to try something rather than hang; the
-  // preferred candidate's own error is the most useful thing to surface.
   it("falls back to the first candidate when none report ready", async () => {
     const engine = new ResolvingEngine([
       { name: "remote", engine: stub(stopped, "remote") },

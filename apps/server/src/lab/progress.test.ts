@@ -6,10 +6,7 @@ import {
   readOutputChunk,
 } from "./progress";
 
-// The strings here are real lm_eval output, taken off a live general-suite run
-// against a 12B GGUF (48 seconds a request, 180 requests). That run is the
-// reason this module exists: it was two hours of a job row that said nothing a
-// person could read, and looked exactly like a hang.
+// Strings are real lm_eval output from a live 12B GGUF run.
 
 describe("parseTqdmFrame", () => {
   it("reads position, pace, and what is left", () => {
@@ -22,8 +19,7 @@ describe("parseTqdmFrame", () => {
     );
   });
 
-  // tqdm flips the rate over once it passes one per second, and a bar that only
-  // understood one direction would drop the pace from every fast task.
+  // tqdm flips between s/it and it/s at one per second.
   it("reads the it/s form as well as s/it", () => {
     const frame = parseTqdmFrame(
       "Running loglikelihood requests: 50%|█████     | 10/20 [00:03<00:03, 3.50it/s]",
@@ -32,8 +28,6 @@ describe("parseTqdmFrame", () => {
     expect(frame?.detail).toContain("3.50/s");
   });
 
-  // The first frames carry no rate, so there is nothing to extrapolate from.
-  // Position is still worth showing, and claiming an estimate would be a lie.
   it("keeps the count when there is no estimate yet", () => {
     const frame = parseTqdmFrame("  0%|          | 0/180 [00:00<?, ?it/s]");
     expect(frame?.progress).toBe(0);
@@ -41,8 +35,6 @@ describe("parseTqdmFrame", () => {
     expect(frame?.detail).not.toContain("left");
   });
 
-  // "~0s left" on a finished bar reads as a stall, which is the one thing this
-  // line exists to rule out.
   it("drops the estimate on the last frame", () => {
     const frame = parseTqdmFrame(
       "Requesting API: 100%|██████████| 180/180 [2:24:00<00:00, 48.00s/it]",
@@ -58,8 +50,6 @@ describe("parseTqdmFrame", () => {
 });
 
 describe("readOutputChunk", () => {
-  // tqdm redraws with carriage returns, so one read off the pipe holds every
-  // frame written since the last one. The older ones are already stale.
   it("takes the newest frame in a chunk", () => {
     const update = readOutputChunk(
       "\rRequesting API:  18%|█▊  | 33/180 [13:25<1:54:32, 46.75s/it]" +
@@ -68,8 +58,6 @@ describe("readOutputChunk", () => {
     expect(update?.detail).toContain("34/180");
   });
 
-  // Where lm_eval's warnings and its startup preamble live. Worth showing: for
-  // the first minute of a run they are the only sign anything is happening.
   it("falls back to the last real line when there is no frame", () => {
     const update = readOutputChunk(
       "Selected Tasks: ['gsm8k']\nUsing chat template\n",
@@ -80,8 +68,6 @@ describe("readOutputChunk", () => {
     });
   });
 
-  // A read can land mid-frame. Half a progress bar as the job's status line is
-  // worse than the line it would replace, so the row keeps what it had.
   it("reports nothing for a fragment of a bar", () => {
     expect(readOutputChunk("\rRequesting API:  18%|█▊    ")).toBeNull();
     expect(readOutputChunk("\r\n  \n")).toBeNull();
@@ -95,9 +81,7 @@ describe("readOutputChunk", () => {
 
 describe("formatDuration", () => {
   it("reads at a glance at every scale", () => {
-    // Truncated, matching the 1:54:32 tqdm showed it as: a minute of rounding
-    // either way is noise on a two-hour estimate, and agreeing with the source
-    // beats being clever about it.
+    // Truncated to match how tqdm displays it.
     expect(formatDuration(6872)).toBe("1h54m");
     expect(formatDuration(7200)).toBe("2h");
     expect(formatDuration(372)).toBe("6m");
@@ -116,17 +100,11 @@ describe("caseProgress", () => {
 });
 
 describe("long lines", () => {
-  // The regression: matching a non-frame is quadratic in the line's length, and
-  // lm_eval really does emit long lines (config dumps, padded columns). Node has
-  // one thread, so that is the whole server stalled mid-benchmark. Two things
-  // hold it — the MAX_FRAME_LINE cap and the pattern's own shape — so there is a
-  // test per hole. The budgets are loose on purpose: each case is milliseconds
-  // when correct and seconds to minutes when not, so nothing here is a race
-  // against a slow CI box.
+  // Matching a non-frame is quadratic in line length and blocks the only
+  // thread. Two guards (MAX_FRAME_LINE and the pattern's shape), one test each.
+  // Budgets are loose: correct is milliseconds, broken is seconds.
   it("refuses to scan a line far longer than any real frame", () => {
-    // 64 KB, a pipe read's worth on one line. Sized so that dropping the cap
-    // costs ~3.5s per assertion rather than the ~0.35s a 20k line costs, which
-    // is close enough to the budget below to leave the guard on a coin flip.
+    // Sized so a missing cap costs ~3.5s, well clear of the budget.
     const started = Date.now();
     expect(parseTqdmFrame(`${" ".repeat(64_000)}x`)).toBeNull();
     expect(parseTqdmFrame("x".repeat(64_000))).toBeNull();
@@ -146,16 +124,13 @@ describe("long lines", () => {
   });
 
   it("does not lose a frame sitting in a chunk beside a long line", () => {
-    // readOutputChunk splits on newlines, so the guard must drop only the long
-    // line — not the frame that shares the chunk with it.
+    // Must drop only the long line, not the frame in the same chunk.
     const chunk = `${"noise ".repeat(2_000)}\r  7%|#         | 1/15 [00:01<?, ?it/s]`;
     expect(readOutputChunk(chunk)?.progress).toBeCloseTo(1 / 15);
   });
 
   it("reads a whole chunk of padded lines that each clear the cap", () => {
-    // The cap alone does not cover this: every line here is under it, and
-    // readOutputChunk scans all of them. With the two quantifiers overlapping,
-    // one 64 KB read off the pipe cost ~7s of blocked event loop.
+    // Every line is under the cap here; this tests the pattern's shape.
     const chunk = Array(128)
       .fill(`${" ".repeat(500)}x`)
       .join("\n");

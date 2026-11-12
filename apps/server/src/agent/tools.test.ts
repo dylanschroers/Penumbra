@@ -12,8 +12,7 @@ import { createServerTaskStore, type ServerTaskStore } from "../store/tasks";
 import { createTaskSyncStore } from "../sync/store";
 import { createServerTools } from "./tools";
 
-// These run against a real in-memory store rather than a mock, so a tool that
-// writes a row the sync layer would reject fails here.
+// Real in-memory store, so a row sync would reject fails here.
 let store: ServerTaskStore;
 let run: ToolBindings["runTool"];
 
@@ -28,8 +27,7 @@ describe("dispatch", () => {
     expect(await run("nope", {})).toBe("Unknown tool: nope");
   });
 
-  // The model sees the failure text and can usually correct itself next step,
-  // which is why this is a returned string and not an exception.
+  // Returned as text so the model can correct itself next step.
   it("returns validation failures as readable text", async () => {
     const result = await run("create_task", {}); // title is required
     expect(result).toContain("Invalid arguments for create_task");
@@ -55,8 +53,7 @@ describe("create_task", () => {
     expect(store.listTasks().map((t) => t.title)).toEqual(["buy milk"]);
   });
 
-  // A live model invented "2023-10-15T12:00:00Z" for a request with no date at
-  // all (AGENT_DESIGN.md §7). Garbage must not reach the store's schema.
+  // A live model invented a 2023 date for a request with no date.
   it("drops an unparseable date rather than failing the write", async () => {
     await run("create_task", { title: "x", dueAt: "whenever" });
     expect(store.listTasks()[0]?.dueAt).toBeNull();
@@ -118,10 +115,8 @@ describe("complete_task and delete_task", () => {
   });
 });
 
-// The Model Lab half, which only this tier can run. A fake Lab rather than a
-// live one: what is under test here is the binding — argument mapping, the
-// wording handed back to the model, and that a refusal is relayed rather than
-// thrown — not the orchestration behind it, which ../lab/routes.test.ts covers.
+// Tests the binding (arg mapping, wording, relayed refusals); orchestration is
+// covered in ../lab/routes.test.ts.
 function fakeLab(over: Partial<LabService> = {}): LabService {
   return {
     models: async () => ({ target: "local", models: [], inventoryError: null }),
@@ -180,9 +175,6 @@ const job = (over: Partial<LabJob> = {}): LabJob => ({
 });
 
 describe("lab tools", () => {
-  // The lab tools and the prompt that says when to use them travel together: a
-  // tier advertising the tools with no policy behind them has six actuators
-  // and nothing telling the model they are in scope.
   it("advertises them, with their policy, only when a lab is wired", () => {
     const withLab = createServerTools(store, fakeLab());
     expect(withLab.tools.map((t) => t.function.name)).toEqual([
@@ -238,8 +230,6 @@ describe("lab tools", () => {
     );
   });
 
-  // "nothing is there" and "we could not ask" look identical as an empty list
-  // and need different fixes, so the model must be told which it got.
   it("reports an inventory failure instead of an empty shelf", async () => {
     const result = await labRun(
       fakeLab({
@@ -269,8 +259,7 @@ describe("lab tools", () => {
     expect(await labRun()("list_datasets", {})).toContain("No datasets");
   });
 
-  // Getting this wrong sends a path to Studio as a HuggingFace repo id, and the
-  // run fails minutes later with an opaque error from the other side.
+  // A misclassified path goes to Studio as a HF repo id and fails much later.
   it("classifies the dataset and fills the run's defaults", async () => {
     let seen: Parameters<LabService["finetune"]>[0] | undefined;
     const lab = fakeLab({
@@ -289,12 +278,10 @@ describe("lab tools", () => {
       kind: "local",
       path: "/uploads/datasets/train.jsonl",
     });
-    // Not restated in the tool contract, so they can only have come from the
-    // wire schema the form goes through.
+    // Not in the tool contract, so they came from the wire schema's defaults.
     expect(seen?.maxSteps).toBe(60);
     expect(seen?.loraR).toBe(16);
     expect(seen?.format).toBe("auto");
-    // The id, not a result: training outlives the turn.
     expect(result).toContain("job-1");
     expect(result).toContain("job_status");
 
@@ -305,7 +292,6 @@ describe("lab tools", () => {
     expect(seen?.dataset).toEqual({ kind: "hf", id: "tatsu-lab/alpaca" });
   });
 
-  // A Studio that is down is an ordinary outcome to pass on, not an exception.
   it("relays a refusal as something the model can say", async () => {
     const result = await labRun(
       fakeLab({
@@ -337,8 +323,6 @@ describe("lab tools", () => {
     });
   });
 
-  // The suite is an enum derived from SUITES, so a wrong one cannot be emitted
-  // under a grammar — but the validation still has to hold for anything else.
   it("rejects a suite that does not exist", async () => {
     const result = await labRun()("run_benchmark", { suite: "made-up" });
     expect(result).toContain("Invalid arguments for run_benchmark");
@@ -361,9 +345,7 @@ describe("lab tools", () => {
     expect(await labRun()("job_status", {})).toContain("No Model Lab jobs");
   });
 
-  // A settled job keeps whatever progress it last reported, and runJob writes 1
-  // on success — so an unguarded percentage says "failed 60%" about a run that
-  // did not finish, and "cancelled 100%" about one that was stopped.
+  // runJob writes progress 1 on success, so a settled job's percentage lies.
   it("drops the percentage once a job has settled", async () => {
     const lab = fakeLab({
       jobs: () => [
@@ -381,9 +363,6 @@ describe("lab tools", () => {
     );
   });
 
-  // The detail line is written by the benchmark harness, and a tqdm frame
-  // carries carriage returns. One of those in a multi-job answer breaks the
-  // list it is part of.
   it("flattens a progress frame so it stays one line", async () => {
     const lab = fakeLab({
       job: () => job({ detail: "case 3/20:\r  30%|███  | 3/20\n" }),
@@ -393,8 +372,6 @@ describe("lab tools", () => {
     );
   });
 
-  // Nothing resident means a benchmark would measure nothing, which the absence
-  // of a "loaded" marker states only by implication.
   it("says when no model is loaded", async () => {
     const lab = fakeLab({
       models: async () => ({
@@ -417,8 +394,6 @@ describe("lab tools", () => {
     );
   });
 
-  // The result goes back into the conversation, where it competes with the
-  // thread for context. A cut list has to say it was cut.
   it("caps a long list and says what it dropped", async () => {
     const lab = fakeLab({
       datasets: async () =>
@@ -433,9 +408,6 @@ describe("lab tools", () => {
     expect(result).toContain("(showing 8 of 12)");
   });
 
-  // What a run left behind is the only reason to ask about it: a checkpoint can
-  // be exported, an export can be benchmarked, and neither is true of a run
-  // that produced no output dir.
   it("says what each fine-tune left behind", async () => {
     const lab = fakeLab({
       runs: () => [
@@ -450,8 +422,7 @@ describe("lab tools", () => {
     });
     expect(await labRun(lab)("lab_history", { what: "runs" })).toBe(
       [
-        // A path ending in the literal word "gguf" is the save directory, and
-        // "exported to gguf" would say nothing.
+        // `ggufPath`'s last segment is often the save dir "gguf", which says nothing.
         "- 1f0a2b3c: unsloth/Qwen3-1.7B on train.jsonl — exported, pushed to me/qwen-tools (local)",
         "- 22222222: unsloth/Qwen3-1.7B on train.jsonl — exported to model-Q4_K_M.gguf (local)",
         "- 33333333: unsloth/Qwen3-1.7B on train.jsonl — no checkpoint (colab)",
@@ -463,9 +434,7 @@ describe("lab tools", () => {
     );
   });
 
-  // Studio answers with whatever is resident whatever the request named, so a
-  // score reported under the requested id alone reads as measuring weights that
-  // never ran. And a 20-sample subset is not a leaderboard number.
+  // Scores name the model that answered, not the one requested.
   it("reports scores against what actually answered, with the caveat", async () => {
     const lab = fakeLab({
       scores: () => [score({ servedModel: "qwen3-4b" }), score()],

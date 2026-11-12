@@ -3,17 +3,8 @@ import { type FormEvent, useEffect, useState } from "react";
 import type { Compute } from "./useCompute";
 import "./compute.css";
 
-// The panel behind both status pills: where compute lives, and which of it each
-// role uses.
-//
-// One component rather than one per surface, because it edits one setting. The
-// chat pill and the Lab pill open the same thing for the same reason they had
-// to stop disagreeing: a Studio key rotated from the Lab is the key chat is
-// using.
-//
-// Nothing here ever displays a bearer. A configured target reports `hasKey`, and
-// the field below is blank on load whether or not one is set — typing in it
-// replaces, and leaving it alone keeps.
+// Shared by the chat and Lab pills, since both edit one setting. Never shows a
+// bearer: the key field is blank on load; typing replaces, leaving it keeps.
 
 const STATE_LABEL: Record<ComputeTarget["state"], string> = {
   ready: "ready",
@@ -22,15 +13,12 @@ const STATE_LABEL: Record<ComputeTarget["state"], string> = {
   stopped: "not answering",
 };
 
-/** A Colab address outlives the session it points at, so "not answering" there
- *  usually means the notebook stopped rather than anything being misconfigured. */
+/** A Colab tunnel usually dies with its notebook. */
 function stateHint(target: ComputeTarget): string {
   if (target.state === "unauthorized") {
     return "Answering, but rejecting the key. Studio mints a new one on install and on every rotation, so paste the current one.";
   }
-  // The one that used to read as "ready with nothing loaded": something answers,
-  // so the address is not wrong in the obvious way, but it is not Studio's API
-  // talking and every later call fails on a body that is not JSON.
+  // Something answers, but not Studio's API.
   if (target.state === "not_studio") {
     return target.id === "colab"
       ? "Something answers here, but not Studio's API. A Colab notebook's own link (colab.googleusercontent.com, from google.colab.kernel.proxyPort) is authenticated by your browser session and returns a sign-in page to anything else, so it cannot be used from the server. Expose port 8888 with a tunnel — cloudflared or ngrok — and paste that URL instead. Set a Studio key too: a public tunnel with no key is an open GPU."
@@ -64,12 +52,8 @@ function TargetCard({
   const models = inventory?.models;
   const busy = compute.loading === target.id;
 
-  // What is loaded comes from the poll, not the inventory: the inventory is a
-  // disk scan fetched once, while this arrives with every reachability probe.
-  // That is the difference between seeing a model appear seconds after someone
-  // loads it in Studio's own UI on the other machine, and not seeing it until
-  // the panel is re-opened. The inventory row, when there is one, only supplies
-  // the nicer label.
+  // The served model comes from the poll, so loads made elsewhere appear
+  // quickly; the inventory row only supplies the label.
   const served = target.servedModel;
   const resident = served
     ? (models?.find((m) => m.id === served) ?? {
@@ -78,18 +62,14 @@ function TargetCard({
       })
     : null;
 
-  // Fetched when the card can actually serve it, and not on the poll: this
-  // reaches the target's disk to enumerate models, which is far heavier than
-  // the reachability probe the poll already does.
+  // Not on the poll: the inventory scans the target's disk.
   useEffect(() => {
     if (target.state === "ready" && inventory === undefined) {
       void compute.loadInventory(target.id);
     }
   }, [target.state, target.id, inventory, compute]);
 
-  // Follow the backend rather than holding a stale choice: a model loaded from
-  // elsewhere, or evicted, would otherwise leave this box naming something that
-  // is no longer what answers.
+  // Follow the backend so the box never names a model that's no longer loaded.
   useEffect(() => {
     if (served) setPick(served);
   }, [served]);
@@ -102,9 +82,7 @@ function TargetCard({
         ...(apiKey ? { apiKey } : {}),
       })
       .then(() => {
-        // The address is echoed back by the next poll, so keeping it in the
-        // field would just duplicate it. The key is never echoed, and must not
-        // linger here after being sent.
+        // The poll echoes the address; the key must not linger.
         setBaseURL("");
         setApiKey("");
       });
@@ -127,8 +105,6 @@ function TargetCard({
 
       <p className="ct__addr">
         {target.configured ? target.baseURL : "not set"}
-        {/* Only once there is an address to say something about — an
-            unconfigured target has no provenance to report. */}
         {target.configured && (
           <span className="ct__meta">
             {target.source === "settings"
@@ -140,10 +116,7 @@ function TargetCard({
 
       {hint && <p className="ct__hint">{hint}</p>}
 
-      {/* Start the local Studio from here. Only when it is the thing that is
-          down (state stopped) and only where it can work (canLaunch is the
-          server's own loopback-and-configured verdict), so this never offers to
-          start a machine it cannot reach. */}
+      {/* canLaunch is the server's loopback-and-configured verdict. */}
       {target.canLaunch && target.state === "stopped" && (
         <div className="ct__launch">
           <button
@@ -163,9 +136,6 @@ function TargetCard({
         </div>
       )}
 
-      {/* Stop it from here. The mirror of launch: shown while it is up (any
-          state but stopped) and only where the stop can reach, so pressing it
-          somewhere it cannot work is not offered. */}
       {target.canStop && target.state !== "stopped" && (
         <div className="ct__launch">
           <button
@@ -178,21 +148,13 @@ function TargetCard({
         </div>
       )}
 
-      {/* Which model this target is serving, and a way to change it. Only for a
-          target that is answering: a list from an unreachable Studio would be
-          stale, and loading into one is not a thing that can happen. */}
       {target.state === "ready" && (
         <div className="ct__models">
           <label className="ct__models-label" htmlFor={`load-${target.id}`}>
             Loaded model
           </label>
           <div className="ct__models-row">
-            {/* Free text with the inventory as suggestions, rather than a list
-                you cannot escape. A fresh Colab has nothing on disk yet, so a
-                list-only control can never load the *first* model there — and
-                Studio resolves an id it doesn't recognize as a HuggingFace repo
-                and fetches it, which is the only way a model gets onto a machine
-                that has never seen one. */}
+            {/* Free text, not a list: a fresh Colab has nothing on disk, and Studio fetches unknown ids from HuggingFace. */}
             <input
               id={`load-${target.id}`}
               list={`ct-models-${target.id}`}
@@ -210,8 +172,7 @@ function TargetCard({
                 <option
                   key={m.id}
                   value={m.id}
-                  // Marked against the polled model, not the row's own flag,
-                  // so the list and the note below cannot say different things.
+                  // Marked from the polled model so the list and the note agree.
                   label={`${m.id === served ? "● " : ""}${m.label} · ${m.format}${
                     m.sizeBytes > 0
                       ? ` · ${(m.sizeBytes / 1e9).toFixed(1)} GB`
@@ -229,9 +190,6 @@ function TargetCard({
               {busy ? "Loading…" : "Load"}
             </button>
           </div>
-          {/* One GPU holds one model, so this is never additive. Said plainly
-              because the model being replaced may be the one a conversation is
-              part-way through. */}
           <p className="ct__models-note">
             {busy
               ? "Weights are paging in; a large model takes a few minutes, and a first download longer."
@@ -239,8 +197,6 @@ function TargetCard({
                 ? `Serving ${resident.label}. Loading another replaces it.`
                 : "Nothing loaded, so chat and benchmarks have nothing to answer with."}
           </p>
-          {/* An empty list and a list that failed to load look identical from
-              here, and send you to completely different places. */}
           {inventory?.inventoryError && (
             <p className="ct__hint">
               Its model inventory did not answer, so only what is loaded is
@@ -273,8 +229,7 @@ function TargetCard({
           <button type="submit" disabled={!baseURL.trim() && !apiKey}>
             Save
           </button>
-          {/* Local always exists, so its reset goes back to the environment
-              rather than removing it; Colab genuinely goes away. */}
+          {/* Local resets to its env default; Colab is removed. */}
           {(target.source === "settings" || target.configured) &&
             !(target.id === "local" && target.source === "env") && (
               <button
@@ -332,10 +287,6 @@ export function ComputeTargets({ compute }: { compute: Compute }) {
                   </option>
                 ))}
               </select>
-              {/* Said out loud rather than silently corrected: an assignment can
-                  outlive the target it names, and answers coming from somewhere
-                  other than the box you picked is exactly the thing worth
-                  knowing. */}
               {assigned !== effective && (
                 <span className="ct__fallback">
                   unavailable, using{" "}
@@ -355,8 +306,6 @@ export function ComputeTargets({ compute }: { compute: Compute }) {
         )}
       </section>
 
-      {/* Export is not assignable, and its absence here would read as an
-          oversight rather than a rule. */}
       <p className="ct__note">
         Export follows the run that produced the checkpoint — its output lives
         on that machine's disk.

@@ -1,6 +1,4 @@
-// WMO weather interpretation codes as used by Open-Meteo's `weather_code` field.
-// Maps each code to a short label and an emoji; a few day/clear codes get a
-// night variant chosen via `is_day`.
+// Open-Meteo `weather_code` values; some get a night variant via `is_day`.
 export interface WeatherInfo {
   label: string;
   icon: string;

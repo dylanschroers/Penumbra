@@ -31,15 +31,8 @@ import type { z } from "zod";
 import type { LabService } from "../lab/routes";
 import type { ServerTaskStore } from "../store/tasks";
 
-// The server half of the tool registry — the Tier-1 mirror of
-// apps/web/src/agent/tools.ts. Same shape deliberately: each shared contract is
-// bound to a runner, the model-facing specs derive from those same contracts,
-// and every model-emitted call is validated against the contract's schema
-// before anything executes. Only the backing store differs (the server's
-// SQLite, not the browser's), which is the whole point of Tier 1: the turn runs
-// with no client in the loop (docs/SYNC.md → Server-side writes).
+// Tier 1 mirror of apps/web/src/agent/tools.ts, bound to the server store.
 
-/** The model-facing tool list, derived from the shared contracts. */
 export const toolSpecs: ToolSpec[] = agentTools.map(toToolSpec);
 
 interface BoundTool {
@@ -47,8 +40,7 @@ interface BoundTool {
   run: (args: unknown) => Promise<string>;
 }
 
-/** Pair a contract with its runner. The cast is safe because runTool always
- * parses arguments with the contract's schema before calling run. */
+/** Safe: runTool parses args with the contract schema before calling run. */
 function bind<A extends z.ZodTypeAny>(
   contract: ToolContract<A>,
   run: (args: z.output<A>) => Promise<string>,
@@ -64,19 +56,17 @@ function findByTitle(tasks: SyncTask[], title: string): SyncTask | undefined {
   );
 }
 
-/** Coerce a model-supplied date to a valid ISO string, or drop it. The model is
- *  weak at dates (AGENT_DESIGN.md §7 — a live run had it invent a 2023 due
- *  date), so anything JS can't parse is discarded rather than passed on to fail
- *  the store's stricter schema. */
+/**
+ * Unparseable model dates are dropped rather than failing the stricter store
+ * schema.
+ */
 function toIso(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
-/** Bytes as a rough size. Lab artifacts are large and their exact size is never
- *  the question, so GB or MB is as far as this goes. A model of unknown size
- *  reports 0 bytes, which is not a measurement and must not read as one. */
+/** 0 bytes means unknown size, not empty. */
 function roughSize(bytes: number): string {
   if (!bytes) return "size unknown";
   return bytes >= 1e9
@@ -84,45 +74,29 @@ function roughSize(bytes: number): string {
     : `${Math.round(bytes / 1e6)} MB`;
 }
 
-/** One job as a line to relay: what it is, where it got to, and why it stopped
- *  if it did. */
 function jobLine(job: LabJob): string {
-  // A percentage, but only while it still means something. A settled job's last
-  // progress figure says where it stopped reporting, not what it achieved, and
-  // runJob sets progress to 1 the moment a job is marked done — so carrying it
-  // onto a terminal row produces "failed 60%", or "cancelled 100%", which is
-  // the opposite of what happened.
+  // runJob sets progress to 1 when a job is marked done, so a settled job's
+  // percentage is meaningless ("failed 60%", "cancelled 100%").
   const moving = job.state === "running" || job.state === "queued";
   const pct =
     moving && job.progress !== null
       ? ` ${Math.round(job.progress * 100)}%`
       : "";
-  // Whatever the underlying tool last wrote, and for a benchmark that is a tqdm
-  // frame with carriage returns in it. Flattened, or one row breaks the list it
-  // is part of.
+  // Benchmark detail is a tqdm frame with carriage returns; flatten it.
   const why = (job.error ?? job.detail)?.replace(/\s+/g, " ").trim();
   return `${job.kind} ${job.id}: ${job.state}${pct}${why ? ` — ${why}` : ""}`;
 }
 
-/** How many recent jobs an unfiltered job_status reports. Enough to cover a
- *  pipeline's worth of stages, short enough to stay a readable answer. */
 const RECENT_JOBS = 5;
 
 /**
- * How many rows any other list may show.
- *
- * Every one of these results is fed back into the conversation, where it
- * competes with the prompt and the thread for the model's context. A live lab
- * here already holds eight models and a dozen runs, so the lists are capped and
- * say what they cut — which is more use to a reader than a truncated list that
- * looks whole.
+ * Results go back into the model's context, so lists are capped and say what
+ * they cut.
  */
 const MAX_ROWS = 8;
-/** Metrics per score. A general suite carries twenty, which would drown the
- *  other rows on its own. */
+/** A general suite carries ~20 metrics per score. */
 const MAX_METRICS = 4;
 
-/** Rows worth reporting, and the note that says so when some were dropped. */
 function capped<T>(rows: T[], note = ""): [T[], string[]] {
   const shown = rows.slice(0, MAX_ROWS);
   return [
@@ -133,35 +107,24 @@ function capped<T>(rows: T[], note = ""): [T[], string[]] {
   ];
 }
 
-/** Enough of a uuid to name a row without spending the context on all 36.
- *  Full ids stay on jobs, which are the only ones a tool takes back. */
+/** Full ids stay on jobs, the only ones a tool takes back. */
 function shortId(id: string): string {
   return id.slice(0, 8);
 }
 
-/** The last path segment, for a dataset or checkpoint named by a long path.
- *  Both separators: a run's paths come from whichever host trained it. */
+/** Both separators: paths come from whichever host trained the run. */
 function basename(path: string): string {
   const parts = path.split(/[/\\]/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
 }
 
-/**
- * The file an export produced, when it produced a named one.
- *
- * `ggufPath` is Studio's output path when it reports one and the save directory
- * otherwise, so on most real runs the last segment is the literal word "gguf" —
- * "exported to gguf" says nothing. A segment with no extension is a directory,
- * and the fact that matters is already in the sentence without it.
- */
+/** `ggufPath` is often the save dir, whose last segment is just "gguf". */
 function artifactName(ggufPath: string): string | null {
   const name = basename(ggufPath);
   return name.includes(".") ? name : null;
 }
 
-/** Past fine-tunes, said in terms of what can be done with them next — which is
- *  the only reason to ask. A run with no output dir produced no checkpoint and
- *  cannot be exported. */
+/** A run with no output dir cannot be exported. */
 function formatRuns(runs: LabRun[]): string {
   if (!runs.length) return "No fine-tuning runs have finished yet.";
   const [shown, note] = capped(runs, ", newest first");
@@ -179,8 +142,6 @@ function formatRuns(runs: LabRun[]): string {
   return [...lines, ...note].join("\n");
 }
 
-/** Recorded scores, with the two things that decide whether a number means what
- *  it appears to mean: what actually answered, and how few samples it saw. */
 function formatScores(scores: BenchmarkResult[]): string {
   if (!scores.length) return "No benchmark scores have been recorded yet.";
   const [shown, note] = capped(scores, ", newest first");
@@ -193,19 +154,15 @@ function formatScores(scores: BenchmarkResult[]): string {
       s.scores.length > MAX_METRICS
         ? ` (+${s.scores.length - MAX_METRICS} more metrics)`
         : "";
-    // `servedModel` leads and `model` is named only when the two differ. Studio
-    // serves whatever is resident regardless of what a run asked for, so the
-    // requested id is a label and the served one is what the numbers describe —
-    // relaying the label alone is how a score gets read as measuring weights
-    // that never ran.
+    // Lead with `servedModel`: Studio serves whatever is resident, so the
+    // requested `model` is only a label.
     const what =
       s.servedModel && s.servedModel !== s.model
         ? `${s.servedModel} (requested ${s.model})`
         : (s.servedModel ?? s.model);
     return `- ${s.suite} on ${what} @ ${s.target}, ${s.samplesPerTask} samples, ${s.at.slice(0, 10)}: ${metrics}${more}`;
   });
-  // Never omitted: a 20-sample score is not a leaderboard number and must not be
-  // relayed as one.
+  // Never omitted: a subset score is not a leaderboard number.
   return [
     ...lines,
     ...note,
@@ -214,14 +171,8 @@ function formatScores(scores: BenchmarkResult[]): string {
 }
 
 /**
- * Bind the Model Lab contracts to the lab running in this process.
- *
- * Every one of these returns a sentence rather than throwing, including the
- * refusals: "the local Studio is not answering" is an ordinary outcome the
- * model should pass on, not a bug. The two that start work return a job id and
- * say so, because the work outlives the turn — a tool that waited would hold a
- * conversation open for an hour and still time out (docs/MODEL_LAB.md → Job
- * records).
+ * Every binding returns a sentence, refusals included. Work-starting tools
+ * return a job id, since the work outlives the turn.
  */
 function labBindings(lab: LabService): BoundTool[] {
   return [
@@ -235,14 +186,10 @@ function labBindings(lab: LabService): BoundTool[] {
           }`,
       );
       lines.push(...note);
-      // Which one is resident decides what a benchmark would actually measure,
-      // so its absence is worth saying rather than leaving to be inferred from
-      // the lack of a marker on any row.
       if (models.length && !models.some((m) => m.loaded)) {
         lines.push("Nothing is loaded, so a benchmark cannot run yet.");
       }
-      // An inventory that failed is reported rather than passed off as an empty
-      // shelf: the two look identical here and need different fixes.
+      // A failed inventory and an empty one look identical here.
       if (inventoryError) {
         lines.push(
           `(the rest of the inventory could not be read: ${inventoryError})`,
@@ -266,9 +213,7 @@ function labBindings(lab: LabService): BoundTool[] {
     }),
 
     bind(startFinetuneTool, async (args) => {
-      // Parsed through the wire schema so a run started from a conversation
-      // gets exactly the defaults — learning rate, LoRA rank, format — that the
-      // form's would, rather than a second set defined here.
+      // Parsed through the wire schema so chat gets the same defaults as the form.
       const started = await lab.finetune(
         finetuneRequest.parse({
           baseModel: args.baseModel,
@@ -315,13 +260,7 @@ function labBindings(lab: LabService): BoundTool[] {
   ];
 }
 
-/**
- * Build the agent's tool bindings over a server task store.
- *
- * `lab` is optional because the Model Lab is the one capability a deployment
- * can genuinely be without — no GPU host, no Studio — and advertising tools
- * that cannot run is worse than not advertising them.
- */
+/** `lab` is optional: a deployment may have no GPU host or Studio. */
 export function createServerTools(
   store: ServerTaskStore,
   lab?: LabService,
@@ -360,8 +299,7 @@ export function createServerTools(
       return `Deleted "${t.title}".`;
     }),
 
-    // Bound identically on Tier 0. This tool reaches no store, so the two tiers
-    // share one implementation rather than mirroring it (see tools/weather.ts).
+    // Shared with Tier 0; see tools/weather.ts.
     bind(getWeatherTool, fetchWeather),
   ];
 
@@ -369,10 +307,7 @@ export function createServerTools(
 
   const registry = new Map(bindings.map((b) => [b.contract.name, b]));
 
-  /** Execute one tool call. Returns a short human-readable result that is both
-   *  streamed to the client and fed back to the model — including validation
-   *  failures, which the model can often correct on its next step when told
-   *  exactly what was wrong. */
+  /** Validation failures are returned as text so the model can correct itself. */
   const runTool = async (
     name: string,
     args: Record<string, unknown>,
@@ -395,9 +330,8 @@ export function createServerTools(
     }
   };
 
-  // The lab half of the prompt travels with the lab half of the tool set, so a
-  // deployment without one is never told it has the other. main.ts recomposes
-  // this with the editable persona and must pass the same extra.
+  // Lab tools and LAB_POLICY travel together. main.ts recomposes the prompt with
+  // the persona and must pass the same extra.
   return lab
     ? {
         tools: [...toolSpecs, ...labTools.map(toToolSpec)],

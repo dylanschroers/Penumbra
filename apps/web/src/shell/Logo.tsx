@@ -1,12 +1,5 @@
-// The Penumbra mark: an outer ring with a smaller filled disc inside it — an
-// eclipse/penumbra motif — ringed by eight compass spikes. The four cardinal
-// spikes (N/E/S/W) reach further than the four diagonal spikes (NE/SE/SW/NW),
-// giving the compass-rose read. Pure SVG, themed via the --primary token so it
-// tracks light/dark automatically. Sized by a single `size` prop.
-//
-// The viewBox is padded past 0–100 so the spikes have room outside the ring;
-// the ring and disc stay centred at 50,50 at their original radii, so their
-// geometry (and the hold-to-launcher swell below) is unchanged.
+// The ring and disc stay centred at 50,50; the viewBox is padded for the
+// spikes.
 export function Logo({ size = 96 }: { size?: number }) {
   return (
     <svg
@@ -17,8 +10,6 @@ export function Logo({ size = 96 }: { size?: number }) {
       aria-hidden="true"
       className="logo"
     >
-      {/* Eight spikes rooted on the ring's outer edge (r≈46), tips pointing out:
-          cardinals to r=72, diagonals to r=62. One path, one triangle each. */}
       <path
         d="M45.19 4.25 L50 -22 L54.81 4.25 Z
            M95.75 45.19 L122 50 L95.75 54.81 Z

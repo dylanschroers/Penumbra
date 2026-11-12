@@ -2,13 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
-// The boot watchdog lives inline in index.html because it must run before the
-// module graph it guards — so it is outside the app's module tree and cannot be
-// imported. This test extracts the actual script and runs it against fake DOM
-// primitives, simulating page loads, error events, and the 500ms reload wait,
-// so the bounded and boot-scoped rules stay pinned as the script evolves.
-// vitest runs with cwd at the package root; fall back to the workspace path in
-// case it is ever run from the repo root.
+// The watchdog is inline in index.html (it must run before the module graph),
+// so this extracts the script and runs it against fake DOM primitives.
 const indexHtml = [
   resolve(process.cwd(), "index.html"),
   resolve(process.cwd(), "apps/web/index.html"),
@@ -18,7 +13,6 @@ const html = readFileSync(indexHtml, "utf8");
 const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 if (!script) throw new Error("boot watchdog <script> not found in index.html");
 
-// Compile with its DOM globals as parameters, so each run gets injected fakes.
 const runWatchdog = new Function(
   "window",
   "document",
@@ -37,7 +31,7 @@ const runWatchdog = new Function(
 const RETRIES = "penumbra-boot-retries";
 type Listener = (ev?: unknown) => void;
 
-// sessionStorage persists across reloads; everything else is fresh per load.
+// sessionStorage persists across reloads; everything else is per load.
 let store: Map<string, string>;
 let reloads: number;
 
@@ -85,7 +79,6 @@ function makeDocument() {
   };
 }
 
-/** One page load: fresh window/document, shared store, a controllable timer. */
 function load() {
   const listeners: Record<string, Listener[]> = {};
   const timers: Array<() => void> = [];
@@ -147,7 +140,6 @@ describe("boot watchdog", () => {
     expect(reloads).toBe(0); // no further reload
     expect(page.timers).toHaveLength(0);
     expect(page.doc.root.innerHTML).toContain("Penumbra failed to start");
-    // the detail is HTML-escaped before it goes into innerHTML
     expect(page.doc.root.innerHTML).toContain(
       "still &lt;broken&gt; &amp; dead",
     );

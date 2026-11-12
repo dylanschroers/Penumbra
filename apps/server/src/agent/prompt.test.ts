@@ -38,9 +38,7 @@ describe("createPromptStore", () => {
     expect(createPromptStore(db).current().persona).toBe("Terse.");
   });
 
-  // The same distinction targets.ts draws for a deliberately keyless Studio: a
-  // stored empty value is a choice, not a missing one, so it must not silently
-  // reinstate the default it was set to replace.
+  // A stored empty persona is a choice, not a missing value.
   it("treats an empty persona as a deliberate choice", () => {
     store.set("");
     expect(store.current()).toMatchObject({ persona: "", source: "settings" });
@@ -59,8 +57,6 @@ describe("createPromptStore", () => {
     expect(store.current().persona).toBe(persona);
   });
 
-  // A user who has edited has no other way back to a default that may have
-  // improved since they typed.
   it("resets to the default", () => {
     store.set("something");
     expect(store.clear()).toMatchObject({
@@ -70,11 +66,8 @@ describe("createPromptStore", () => {
   });
 });
 
-// Forbidding the wrong answers by name measurably produced them: with "never
-// claim to be made by Anthropic" in the prompt, Qwen3-1.7B introduced itself as
-// "developed by the company Anthropic" — a word it had only seen there. A
-// negation still puts the token in the context. The rule is stated positively
-// instead, and nothing here may name a company or the app.
+// Naming what not to say makes a small model say it, so no company or app
+// name may appear.
 describe("AGENT_POLICY names nothing to latch onto", () => {
   it.each([
     "Penumbra",
@@ -84,8 +77,6 @@ describe("AGENT_POLICY names nothing to latch onto", () => {
     expect(AGENT_POLICY).not.toContain(word);
   });
 
-  // The positive form has to actually point somewhere, or a model with no
-  // identity line appended has nothing to answer from.
   it("directs the answer at the appended identity, with a fallback", () => {
     expect(AGENT_POLICY).toContain("stated at the end of these instructions");
     expect(AGENT_POLICY).toContain("do not know which model you are");
@@ -98,9 +89,6 @@ describe("composeSystem", () => {
     expect(composeSystem("Be terse.")).toContain("Be terse.");
   });
 
-  // The eval must test the prompt the app ships, not whatever was last typed:
-  // lab_scores records the model and target behind a score but not the prompt,
-  // so an editable one would make two runs incomparable with nothing saying why.
   it("pins AGENT_SYSTEM to the default, ignoring any override", () => {
     store.set("Begin every reply with BANANA.");
     expect(AGENT_SYSTEM).toBe(composeSystem());
@@ -109,10 +97,7 @@ describe("composeSystem", () => {
   });
 });
 
-// The reply cap. Stored beside the persona because it is the same kind of
-// setting, but it is an integer with a range rather than free text, and the
-// "unset" case is load-bearing: the two tiers want different defaults, so no
-// override is the only value that lets each keep its own.
+// Null (unset) is load-bearing: the two tiers want different defaults.
 describe("reply-length cap", () => {
   it("is unset by default, so each tier keeps its own", () => {
     expect(store.current().maxTokens).toBeNull();
@@ -126,7 +111,6 @@ describe("reply-length cap", () => {
   it("refuses a value outside the range", () => {
     expect(store.setMaxTokens(AGENT_MAX_TOKENS_MAX + 1)).toBeNull();
     expect(store.setMaxTokens(AGENT_MAX_TOKENS_MIN - 1)).toBeNull();
-    // A cap that guards nothing is worse than none, so nothing is written.
     expect(store.current().maxTokens).toBeNull();
   });
 
@@ -139,8 +123,6 @@ describe("reply-length cap", () => {
     expect(store.setMaxTokens(null)?.maxTokens).toBeNull();
   });
 
-  // The two are independent settings that share one form; saving a cap must not
-  // disturb a persona somebody spent time on.
   it("leaves the persona alone", () => {
     store.set("Answer in one sentence.");
     store.setMaxTokens(1024);
@@ -148,10 +130,7 @@ describe("reply-length cap", () => {
   });
 });
 
-// One form saves both, so one call applies both. The route used to apply them
-// in turn, which meant a refusal could arrive after half the edit had already
-// been written — and a 400 that has changed something is a lie about the
-// request.
+// A refused update must change nothing.
 describe("update applies a patch or none of it", () => {
   it("writes both fields together", () => {
     const result = store.update({ persona: "Terse.", maxTokens: 1024 });
@@ -179,8 +158,6 @@ describe("update applies a patch or none of it", () => {
     });
   });
 
-  // The case that used to leak a half-written edit: the persona is fine, the cap
-  // is not, and the persona was saved before the cap was checked.
   it("writes no persona when the cap is out of range", () => {
     store.update({ persona: "kept", maxTokens: 1024 });
     expect(
@@ -195,8 +172,6 @@ describe("update applies a patch or none of it", () => {
     });
   });
 
-  // And the mirror image, which was already safe by ordering alone. Pinned so it
-  // stays safe if the order ever changes.
   it("writes no cap when the persona is too long", () => {
     store.update({ persona: "kept", maxTokens: 1024 });
     expect(

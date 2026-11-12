@@ -323,7 +323,7 @@ export function useAgent() {
    * `clear` could already do this, at the cost of the conversation — which made
    * the only way out of a slow turn the one that also destroyed the context.
    * Whatever the tools already did stands; the server stops its own loop when
-   * the stream closes (docs/AGENT_DESIGN.md §5).
+   * the stream closes (docs/AGENT_DESIGN.md → The engine abstraction).
    */
   const stop = useCallback(() => turn?.abort(), []);
 

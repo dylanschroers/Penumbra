@@ -10,15 +10,9 @@ import {
   stopStudio,
 } from "./studioLauncher";
 
-// The launcher's whole job is turning a config string into one detached spawn,
-// once. These pin the three things that decide whether it spawns at all —
-// configured, not already launching, spawn did not throw — and the shape of the
-// spawn, without starting a real GPU server.
-
 const ORIGINAL = process.env.UNSLOTH_LAUNCH_CMD;
 const ORIGINAL_STOP = process.env.UNSLOTH_STOP_CMD;
 
-/** A spawn stand-in returning a child with the one method launchStudio calls. */
 function fakeSpawn() {
   const unref = vi.fn();
   const fn = vi.fn(() => ({ unref }) as unknown as ReturnType<typeof spawn>);
@@ -59,13 +53,11 @@ describe("launchStudio", () => {
 
     expect(launchStudio(spawn.fn)).toEqual({ ok: true });
     expect(spawn.calls).toHaveBeenCalledTimes(1);
-    // shell:true is what lets the one string resolve a PATH binary + subcommand.
     expect(spawn.calls).toHaveBeenCalledWith("unsloth studio", {
       shell: true,
       detached: true,
       stdio: "ignore",
     });
-    // Detached from this process's lifetime.
     expect(spawn.unref).toHaveBeenCalledOnce();
   });
 
@@ -78,7 +70,6 @@ describe("launchStudio", () => {
       ok: false,
       reason: "already_launching",
     });
-    // The refusal did not spawn a second process racing for the port.
     expect(spawn.calls).toHaveBeenCalledTimes(1);
   });
 
@@ -120,8 +111,6 @@ describe("stopCommand", () => {
 describe("stopStudio", () => {
   it("spawns the stop command detached, and clears the launch debounce", () => {
     delete process.env.UNSLOTH_STOP_CMD;
-    // Arm the debounce, then prove a stop clears it so a relaunch is not
-    // refused as still-launching.
     launchStudio(fakeSpawn().fn);
     expect(launchStudio(fakeSpawn().fn)).toMatchObject({
       reason: "already_launching",
@@ -135,7 +124,6 @@ describe("stopStudio", () => {
       stdio: "ignore",
     });
     expect(spawn.unref).toHaveBeenCalledOnce();
-    // Debounce cleared: a fresh launch is allowed again.
     expect(launchStudio(fakeSpawn().fn)).toEqual({ ok: true });
   });
 

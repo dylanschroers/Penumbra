@@ -23,7 +23,6 @@ import { Section, type SectionState, useSections } from "./Section";
 import { type FileLibrary, useFileLibrary } from "./useFileLibrary";
 import { type ExportRequestInput, useLab } from "./useLab";
 
-/** Studio's `format_type` options, offered in the finetune form. */
 type FormatType = FinetuneRequest["format"];
 const FORMAT_OPTIONS: FormatType[] = [
   "auto",
@@ -35,30 +34,18 @@ const FORMAT_OPTIONS: FormatType[] = [
   "generic",
 ];
 
-// The head we read to preview a dataset — enough for the schema and a few
-// records, small enough to stay instant on a multi-GB file.
 const PREVIEW_BYTES = 64 * 1024;
 
-// The Model Lab: fine-tune a model, export it, and benchmark it. Card chrome
-// belongs to the shell's dock card / focus pane, so this renders only inner
-// content.
-//
-// Scores from the two suite families are shown side by side and never averaged
-// — a model can gain reasoning ability while getting worse at calling
-// create_task (docs/MODEL_LAB.md → Suites).
+// Scores from the two suite families are never averaged
+// (docs/MODEL_LAB.md → Suites).
 
 type Tab = "datasets" | "finetune" | "runs" | "benchmarks";
 
 export const TABS: Tab[] = ["datasets", "finetune", "runs", "benchmarks"];
 
 /**
- * The tabs that cannot do anything without the Penumbra server.
- *
- * Datasets is the exception, and the reason the tab exists: choosing a folder,
- * listing it, and parsing the head of a file are the desktop app reading its own
- * disk (./scan.ts, ./datasetPreview.ts). None of it goes through /lab/*, so
- * there is no reason for it to go dark when training does. Uploading a dataset
- * *is* server work, but that happens as part of starting a run, on Fine-tune.
+ * Datasets is local disk work (./scan.ts, ./datasetPreview.ts), so it stays
+ * usable without the server.
  */
 export const SERVER_TABS: ReadonlySet<Tab> = new Set<Tab>([
   "finetune",
@@ -66,15 +53,10 @@ export const SERVER_TABS: ReadonlySet<Tab> = new Set<Tab>([
   "benchmarks",
 ]);
 
-/** The tab to fall back to when the server is gone. Named rather than inlined
- *  so the test can assert it is one that actually works offline. */
+/** Must be a tab that works offline. */
 export const OFFLINE_TAB: Tab = "datasets";
 
-/**
- * A timestamp as an age — "just now", "12 min ago", "3 days ago" — falling back
- * to a date past a week. Which run is the latest is the question the list is
- * scanned for, and an age answers it without reading two clocks.
- */
+/** Falls back to a date past a week. */
 export function formatWhen(iso: string, now: number = Date.now()): string {
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return "";
@@ -92,7 +74,6 @@ export function formatWhen(iso: string, now: number = Date.now()): string {
   return new Date(then).toLocaleDateString();
 }
 
-/** The age of a timestamp, with the exact time a hover away. */
 function When({ at, className }: { at: string; className: string }) {
   return (
     <time
@@ -113,15 +94,12 @@ function JobLine({
   onCancel?: (id: string) => void;
 }) {
   const pct = job.progress === null ? null : Math.round(job.progress * 100);
-  // Only a benchmark holds a controller server-side; offering it elsewhere
-  // would promise a stop the route answers with not_cancellable.
+  // Only benchmarks hold a server-side controller.
   const stoppable = job.kind === "benchmark" && job.state === "running";
   return (
     <li className={`lab__job lab__job--${job.state}`}>
       <span className="lab__job-kind">{job.kind}</span>
       <span className="lab__job-state">{job.state}</span>
-      {/* The bar is for the glance, the number for the answer. A run that takes
-          two hours is read mostly by whether the bar moved since last time. */}
       {pct !== null && job.state === "running" && (
         <span
           className="lab__job-bar"
@@ -150,20 +128,14 @@ function JobLine({
   );
 }
 
-/**
- * lm-eval task ids carry a `leaderboard_` prefix that costs a third of the
- * label width and says nothing the suite name does not. The full id stays in
- * the title, so nothing is lost by trimming it here.
- */
+/** The full id stays in the title. */
 function shortTask(task: string): string {
   return task.replace(/^leaderboard_/, "");
 }
 
 /**
- * lm-eval metrics arrive as `metric,filter` (`exact_match,strict-match`). When
- * a task reports several numbers it is usually the filter that separates them,
- * so that wins when there is one; `none` means the task was not filtered and
- * the metric name is what distinguishes the rows.
+ * `metric,filter`: the filter usually separates multiple numbers; `none`
+ * means unfiltered, so show the metric.
  */
 function shortMetric(metric: string): string {
   const [name, filter] = metric.split(",");
@@ -171,9 +143,7 @@ function shortMetric(metric: string): string {
   return name ?? metric;
 }
 
-/** Scores in arrival order, one entry per task holding all of its metrics.
- *  Without this a task reporting four numbers reads as four identical rows,
- *  since the metric that tells them apart was never shown. */
+/** Otherwise a task with four metrics reads as four identical rows. */
 function groupScores(scores: TaskScore[]): { task: string; of: TaskScore[] }[] {
   const groups: { task: string; of: TaskScore[] }[] = [];
   for (const score of scores) {
@@ -190,17 +160,12 @@ function formatScore(score: TaskScore): string {
     : score.value.toFixed(3);
 }
 
-/** One benchmark run. Values are rates unless the metric says otherwise. */
 function ScoreRow({ result }: { result: BenchmarkResult }) {
-  // What answered is the model the scores describe; what was typed is only a
-  // request, and Studio ignores it. Older rows have no served model recorded,
-  // so they fall back to the request rather than claiming to know.
+  // The served model is what the scores describe; older rows lack it.
   const served = result.servedModel;
   const mismatch = served !== null && served !== result.model;
   return (
     <li className="lab__score-card">
-      {/* Everything that identifies the run on one line: which family, what
-          answered, which suite, which machine, and how few samples. */}
       <div className="lab__score-head">
         <span className={`lab__kind lab__kind--${result.suiteKind}`}>
           {result.suiteKind}
@@ -208,10 +173,8 @@ function ScoreRow({ result }: { result: BenchmarkResult }) {
         <span className="lab__score-model">{served ?? result.model}</span>
         <span className="lab__score-meta">{result.suite}</span>
         <span className="lab__score-meta">· {result.target}</span>
-        {/* Always shown: a 20-sample score is not a leaderboard number. */}
+        {/* Always shown: a subset score is not a leaderboard number. */}
         <span className="lab__score-meta">· n={result.samplesPerTask}</span>
-        {/* An age, as the runs and jobs lists show it — which run is the
-            latest is the question, and the exact stamp is a hover away. */}
         <When at={result.at} className="lab__score-when" />
       </div>
       {mismatch && (
@@ -231,8 +194,6 @@ function ScoreRow({ result }: { result: BenchmarkResult }) {
             <span className="lab__score-values">
               {group.of.map((s) => (
                 <span key={s.metric} className="lab__score-value">
-                  {/* The metric label earns its space only where a task
-                      reports more than one number. */}
                   {group.of.length > 1 && (
                     <span className="lab__score-metric" title={s.metric}>
                       {shortMetric(s.metric)}
@@ -249,7 +210,6 @@ function ScoreRow({ result }: { result: BenchmarkResult }) {
   );
 }
 
-/** Bytes → a rough human size. Model and dataset files are large, so GB/MB. */
 function formatSize(bytes: number | null): string {
   if (bytes === null) return "";
   const gb = bytes / 1e9;
@@ -257,24 +217,10 @@ function formatSize(bytes: number | null): string {
 }
 
 /**
- * An on-device library panel: pick a folder, see the matching files in it, and
- * click one to fill a form field with its path. Used for both the model and
- * dataset libraries — they differ only in what they scan for and how each row
- * renders. Desktop-only (needs disk access); the web build shows a hint instead.
- *
- * Selecting an item fills the field with its *client* path, and what happens to
- * that path next differs by kind:
- *
- *   dataset  Transferred all the way. It uploads to this server, and the run
- *            then hands it to Studio (StudioClient.uploadDataset), training
- *            from the path Studio gives back. Works on a remote trainer too.
- *   model    Only as far as this server. There is no upload endpoint for a
- *            model on Studio, so the trainer has to be able to read the path
- *            itself — true when it shares a filesystem with us, not true for
- *            Colab, which refuses a local path with `remote_model_path`.
- *
- * So a local dataset trains end to end; a local base model needs a trainer on
- * this filesystem, or a HuggingFace id instead.
+ * Picks a client path. A dataset uploads here and then to Studio, so it works
+ * on any trainer. A model only reaches this server (Studio has no model
+ * upload), so a local base model needs a trainer on this filesystem or a HF
+ * id; Colab refuses it with `remote_model_path`.
  */
 function LibraryPanel<T>({
   library,
@@ -288,7 +234,6 @@ function LibraryPanel<T>({
   library: FileLibrary<T>;
   selected: string;
   onSelect: (path: string) => void;
-  /** The item's absolute path — its selection value and list key. */
   itemKey: (item: T) => string;
   emptyHint: string;
   unavailableHint: string;
@@ -300,7 +245,6 @@ function LibraryPanel<T>({
 
   return (
     <div className="lab__library">
-      {/* The section header holds the title; these act on the folder it names. */}
       <div className="lab__library-actions">
         <button type="button" onClick={() => void library.pick()}>
           {library.dir ? "Change folder" : "Choose folder"}
@@ -351,18 +295,11 @@ function LibraryPanel<T>({
   );
 }
 
-/** GGUF quantizations worth offering. Q4_K_M is the usual default: a ~4x
- *  smaller file that most people can actually run. */
 const QUANTIZATIONS = ["Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0", "BF16"];
 
 /**
- * Settings for one export. Beyond the quantization, this is where a run gets
- * published to the HuggingFace Hub — which for a Colab run is not a nicety:
- * Studio writes the artifact to the trainer's own disk and serves nothing for
- * download, so a push is the only way it outlives the session.
- *
- * The token is held here only while the form is open and is sent with the one
- * request. It is never stored, echoed back, or written to the job record.
+ * For a Colab run a Hub push is the only way the artifact outlives the
+ * session. The token is sent with this one request and never stored.
  */
 function ExportForm({
   run,
@@ -376,7 +313,6 @@ function ExportForm({
   onCancel: () => void;
 }) {
   const [quantization, setQuantization] = useState(QUANTIZATIONS[0]);
-  // Pre-armed for a Colab run, where not pushing means losing the artifact.
   const [toHub, setToHub] = useState(run.provider === "colab");
   const [repoId, setRepoId] = useState("");
   const [hfToken, setHfToken] = useState("");
@@ -422,9 +358,6 @@ function ExportForm({
         Push to the HuggingFace Hub
       </label>
 
-      {/* Where the bytes go. Studio writes to its own disk and serves nothing
-          for download, and that disk is only this machine when the run says
-          local — a detail worth stating before a five-minute quantization. */}
       <p className="lab__library-note">
         Writes to <code>{run.outputDir}/gguf</code> on the {run.provider}{" "}
         trainer.{" "}
@@ -463,10 +396,7 @@ function ExportForm({
             />
             Private repository
           </label>
-          {/* Studio's ExportGGUFRequest has no `private` field and its models
-              don't forbid extras, so the flag is accepted and dropped. Saying
-              so beats a checkbox that quietly does nothing; the adapter and
-              merged exports do honour it, so this note goes away with them. */}
+          {/* Studio's ExportGGUFRequest has no `private` field and silently drops it; the adapter and merged exports do honour it. */}
           <p className="lab__library-note">
             Note: Studio's GGUF export ignores this; the repo takes your
             HuggingFace default visibility. Create it as private on the Hub
@@ -487,8 +417,6 @@ function ExportForm({
   );
 }
 
-/** What a collapsed library section still says: how much the chosen folder
- *  holds, or that there is nothing to open yet. */
 function libraryMeta<T>(library: FileLibrary<T>): string {
   if (!library.available) return "desktop only";
   if (!library.dir) return "no folder";
@@ -496,14 +424,11 @@ function libraryMeta<T>(library: FileLibrary<T>): string {
   return `${library.items.length} found`;
 }
 
-/** Shorten a value for a preview cell. */
 function previewText(v: unknown): string {
   const s = typeof v === "string" ? v : JSON.stringify(v);
   return s.length > 300 ? `${s.slice(0, 300)}…` : s;
 }
 
-/** Render one dataset record by its detected schema — chat turns for
- *  conversational data, labelled fields for Alpaca, raw JSON otherwise. */
 function RecordView({
   record,
   schema,
@@ -568,10 +493,8 @@ function RecordView({
 }
 
 /**
- * Reads the head of the selected dataset (desktop only), then shows its detected
- * schema, a record count, any validation issues, and the first few records — so
- * a bad file or a preference dataset is caught before a run starts. Reports the
- * detected `format_type` up so the finetune form can preselect it.
+ * Catches a bad file or preference data before a run, and reports the
+ * detected `format_type` up to preselect it.
  */
 function DatasetPreviewPanel({
   dataset,
@@ -590,8 +513,6 @@ function DatasetPreviewPanel({
   const format = datasetFormat(path);
 
   useEffect(() => {
-    // Only a local dataset file on desktop can be read; an HF id or a bare name
-    // has no head to preview.
     if (!isFsAvailable || !format) {
       setPreview(null);
       setError(null);
@@ -676,8 +597,7 @@ function DatasetPreviewPanel({
 
 export function LabModule() {
   const lab = useLab();
-  // Which Studio trains, benchmarks, and answers chat. Shared with the chat
-  // pill rather than owned here.
+  // Shared with the chat pill.
   const compute = useCompute();
   const modelLibrary = useFileLibrary(
     `${STORAGE_NAMESPACE}.lab.model-dir.v1`,
@@ -691,13 +611,11 @@ export function LabModule() {
   );
   const sections = useSections();
   const [tab, setTab] = useState<Tab>("finetune");
-  // Only once the poll has actually failed, not while the first one is in
-  // flight — otherwise every mount would blink the tabs off and back on.
+  // Only after a failed poll, not during the first.
   const offline = lab.connected === false;
   const [baseModel, setBaseModel] = useState("");
   const [dataset, setDataset] = useState("");
-  // Studio's format_type. Preselected from the dataset preview's detection, but
-  // an explicit choice here always wins.
+  // An explicit choice beats the preview's detection.
   const [format, setFormat] = useState<FormatType>("auto");
   const [maxSteps, setMaxSteps] = useState(60);
   const [benchModel, setBenchModel] = useState("");
@@ -706,20 +624,15 @@ export function LabModule() {
   const benchLoaded = benchModels.find((m) => m.loaded);
   const [samples, setSamples] = useState(20);
   const [providerOpen, setProviderOpen] = useState(false);
-  // Transfer state for the pre-run upload of a local model/dataset to the host.
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
-  /** Run id whose export form is open, if any. */
   const [exporting, setExporting] = useState<string | null>(null);
 
-  // Leave a tab that has just gone dead rather than showing a disabled one as
-  // active: Datasets is the only thing still worth looking at, and landing on it
-  // is more useful than an empty Runs list that cannot explain itself.
+  // Leave a tab that just went dead for Datasets, the one that still works.
   useEffect(() => {
     if (offline && SERVER_TABS.has(tab)) setTab(OFFLINE_TAB);
   }, [offline, tab]);
 
-  // Escape closes the compute popover, matching the backdrop click.
   useEffect(() => {
     if (!providerOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -734,25 +647,9 @@ export function LabModule() {
   const lmEvalMissing =
     selected?.kind === "general" && lab.status?.lmEval === "missing";
 
-  /**
-   * Why the run button is disabled, or null when it is not.
-   *
-   * A greyed-out button with no explanation is a dead end: the commonest cause
-   * is another job still running, which is invisible from the form itself, and
-   * the second is a suite whose harness is not installed on the server.
-   */
-  //
-  // Keyed on what is *loaded*, not on how long the list is: the server refuses a
-  // benchmark against a target with nothing resident (a score has to come from
-  // some model, and Studio answers with whatever it has rather than what the
-  // request names), and a target can serve a model its inventory never listed.
-  // Checking the list length instead used to block a Colab that had a model
-  // loaded and ready, because its disk inventory came back empty.
-  //
-  // The target is named, because "the benchmark target" is not always the one
-  // you were just looking at: benchmarks run on whatever the role resolves to,
-  // which is local until it is assigned otherwise, and a model loaded on Colab
-  // is invisible from here while it stays that way.
+  // Keyed on what's loaded, not list length: Colab can serve a model its
+  // inventory doesn't list. Names the target, since the benchmark role may
+  // resolve somewhere other than the card you were looking at.
   const benchBlocked = !benchLoaded
     ? `Nothing is loaded on ${lab.available?.target ?? "the benchmark target"}, so there is nothing to score. Load a model there from the compute panel above, or point Benchmarks at the target that has one.`
     : !benchModel.trim()
@@ -760,13 +657,10 @@ export function LabModule() {
       : lab.running
         ? "Another job is running. Wait for it to finish, or cancel it below."
         : lmEvalMissing
-          ? "This suite runs lm-evaluation-harness, which the server cannot find. See docs/EVAL.md §5, and set LM_EVAL_BIN if it is in a venv."
+          ? "This suite runs lm-evaluation-harness, which the server cannot find. See docs/EVAL.md → Installing lm-eval, and set LM_EVAL_BIN if it is in a venv."
           : null;
 
-  // Where a fine-tune would land right now: local Studio when it's up, else the
-  // Colab fallback if it's reachable. null means nothing can train. Read from
-  // the compute targets rather than a Lab-owned status, since training shares
-  // them with chat and benchmarking.
+  // Local when up, else a reachable Colab; null means nothing can train.
   const localTarget = compute.state?.targets.find((t) => t.id === "local");
   const colabTarget = compute.state?.targets.find((t) => t.id === "colab");
   const trainTarget: "local" | "colab" | null =
@@ -776,15 +670,11 @@ export function LabModule() {
         ? "colab"
         : null;
 
-  // Colab trains on a machine that has never seen this filesystem. It fetches a
-  // model name from HuggingFace, so a path reaches it as a malformed repo id —
-  // and uploading gigabytes to *this* host first wouldn't help, since the model
-  // still has to exist over there. Caught before the run rather than after.
+  // Colab reads a local path as a malformed HF repo id, and uploading here
+  // wouldn't help.
   const remoteNeedsHfModel =
     trainTarget === "colab" && looksLocalPath(baseModel.trim());
 
-  // Report upload progress as a percentage when the total is known, else as the
-  // bytes sent so far.
   const uploadReporter = (label: string) => (done: number, total: number) => {
     const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
     setUploadMsg(
@@ -799,8 +689,7 @@ export function LabModule() {
 
     if (remoteNeedsHfModel) return;
 
-    // A local pick names a file only this device can read; send it to the host
-    // first and train from the path it returns. HF ids pass through untouched.
+    // Local picks upload first; HF ids pass through.
     if (
       isFsAvailable &&
       (looksLocalPath(modelRef) || looksLocalPath(datasetRef))
@@ -834,14 +723,12 @@ export function LabModule() {
       learningRate: 2e-4,
       maxSteps,
       loraR: 16,
-      // Preselected from the dataset preview's detection; overridable in the form.
       format,
     });
   }
 
-  // Preselect whatever is resident. Studio answers from that model no matter
-  // which id the request names, so it is the only choice that measures what it
-  // claims to; picking anything else is asking for a mislabeled row.
+  // Preselect the resident model: Studio answers from it whatever the request
+  // names.
   useEffect(() => {
     if (benchModel) return;
     const loaded = lab.available?.models.find((m) => m.loaded);
@@ -856,9 +743,7 @@ export function LabModule() {
   return (
     <div className="lab">
       <div className="lab__status">
-        {/* The compute pill doubles as the control: click it to open the
-            shared targets panel — the same one the chat pill opens, because it
-            is the same setting. */}
+        {/* Opens the same targets panel as the chat pill. */}
         <button
           type="button"
           className={`lab__pill lab__pill--${localTarget?.state ?? "stopped"} lab__pill--action`}
@@ -879,7 +764,6 @@ export function LabModule() {
 
         {providerOpen && (
           <>
-            {/* A transparent backdrop so a click anywhere outside dismisses. */}
             <button
               type="button"
               className="lab__popover-backdrop"
@@ -919,12 +803,7 @@ export function LabModule() {
         })}
       </nav>
 
-      {/* Why three tabs are dead, said once here rather than repeated as an
-          error inside each. States the consequence and lets lab.error give the
-          cause: `connected` goes false on any failed poll, so this covers a
-          server that is refusing (401, or the 403 an off-loopback client gets
-          from one with no PENUMBRA_AGENT_TOKEN) as well as one that is down.
-          Claiming there is no server would send you to start a running one. */}
+      {/* `connected` goes false on any failed poll, including 401/403 refusals, so this states the consequence and lab.error gives the cause. */}
       {offline ? (
         <p className="lab__error">
           ⚠️ Fine-tuning, runs, and benchmarks are unavailable — {lab.error}
@@ -933,12 +812,7 @@ export function LabModule() {
         lab.error && <p className="lab__error">⚠️ {lab.error}</p>
       )}
 
-      {/* Choosing a dataset and reading its head are local work, so this tab
-          stands alone rather than being the first two sections of Fine-tune.
-          The point of the split is that it survives a dead server — and the
-          checks here are worth having on their own: a shape the trainer cannot
-          read, or preference data the SFT path cannot train at all, otherwise
-          surfaces minutes into a run as an opaque error from Studio. */}
+      {/* Its own tab so dataset checks work without a server. */}
       {tab === "datasets" && (
         <div className="lab__finetune">
           <Section
@@ -970,8 +844,6 @@ export function LabModule() {
             onDetectFormat={setFormat}
             sections={sections}
           />
-          {/* The selection is what carries across: the Fine-tune tab's Dataset
-              field reads the same value, so picking here fills it in there. */}
           <p className="lab__library-note">
             {dataset
               ? offline
@@ -1054,11 +926,7 @@ export function LabModule() {
                 />
               </label>
               {uploadMsg && <p className="lab__library-note">{uploadMsg}</p>}
-              {/* Studio runs one training job at a time; asking for a second is a
-                guaranteed failure, so the button is disabled instead. It also
-                stays disabled when neither the local nor the Colab trainer is
-                reachable — the server would only reject it (no_trainer) — and
-                while a local model/dataset is being transferred to the host. */}
+              {/* Studio runs one training job at a time; also disabled with no reachable trainer or during an upload. */}
               <button
                 type="submit"
                 disabled={
@@ -1089,8 +957,7 @@ export function LabModule() {
             <li className="lab__empty">No runs yet.</li>
           )}
           {lab.runs.map((run) => {
-            // The export job for this row, if one has ever run. Jobs come back
-            // newest first, so the first match is the current attempt.
+            // Newest first, so the first match is the current attempt.
             const job = lab.jobs.find(
               (j) => j.kind === "export" && j.runId === run.id,
             );
@@ -1098,14 +965,9 @@ export function LabModule() {
             return (
               <li key={run.id}>
                 <div className="lab__run">
-                  {/* Newest first, so the top row is the latest run — the
-                      timestamp is what confirms it against a run started
-                      elsewhere. */}
                   <When at={run.createdAt} className="lab__run-when" />
                   <span className="lab__run-model">{run.baseModel}</span>
-                  {/* Where the checkpoint physically is. A Colab run's artifacts
-                      live on a machine that goes away, which decides whether the
-                      export needs a Hub push. */}
+                  {/* A Colab run's artifacts live on a machine that goes away. */}
                   <span
                     className={`lab__run-where lab__run-where--${run.provider}`}
                   >
@@ -1132,9 +994,6 @@ export function LabModule() {
                   )}
                 </div>
 
-                {/* An export takes minutes and writes to a machine that may not
-                    be this one. Without a line here the only sign anything
-                    happened was a row that didn't change. */}
                 {job && (active || job.state === "failed") && (
                   <p
                     className={
@@ -1175,15 +1034,8 @@ export function LabModule() {
         <div className="lab__benchmarks">
           <Section id="benchmark-form" title="Run a benchmark" state={sections}>
             <form className="lab__form" onSubmit={onBenchmark}>
-              {/* Four short controls, so they share one line. Stacked, they
-                  were a column of full-width selects under a submit as wide as
-                  the panel. */}
               <div className="lab__bench-controls">
-                {/* A list rather than a text field. Studio ignores the `model` it
-                  is sent and answers with whatever is resident, so a typo here
-                  never failed — it returned a full score attributed to another
-                  model. The options come from the target that would actually
-                  run it. */}
+                {/* A list, not free text: Studio ignores the `model` it's sent, so a typo used to score another model. */}
                 <select
                   aria-label="Model to benchmark"
                   value={benchModel}
@@ -1196,10 +1048,7 @@ export function LabModule() {
                     <option key={m.id} value={m.id}>
                       {m.loaded ? "● " : ""}
                       {m.label} · {m.format}
-                      {/* Ollama rows carry no size: Studio's scanner links the
-                        blob but never stats it, so 0 means "not reported"
-                        rather than "empty", and "0.0 GB" would read as a
-                        broken model. */}
+                      {/* Ollama rows report size 0 (Studio never stats the blob): unknown, not empty. */}
                       {m.sizeBytes > 0
                         ? ` · ${(m.sizeBytes / 1e9).toFixed(1)} GB`
                         : " · size not reported"}
@@ -1227,9 +1076,7 @@ export function LabModule() {
                     onChange={(e) => setSamples(Number(e.target.value))}
                   />
                 </label>
-                {/* The title carries the reason: a disabled control that does not
-                  say why leaves you guessing at a cause the form cannot show,
-                  most often a job still running from a previous attempt. */}
+                {/* The title carries the reason it's disabled. */}
                 <button
                   type="submit"
                   disabled={benchBlocked !== null}
@@ -1243,9 +1090,6 @@ export function LabModule() {
               {benchBlocked && (
                 <p className="lab__library-note">{benchBlocked}</p>
               )}
-              {/* A short list and a list that failed to load look the same from
-                  here. The loaded model is offered either way, so this explains
-                  the missing rest rather than blocking anything. */}
               {lab.available?.inventoryError && (
                 <p className="lab__library-note">
                   {lab.available.target}'s model inventory did not answer, so
@@ -1253,10 +1097,7 @@ export function LabModule() {
                   )
                 </p>
               )}
-              {/* Choosing here does not load anything: the target serves what
-                  it already has. Saying so beats letting a run come back
-                  labelled with one model and scored from another — the row
-                  records both, but by then it has cost you the run. */}
+              {/* Choosing doesn't load anything; the target serves what it already has. */}
               {benchLoaded && benchModel && benchModel !== benchLoaded.id && (
                 <p className="lab__library-note">
                   {benchLoaded.label} is the model actually loaded, so it is
@@ -1276,8 +1117,7 @@ export function LabModule() {
           >
             <ul className="lab__score-list">
               {lab.scores.map((r) => (
-                // The target is part of the identity: the same name on two
-                // machines is two different measurements.
+                // Target is part of the key: same name on two machines, two measurements.
                 <ScoreRow
                   key={`${r.at}-${r.suite}-${r.model}-${r.target}`}
                   result={r}
@@ -1288,8 +1128,7 @@ export function LabModule() {
         </div>
       )}
 
-      {/* The job strip: just the latest, as a live line for the run in flight
-          and the last thing to have failed. The full history is the Runs tab. */}
+      {/* Latest job and last failure only; full history is the Runs tab. */}
       <ul className="lab__jobs">
         {lab.jobs.slice(0, 1).map((job) => (
           <JobLine

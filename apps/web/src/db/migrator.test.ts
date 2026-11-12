@@ -1,9 +1,7 @@
 /**
  * @vitest-environment node
  */
-// The browser-side migration runner against a real in-memory SQLite. The
-// migrator inlines the .sql files with Vite's import.meta.glob, which is why
-// this runs under Vitest (Vite's transform pipeline) and not a bare Node runner.
+// Runs under Vitest because the migrator uses import.meta.glob.
 
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
@@ -42,15 +40,12 @@ describe("runMigrations", () => {
     expect(await runMigrations(exec)).toEqual([]);
   });
 
-  // Fault injection: fail the store exactly while migration 0003 runs, then
-  // assert the transaction rolled back cleanly and a healthy re-run recovers.
   it("rolls back a failed migration and recovers on re-run", async () => {
     const db = new Database(":memory:");
     const base = betterSqliteExec(db);
 
     let injectFault = true;
     const faulty: RawExec = (sql, bind) => {
-      // The 0003 statement creates _sync_meta; blow up before it commits.
       if (injectFault && sql.includes("_sync_meta")) {
         throw new Error("disk full");
       }
@@ -59,8 +54,6 @@ describe("runMigrations", () => {
 
     await expect(runMigrations(faulty)).rejects.toThrow("disk full");
 
-    // 0002 committed (its own transaction); 0003 rolled back — no _sync_meta,
-    // and it was never recorded as applied.
     const tables = tableNames(db);
     expect(tables).toContain("_outbox");
     expect(tables).not.toContain("_sync_meta");

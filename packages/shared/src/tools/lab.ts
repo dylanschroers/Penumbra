@@ -3,19 +3,11 @@ import { SUITES } from "../lab/suites";
 import { benchmarkRequest, finetuneRequest } from "../lab/types";
 import type { ToolContract } from "./contract";
 
-// Contracts for driving the Model Lab from a conversation (docs/MODEL_LAB.md).
-// Assembled into `labTools` by ./registry.ts, which is also where the reason
-// they are a separate list from `agentTools` is written down.
-//
-// Argument schemas reuse the fields of the request schemas the HTTP routes
-// already validate against, so the limits and defaults the model is shown are
-// the ones a run actually gets. What is deliberately *not* exposed is the rest of
-// `finetuneRequest` — learning rate, LoRA rank, dataset format. Those have
-// defaults that are right almost always, and every extra slot is one more for a
-// model to fill wrong (docs/AGENT_DESIGN.md §7: keep the tools few and shallow).
+// Arguments reuse the route request schemas. Learning rate, LoRA rank, and
+// dataset format are deliberately not exposed: each extra slot is one more for
+// a small model to fill wrong.
 
-/** Suite ids as an enum, so the grammar can only emit one that exists. z.enum
- *  needs a non-empty tuple; SUITES is a non-empty constant. */
+/** z.enum needs a non-empty tuple. */
 const SUITE_IDS = SUITES.map((s) => s.id) as [string, ...string[]];
 
 export const listModelsTool = {
@@ -70,9 +62,8 @@ export const runBenchmarkTool = {
     samplesPerTask: benchmarkRequest.shape.samplesPerTask.describe(
       "Cases per task. A small number is quick, and is not comparable to a published score",
     ),
-    // Studio answers with whatever is resident whatever this says, so it is a
-    // label on the scores rather than a choice of model — hence optional, and
-    // defaulted server-side to the model that will actually answer.
+    // Studio serves whatever is resident, so this is a label; the server defaults
+    // it to the model that will answer.
     model: z
       .string()
       .optional()
@@ -97,19 +88,8 @@ export const jobStatusTool = {
 } satisfies ToolContract;
 
 /**
- * What the lab has already finished, as opposed to what it is doing now.
- *
- * `job_status` reads job rows, and a job row is a progress line: on a finished
- * benchmark it says "done" over whatever the harness last printed, never the
- * scores, which are written to their own table. Without this the policy below
- * asks the model to gate on evidence no tool could hand it.
- *
- * Two views on one tool rather than two tools, because §7 of
- * docs/AGENT_DESIGN.md is a rule about tool *count*: a small model does better
- * choosing a slot on a tool it has already picked than choosing between two
- * whose descriptions both begin "list past". The pair also overlaps in the way
- * that costs most — a run and the score of that run are one question to a user
- * and two tables here.
+ * `job_status` rows never carry scores, which live in their own table. One tool
+ * with a `what` slot rather than two, to keep the tool count down.
  */
 export const labHistoryTool = {
   name: "lab_history",
@@ -119,34 +99,20 @@ export const labHistoryTool = {
   permission: "read",
   args: z.object({
     what: z
-      // Terse on purpose. Every token of tool description competes with the
-      // ones already there on a 1.7B model, and these two words are the whole
-      // distinction.
+      // Terse: every description token competes for a 1.7B model's attention.
       .enum(["runs", "scores"])
       .describe(
         "runs = past fine-tunes and their artifacts; " +
           "scores = recorded benchmark results",
       )
-      // The slot is filled reliably when the question is specific, so the
-      // default only has to cover the vague "what has this lab done" — which is
-      // a question about runs.
       .default("runs"),
   }),
 } satisfies ToolContract;
 
 /**
- * The tool policy for the tier that has a Model Lab, appended to AGENT_POLICY
- * by `composeSystem`.
- *
- * Separate from AGENT_POLICY rather than folded into it because that constant
- * is pinned: the eval harness and the personal benchmark suite both run the
- * shipped Tier-0 prompt, and editing it would make every historical score
- * incomparable with nothing in the row saying why (docs/MODEL_LAB.md → Suites).
- *
- * It reads as an extension of the sentence that scopes the tools rather than a
- * correction of it. A policy that said "only tasks and weather" and then
- * offered six lab tools would be a contradiction, and a small model resolves
- * those by picking one at random.
+ * Separate from AGENT_POLICY, which is pinned for the eval. Phrased as an
+ * extension of AGENT_POLICY's tool scope, not a correction: a small model
+ * resolves contradictions at random.
  */
 export const LAB_POLICY =
   "This machine also runs a Model Lab that fine-tunes and benchmarks models. " +

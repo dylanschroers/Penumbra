@@ -8,19 +8,12 @@ import type {
 } from "@penumbra/shared";
 import type Database from "better-sqlite3";
 
-// Job, run, and score records for the Model Lab.
-//
-// The job table is the source of truth, not the SSE stream. Training takes
-// minutes to hours; a client will disconnect, and the server may restart. Every
-// state change is written here first and only then relayed, so reconnecting is
-// a read rather than a recovery.
-//
-// These tables are local bookkeeping, deliberately outside Plane A sync: they
-// describe *this* GPU host's work and mean nothing on another device.
+// The job table, not the SSE stream, is the source of truth: every state
+// change is written before it is relayed. Not synced: these describe this GPU
+// host only.
 
 export interface LabStore {
-  /** `runId` attributes the job to an existing run (an export), so progress can
-   *  be shown on that row rather than only in the global job list. */
+  /** `runId` ties an export to its run. */
   createJob(kind: LabJobKind, runId?: string): LabJob;
   getJob(id: string): LabJob | undefined;
   listJobs(limit?: number): LabJob[];
@@ -28,7 +21,6 @@ export interface LabStore {
     id: string,
     patch: Partial<Pick<LabJob, "state" | "progress" | "detail" | "error">>,
   ): LabJob | undefined;
-  /** Mark failed with a message — the common tail of every catch block. */
   failJob(id: string, error: unknown): void;
 
   createRun(input: Omit<LabRun, "id" | "createdAt">): LabRun;
@@ -49,9 +41,7 @@ const RUN_COLUMNS = `id, job_id AS jobId, base_model AS baseModel, dataset,
   output_dir AS outputDir, gguf_path AS ggufPath, hub_repo AS hubRepo,
   provider, created_at AS createdAt`;
 
-/** Add a column to an existing table, skipping it when already present.
- *  `CREATE TABLE IF NOT EXISTS` above only builds a *new* database; a database
- *  from before the column existed needs this. */
+/** For databases created before the column existed. */
 function addColumn(
   db: Database.Database,
   table: string,
@@ -115,9 +105,7 @@ CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
   addColumn(db, "lab_runs", "provider", "text NOT NULL DEFAULT 'local'");
   addColumn(db, "lab_runs", "hub_repo", "text");
   addColumn(db, "lab_jobs", "run_id", "text");
-  // Scores written before these existed came from the only target there was,
-  // against whatever was loaded — unknowable now, hence null rather than a
-  // guess that would read as a measurement.
+  // Older scores' served model is unknowable, hence null.
   addColumn(db, "lab_scores", "target", "text NOT NULL DEFAULT 'local'");
   addColumn(db, "lab_scores", "served_model", "text");
 
@@ -132,8 +120,7 @@ CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
     `SELECT ${JOB_COLUMNS} FROM lab_jobs
      ORDER BY created_at DESC, rowid DESC LIMIT ?`,
   );
-  // COALESCE keeps an omitted field unchanged, so a progress-only update can't
-  // blank the detail line.
+  // COALESCE keeps omitted fields unchanged.
   const patchJob = db.prepare(
     `UPDATE lab_jobs SET
        state = COALESCE(@state, state),
@@ -175,17 +162,9 @@ CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
      FROM lab_scores ORDER BY at DESC, rowid ASC`,
   );
 
-  // Nothing survives a restart except the rows. A job left "running" or
-  // "queued" was owned by a process that no longer exists, so it cannot make
-  // progress, cannot be cancelled, and will never settle on its own — it just
-  // sits there claiming to be in flight. That was enough to wedge the Lab: the
-  // form disables itself while a job is running, so one orphan blocked every
-  // later run, and Cancel could not clear it because the controller died with
-  // the process that held it.
-  //
-  // Failed rather than cancelled: nobody stopped this, it was interrupted, and
-  // the same rule the export path already follows applies — a run is not done
-  // unless completion was actually reported.
+  // After a restart, running/queued jobs belong to a dead process: they can't
+  // progress or be cancelled, and the form disables itself while one exists.
+  // Marked failed, not cancelled: nobody stopped them.
   db.prepare(
     `UPDATE lab_jobs
         SET state = 'failed',
@@ -269,15 +248,12 @@ CREATE INDEX IF NOT EXISTS lab_scores_at_idx ON lab_scores (at DESC);
       write(result);
     },
     listScores() {
-      // Rows are stored one metric each; regroup into the result shape the API
-      // and the comparison view speak.
       type Row = BenchmarkResult["scores"][number] &
         Omit<BenchmarkResult, "scores">;
       const byRun = new Map<string, BenchmarkResult>();
       for (const row of selectScores.all() as Row[]) {
-        // The target is part of the key: the same model name on two machines is
-        // two different measurements, and merging them would splice one run's
-        // metrics into another's.
+        // Target is part of the key: same model name on two machines is two
+        // measurements.
         const key = `${row.at}|${row.suite}|${row.model}|${row.target}`;
         const existing = byRun.get(key);
         const score = { task: row.task, metric: row.metric, value: row.value };

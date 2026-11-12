@@ -1,221 +1,96 @@
-# Penumbra — Evaluation, Benchmarking, and Finetuning
+# Penumbra: Evaluation
 
-How Penumbra measures whether a model is good enough to be its agent, and how a
-benchmark run doubles as the seed for finetuning one. Companion to
-[AGENT_DESIGN.md](AGENT_DESIGN.md) §7 and [MODEL_LAB.md](MODEL_LAB.md).
+How a model is measured as Penumbra's agent, and how a run seeds a fine-tune.
+Cases, scoring, and trainset logic live in `packages/shared/src/eval`, beside
+the tool contracts, so the eval cannot drift from what the app ships.
 
-Present tense means it exists in the repo today.
+## What is measured
 
----
+One turn: does the request produce the **right tool call with the right
+arguments**, and **no** tool call during conversation? Tools are not executed.
 
-## 1. What is measured
-
-The agent's usefulness rests on one skill: turning a natural request into the
-**right tool call with the right arguments**, and *not* calling a tool during
-ordinary conversation. `pnpm tool-eval` measures exactly that. It does not
-execute tools — it grades what the model emits.
-
-The cases, the scoring, and the training-set logic live in
-`packages/shared/src/eval`, beside the tool contracts. That placement is the
-point: the eval imports the same specs and system prompt the app ships, so it
-cannot drift from the product, and the metrics are unit-tested without needing
-a model.
-
-| Metric | Why it is separate |
+| Metric | Notes |
 |---|---|
-| Tool-selection accuracy | The headline: did it pick the right action? |
-| False positives | Called a tool during chit-chat. The worst failure — it writes to the user's data uninvited. |
-| False negatives | Answered in prose when asked to act. Annoying, not destructive. |
-| Arg JSON validity | A call whose arguments do not parse is a wasted turn. |
-| Arg correctness (spot) | Only deterministic slots (priority, status). Titles vary in casing and phrasing, so selection is the signal. |
-| Latency | Tier 0 runs on the user's CPU; a correct answer that takes 25s is still a bad experience. |
+| Tool-selection accuracy | The headline. |
+| False positives | Tool called on chit-chat. The worst failure: an uninvited write. |
+| False negatives | Prose when asked to act. Annoying, not destructive. |
+| Arg JSON validity | |
+| Arg correctness (spot) | Deterministic slots only (priority, status). |
+| Latency | Tier 0 runs on the user's CPU. |
 
-## 2. Running it
+Not covered: multi-step loops (a single-turn pass can hide a duplicate
+`create_task` in a live loop), tool execution (store tests), answer quality.
+
+## Running it
 
 ```bash
-# Tier 0 — the bundled llama-server + GGUF
-pnpm tool-eval
-
-# Tier 1 — Unsloth Studio
-LLM_URL=http://gpu-host:8888 MODEL=gpt-oss-20b API_KEY=sk-unsloth-… \
-  LABEL=studio-baseline pnpm tool-eval
+pnpm tool-eval            # bundled llama-server on :8080, Tier 0 tools
+TIER=1 pnpm tool-eval     # adds the Model Lab tools under the server prompt
+LLM_URL=http://gpu-host:8888 MODEL=gpt-oss-20b API_KEY=sk-unsloth-… LABEL=studio pnpm tool-eval
 ```
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `LLM_URL` | `http://127.0.0.1:8080` | Any OpenAI-compatible server |
-| `MODEL` | `qwen3-1.7b` | Model id sent with the request |
-| `API_KEY` | — | Sent as a bearer token when set |
-| `LABEL` | — | Names the run in the results log |
-| `BENCH_DIR` | `bench` | Where artifacts are written (git-ignored) |
-| `TIER` | `0` | Which tool set to advertise. `1` adds the Model Lab contracts |
+| `MODEL` | `qwen3-1.7b` | Model id |
+| `API_KEY` | none | Bearer, when set |
+| `LABEL` | none | Names the run |
+| `BENCH_DIR` | `bench` | Output dir (git-ignored) |
+| `TIER` | `0` | `1` adds the lab contracts |
 
-Each run **appends** to `bench/results.jsonl`. The value of a benchmark is the
-trend across models and finetunes, not one number, so runs are never
-overwritten. The tier is recorded in the row's label, because the two are not
-comparable and an unmarked mixed file draws a trend that is really just a record
-of which command someone last ran.
+Each run appends to `bench/results.jsonl`; the tier is recorded in the label
+because the two tiers are not comparable.
 
-### The two tool sets
+## The two tool sets
 
-`TIER=0` advertises the five contracts both tiers bind and scores `evalCases`.
-That set is stable on purpose: it is what `penumbra-tools-v2` records, and
-changing the case mix moves every future number against the past. When it has to
-change, the suite id changes with it (see below) rather than the change being
-silent.
+- `TIER=0`: the five `agentTools`, scored on `evalCases`.
+- `TIER=1`: those plus the six `labTools`, under `AGENT_POLICY` + `LAB_POLICY`,
+  scored on `evalCases` **and** `labEvalCases`.
 
-`TIER=1` advertises those five *plus* the six Model Lab contracts, under the
-prompt the server actually composes (`AGENT_POLICY` + `LAB_POLICY`), and scores
-`evalCases` **and** `labEvalCases`.
+Tier 1 reruns the base cases so the cost of extra tools shows up: compare its
+base rows against a Tier 0 run. `eval.test.ts` fails if a lab tool has no
+positive case. `labEvalCases` targets crossovers (lab vocabulary that should
+still reach `create_task`, lab tools that read alike) and negatives drawn from
+the lab's own subject matter. Arguments are asserted only where the utterance
+states them and the contract default would be wrong.
 
-Running the base cases again under the larger tool list is the whole reason the
-second set exists. [AGENT_DESIGN.md](AGENT_DESIGN.md) §7 claims that a small
-model degrades as tools are added, and that the cost lands on the tools that
-were already working. The only way to see that is to put the same utterances in
-front of both lists: compare the Tier-1 run's base rows against the Tier-0 run's.
-A lab tool that scores well while `create_task` slips four points has not paid
-for itself.
+## Training data
 
-`labEvalCases` is built for where a two-domain tool set actually fails, not for
-where it obviously works:
+The same run writes `bench/trainset.jsonl` (OpenAI chat format) by rejection
+sampling: only turns the model got right. The rest go to
+`bench/trainset-todo.json` with a reason, as the hand-labeling worklist. A wrong
+turn is never emitted. The main use is distillation: run against a large Tier 1
+model, train the small Tier 0 one on what it got right.
 
-- **Positives**, at least one per lab tool. `eval.test.ts` fails the build if a
-  lab tool has no case, so a tool cannot ship unmeasured.
-- **Crossovers into the base tools** — "add a task to benchmark the new model"
-  must reach `create_task`, not `run_benchmark`. Lab vocabulary next to six new
-  actuators is the false-positive shape that matters.
-- **Crossovers between lab tools** — "what models have I trained?" against "what
-  models are available?", and "did the job finish?" against "what did it score?".
-  Both pairs read alike and only one of each is about the past.
-- **Negatives from the lab's own subject matter.** "What is LoRA?" is a far
-  better trap than "Good morning!", because every content word in it matches a
-  tool description.
+## Benchmark suites
 
-Arguments are asserted only where the utterance states them, and only where the
-contract's default would be wrong. `lab_history` defaults `what` to `runs`, so a
-model that omits the slot on a runs question still behaves correctly and is not
-scored as wrong; omitting it on a scores question produces the wrong list, so
-those cases assert it.
+The Model Lab runs two families, reported side by side and **never averaged**,
+since a model can gain reasoning while getting worse at calling tools.
 
-### A recorded baseline
-
-Qwen2.5-1.5B-Instruct Q4_K_M, CPU-only. This is the model used to exercise the
-Tier-1 seam, **not** the bundled Tier-0 model — the bundle is Qwen3-1.7B Q4_K_M
-(`scripts/fetch-assets.sh`), whose own numbers are in
-[AGENT_DESIGN.md](AGENT_DESIGN.md) §7. The two runs used different models under
-different conditions and are not directly comparable; treat each as a point on
-its own trend line.
-
-```
-Tool-selection accuracy : 25/26 (96%)
-False positives         : 0
-False negatives         : 0
-Arg JSON validity       : 18/18 calls
-Arg correctness (spot)  : 5/5 checked
-Latency                 : avg 14194ms, max 24472ms
-```
-
-Selection is already strong; **latency is the reason Tier 1 exists**. Fourteen
-seconds per turn is not a usable assistant, and that is a hardware and
-model-size problem rather than a prompt problem.
-
-## 3. Finetuning: the run is the dataset
-
-The same run writes `bench/trainset.jsonl` — OpenAI chat-format rows, the shape
-Unsloth's SFT trainer reads. It is built by **rejection sampling**: only turns
-the model got right become training examples. Everything else lands in
-`bench/trainset-todo.json` with a reason, which is the hand-labeling worklist.
-
-Be honest about what this is worth. Training a model on its own correct outputs
-teaches *that model* very little. The scaffold is useful for three things:
-
-1. **Distillation** — capture a large model's behavior and train a small one on
-   it. That is precisely the Tier-1 → Tier-0 relationship: run the eval against
-   Studio, train the embedded model on what Studio got right.
-2. **Regression pinning** — a fixed set of known-good turns to check a finetune
-   against.
-3. **A seed with its gaps marked** — the `todo` file is exactly the set of
-   utterances worth labeling by hand, because they are the ones the model
-   cannot already do.
-
-A wrong turn is never emitted as training data; teaching a model its own
-mistakes is worse than not training at all.
-
-## 4. Where this sits in the bigger picture
-
-This is the **personal** half of a two-family benchmark
-([MODEL_LAB.md](MODEL_LAB.md) → Suites): it grades the model on Penumbra's own
-job. The **general** half runs academic suites via `lm-evaluation-harness` and
-grades raw capability. Both are first-class, and they are never averaged
-together — a model can gain reasoning ability while getting worse at calling
-`create_task`, and a single blended number would hide exactly that.
-
-A useful property of this half: because scoring is pure TypeScript in
-`@penumbra/shared`, the server can run it **in-process** as a Model Lab job. No
-Python, no subprocess, and no way for the benchmark to drift from the tool specs
-the app actually ships.
-
-Two personal suites, matching the two tool sets above:
+- **General**: `lm-evaluation-harness` as a subprocess (`general-v1`).
+- **Personal**: the cases above, scored in-process on the server.
 
 | Suite | Advertises | Scores |
 |---|---|---|
-| `penumbra-tools-v2` | the 5 base contracts | `evalCases` |
-| `penumbra-lab-v1` | those 5 plus the 6 lab contracts, under `LAB_POLICY` | `evalCases` + `labEvalCases` |
+| `penumbra-tools-v2` | 5 base contracts | `evalCases` |
+| `penumbra-lab-v1` | plus 6 lab contracts, under `LAB_POLICY` | `evalCases` + `labEvalCases` |
 
-Which tools go on the wire and which prompt frames them are decided together
-from the suite id (`LAB_TOOL_SUITES`), because a run that advertises the lab
-tools under a prompt that never mentions them is measuring a configuration the
-app does not ship.
+`LAB_TOOL_SUITES` picks tools and prompt together from the suite id. If a case
+set changes, bump the suite id instead of changing what old rows meant.
 
-### Why the base suite is v2
+**`penumbra-tools-v1` rows**: v1 sampled a capped run by prefix, and at the
+default 20 of 33 cases that skipped every negative. Its `false_positives` is
+unmeasured wherever `samplesPerTask` was below the full set, and its selection
+scores are not comparable to v2. v2 samples across the whole set.
 
-`samplesPerTask` caps a run, and a capped run used to take the first *n* cases.
-Every case set here is grouped by tool with the negatives last, so a prefix
-systematically drops whichever kind of case sits at the end. At the default 20
-of 33 the sample contained **no negative case at all**: `false_positives` could
-only ever come back 0, and every `penumbra-tools-v1` row reading 0 meant "not
-measured", not "none found".
+## Installing lm-eval
 
-The sample is now spread across the set, so a capped run is a sample of the
-whole thing. That is a different measurement of the same questions, which is why
-it is a new suite id rather than a quiet change to what a v1 row said.
-
-**Reading old rows.** A score row carries its own suite string rather than
-looking one up, so v1 rows still display exactly as recorded. They are not
-comparable to v2 on `tool_selection` or `false_positives` — the case mix behind
-them differs — and their `false_positives` should be read as unmeasured wherever
-`samplesPerTask` was below the full set. The other metrics are unaffected.
-
-## 5. Running the general suite
-
-`lm-evaluation-harness` is an **optional** dependency, detected at runtime and
-reported by `GET /lab/status`. Install it into a venv rather than system Python:
+Optional; detected at runtime and reported by `GET /lab/status`. The `[api]`
+extra is required (plain `lm-eval` fails at run time on a missing `tenacity`),
+and the default suite's tasks need their own extras:
 
 ```bash
 python3 -m venv .venv-lmeval
-.venv-lmeval/bin/pip install 'lm-eval[api]'
+.venv-lmeval/bin/pip install 'lm-eval[api,ifeval,math]'
 LM_EVAL_BIN=$PWD/.venv-lmeval/bin/lm_eval pnpm --filter @penumbra/server dev
 ```
-
-**Task-level extras are also required.** `ifeval` needs `langdetect` and
-`immutabledict`, and the math tasks have their own; a run dies partway through
-with a bare `ModuleNotFoundError` otherwise. Install
-`'lm-eval[api,ifeval,math]'` to cover the default suite.
-
-**The `[api]` extra is required, not optional.** A plain `pip install lm-eval`
-installs fine and then fails at run time with
-`ModuleNotFoundError: ... ['tenacity']` the moment an API model is used — which
-is our only mode, since we benchmark over an OpenAI-compatible endpoint rather
-than loading weights in-process. Verified the hard way against a live run.
-
-## 6. What this does not cover
-
-- **Multi-step loops.** The eval grades one turn. It does not catch loop-level
-  failures — a live Tier-1 run had the 1.5B model call `create_task` twice for
-  one request and create a duplicate task, which a single-turn eval scores as a
-  clean pass. Multi-step behavior is graded by the engine tests and, ultimately,
-  by using it.
-- **Tool execution.** Whether a call *succeeds* is the store's business and is
-  covered by `apps/server/src/agent/tools.test.ts` and the client equivalent.
-- **Answer quality.** Nothing here grades prose beyond "did it correctly decline
-  to call a tool".
