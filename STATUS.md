@@ -18,11 +18,14 @@ Merged on 2026-11-12, not yet pushed to origin:
   real serving backend (from `/v1/models` `owned_by`) instead of a fixed label.
 - Docs rewritten and trimmed; code comments trimmed; this file and AGENTS.md.
 
+Checked in a headless browser against a fresh build and server: the workspace
+loads and syncs, a new task shows, reaches the server, and survives a reload,
+and Paint rotate swaps the canvas 800x600 to 600x800 and back.
+
 Not verified by hand:
 
 - Agent file tools in the desktop app (desktop-only; unit tests and
   `cargo check` pass).
-- Paint rotate in the running app (unit tests pass).
 - `docker compose up` (Docker wasn't available; the built server was booted
   and answered `/sync/tasks`).
 
