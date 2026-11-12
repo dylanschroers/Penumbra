@@ -291,11 +291,14 @@ Current posture, honestly stated:
   own surfaces — training, export, and inference alike — so no client-side code
   holds a Studio URL or key. Both targets' bearers, the Colab fallback's
   included, are stored server-side and never returned to a client.
-- **The desktop filesystem commands are unscoped.** `fs_list`, `fs_read_head`,
-  `fs_read_chunk`, and `fs_move` accept any absolute path the user's account can
-  reach; the folder picker seeds the UI, it does not confine the commands. Only
-  trusted app code calls them today, but this is the layer to tighten first if
-  anything model-driven ever gains filesystem access.
+- **The sidebar's filesystem commands are unscoped; the agent's are not.**
+  `fs_list`, `fs_read_head`, `fs_read_chunk`, and `fs_move` accept any absolute
+  path the user's account can reach, and only trusted app code calls them. The
+  agent's file tools go through `agent_fs_*` (`apps/desktop/src-tauri/src/agent_fs.rs`)
+  instead, which resolve every path natively (symlinks and `..` collapsed) and
+  refuse anything outside the folders shared in the sidebar. Every change they
+  make waits for the user to approve it in the chat, and deletes go to the OS
+  trash.
 - The agent's tools carry declared permission levels, but enforcement, audit
   logging, OAuth, and encrypted credential storage are all **planned** — they
   arrive with the server modules that need them (identity, integrations,

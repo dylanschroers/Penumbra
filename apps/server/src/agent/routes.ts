@@ -1,4 +1,12 @@
-import type { AgentEvent, ChatMessage, Engine } from "@penumbra/shared";
+import { randomUUID } from "node:crypto";
+import {
+  type AgentEvent,
+  type ChatMessage,
+  type ClientTools,
+  clientToolsInput,
+  type Engine,
+  type GatewayUsage,
+} from "@penumbra/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { TargetStore } from "../compute/targets";
@@ -23,7 +31,21 @@ const chatBody = z.object({
       content: z.string(),
     }),
   ),
+  client: clientToolsInput.optional(),
 });
+
+const toolResultBody = z.object({
+  id: z.string().uuid(),
+  result: z.string().max(1_000_000),
+});
+
+/** How long a forwarded file call may wait on the client. Long, because the
+ *  client may be waiting on the user to approve a change. */
+const CLIENT_TOOL_TIMEOUT_MS = 10 * 60_000;
+
+/** WebKit, the desktop window's engine, fails a fetch that receives nothing for
+ *  60s, and a free model can think for longer than that between events. */
+const KEEP_ALIVE_MS = 15_000;
 
 // Both optional and applied independently: the panel saves the cap and the
 // persona from one form, and a request carrying only one of them must not blank
@@ -47,6 +69,11 @@ export interface AgentRouteOptions {
   /** Issued device tokens, accepted alongside the shared secret. Optional so a
    *  test can stand these routes up without a device store. */
   devices?: DeviceStore;
+  /** Reads the gateway's limits and today's totals. Absent without a gateway,
+   *  and then /agent/usage answers 404. */
+  gatewayUsage?: () => Promise<GatewayUsage>;
+  /** How often a quiet chat stream gets a keep-alive comment. */
+  keepAliveMs?: number;
 }
 
 export function registerAgentRoutes(
@@ -57,9 +84,25 @@ export function registerAgentRoutes(
     prompts,
     token = process.env.PENUMBRA_AGENT_TOKEN,
     devices,
+    gatewayUsage,
+    keepAliveMs = KEEP_ALIVE_MS,
   }: AgentRouteOptions,
 ): void {
   const preHandler = requireAuth({ token, devices });
+
+  // File calls forwarded to a client, waiting for its POST /agent/tool-result.
+  const pendingClientCalls = new Map<string, (result: string) => void>();
+
+  app.post("/agent/tool-result", { preHandler }, async (req, reply) => {
+    const parsed = toolResultBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "bad_request" });
+    }
+    const resolve = pendingClientCalls.get(parsed.data.id);
+    if (!resolve) return reply.code(404).send({ error: "unknown_call" });
+    resolve(parsed.data.result);
+    return { ok: true };
+  });
 
   // The whole prompt, both halves: "see the system prompt" is not answered by
   // showing only the part that happens to be editable. `policy` is read-only.
@@ -97,6 +140,16 @@ export function registerAgentRoutes(
     return { ...status, target: { id, label: target?.label ?? id } };
   });
 
+  app.get("/agent/usage", { preHandler }, async (req, reply) => {
+    if (!gatewayUsage) return reply.code(404).send({ error: "no_gateway" });
+    try {
+      return await gatewayUsage();
+    } catch (err) {
+      req.log.warn(err);
+      return reply.code(502).send({ error: "gateway_unavailable" });
+    }
+  });
+
   app.post("/agent/chat", { preHandler }, async (req, reply) => {
     const parsed = chatBody.safeParse(req.body);
     if (!parsed.success) {
@@ -113,8 +166,14 @@ export function registerAgentRoutes(
     // firing. Partial effects stand — already-executed tool writes are not
     // rolled back — and the events already sent are the record of what ran
     // (docs/AGENT_DESIGN.md §5).
+    // The response's close, not the request's: the request emits it once its
+    // body has been read, before this listener exists, so it never reported a
+    // dropped connection and an abandoned turn kept calling the model.
     const controller = new AbortController();
-    req.raw.on("close", () => controller.abort());
+    reply.raw.on("close", () => controller.abort());
+    const keepAlive = setInterval(() => {
+      if (!reply.raw.writableEnded) reply.raw.write(": keep-alive\n\n");
+    }, keepAliveMs);
 
     const send = (event: string, data: unknown): void => {
       if (!reply.raw.writableEnded) {
@@ -122,8 +181,37 @@ export function registerAgentRoutes(
       }
     };
 
+    // The client's file tools run on the client: each call goes out as a
+    // `client_tool` event and the turn waits for the result to be posted back.
+    const client = parsed.data.client;
+    const clientTools: ClientTools | undefined = client && {
+      ...client,
+      runTool: (name, args) =>
+        new Promise<string>((resolve) => {
+          const id = randomUUID();
+          const finish = (result: string) => {
+            clearTimeout(timer);
+            controller.signal.removeEventListener("abort", stop);
+            pendingClientCalls.delete(id);
+            resolve(result);
+          };
+          const stop = () => finish("Stopped.");
+          const timer = setTimeout(
+            () => finish("The desktop app did not answer this file request."),
+            CLIENT_TOOL_TIMEOUT_MS,
+          );
+          controller.signal.addEventListener("abort", stop, { once: true });
+          pendingClientCalls.set(id, finish);
+          send("client_tool", { id, name, args });
+        }),
+    };
+
     try {
-      for await (const ev of engine.runAgent(messages, controller.signal)) {
+      for await (const ev of engine.runAgent(
+        messages,
+        controller.signal,
+        clientTools,
+      )) {
         send("agent", ev satisfies AgentEvent);
       }
       send("done", {});
@@ -136,6 +224,7 @@ export function registerAgentRoutes(
         });
       }
     } finally {
+      clearInterval(keepAlive);
       if (!reply.raw.writableEnded) reply.raw.end();
     }
   });

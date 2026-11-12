@@ -1,6 +1,5 @@
 import {
-  AGENT_MAX_TOKENS_SERVER,
-  AGENT_MAX_TOOL_STEPS_SERVER,
+  AGENT_MAX_TOKENS_MAX,
   type AgentStatus,
   OpenAiEngine,
   type ToolBindings,
@@ -12,6 +11,12 @@ import {
 // decision, not ours.
 
 export const GATEWAY_TARGET_ID = "gateway";
+
+/** Reading across a folder of projects takes many rounds of file calls. */
+const GATEWAY_MAX_TOOL_STEPS = 16;
+/** Matches GoModel's own HTTP_TIMEOUT. A full-cap reply from a free reasoning
+ *  model runs to minutes, and 2048 tokens alone took 94s. */
+const GATEWAY_REQUEST_TIMEOUT_MS = 600_000;
 
 export interface GatewayConfig {
   baseURL: string;
@@ -56,8 +61,9 @@ export class GatewayEngine extends OpenAiEngine {
       headers: config.apiKey
         ? { Authorization: `Bearer ${config.apiKey}` }
         : {},
-      maxToolSteps: AGENT_MAX_TOOL_STEPS_SERVER,
-      maxTokens: config.maxTokens ?? AGENT_MAX_TOKENS_SERVER,
+      maxToolSteps: GATEWAY_MAX_TOOL_STEPS,
+      maxTokens: config.maxTokens ?? AGENT_MAX_TOKENS_MAX,
+      requestTimeoutMs: GATEWAY_REQUEST_TIMEOUT_MS,
       label: config.label,
     });
     this.target = { id: GATEWAY_TARGET_ID, label: config.label };

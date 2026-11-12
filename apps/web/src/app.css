@@ -12,6 +12,7 @@
   --primary: #6366f1;
   --primary-text: #ffffff;
   --danger: #f87171;
+  --added: #4ade80;
   --prio-low: #9ca3af;
   --prio-medium: #60a5fa;
   --prio-high: #f87171;
@@ -28,6 +29,7 @@
   --border: #e3e3e8;
   --primary: #4f46e5;
   --danger: #dc2626;
+  --added: #16a34a;
   --prio-low: #6b7280;
   --prio-medium: #2563eb;
   --prio-high: #dc2626;
@@ -1190,6 +1192,7 @@ body {
 }
 
 .agent__tool {
+  display: block;
   font-size: 0.78rem;
   color: var(--muted);
   padding: 0.15rem 0;
@@ -2058,4 +2061,134 @@ body {
 .lab__form input[type="text"],
 .lab__form input:not([type]) {
   width: 100%;
+}
+
+/* A file change the agent is waiting on: what, where, the diff, then the two
+   answers. Kept in the thread so it scrolls with the turn that asked. */
+.approval {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 0.82rem;
+}
+.approval__title {
+  font-weight: 600;
+}
+.approval__path {
+  color: var(--muted);
+  word-break: break-all;
+  margin: 0.15rem 0 0.4rem;
+}
+.approval__diff {
+  max-height: 16rem;
+  overflow: auto;
+  margin: 0 0 0.5rem;
+  padding: 0.35rem 0;
+  border-radius: calc(var(--radius) / 2);
+  background: var(--bg);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+.approval__line {
+  padding: 0 0.5rem;
+  white-space: pre;
+}
+.approval__line--add {
+  color: var(--added);
+}
+.approval__line--del {
+  color: var(--danger);
+}
+.approval__line--skip {
+  color: var(--muted);
+  font-style: italic;
+}
+.approval__note {
+  color: var(--muted);
+  margin: 0 0 0.5rem;
+}
+.approval__actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+/* The gateway's provider limits: one thin bar per rule, then today's totals. */
+.usage {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.usage__row {
+  display: grid;
+  grid-template-columns: auto minmax(3rem, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+.usage__label,
+.usage__reset {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.usage__bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.usage__fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+.usage__fill--ok {
+  background: var(--primary);
+}
+.usage__fill--high {
+  background: var(--prio-medium);
+}
+.usage__fill--full {
+  background: var(--danger);
+}
+.usage__today {
+  margin-top: 0.15rem;
+}
+
+/* Several tool runs: one line with the latest, opening to the full list. */
+.agent__steps-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.agent__steps-toggle .agent__tool {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.agent__steps-caret {
+  width: 0.7rem;
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.agent__steps-count {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.agent__steps-list {
+  padding-left: 1.05rem;
 }

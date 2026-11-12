@@ -165,3 +165,41 @@ describe("runAgent", () => {
     expect(await collect(new RemoteEngine())).toEqual([answer]);
   });
 });
+
+describe("client file tools", () => {
+  it("sends its tools, runs a forwarded call, and posts the result back", async () => {
+    mockFetch.mockImplementation(async (url: string) =>
+      String(url).endsWith("/agent/tool-result")
+        ? { ok: true, status: 200 }
+        : sseResponse([
+            [
+              "client_tool",
+              { id: "call-1", name: "read_file", args: { path: "/n/a.md" } },
+            ],
+            ["agent", answer],
+            ["done", {}],
+          ]),
+    );
+    const runTool = vi.fn().mockResolvedValue("# notes");
+    const engine = new RemoteEngine({ baseURL: "http://server" });
+    const out: AgentEvent[] = [];
+    for await (const ev of engine.runAgent(
+      [{ role: "user", content: "x" }],
+      undefined,
+      { tools: ["read_file"], roots: ["/n"], runTool },
+    )) {
+      out.push(ev);
+    }
+    expect(out).toEqual([answer]);
+    const chat = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
+    expect(chat.client).toEqual({ tools: ["read_file"], roots: ["/n"] });
+    expect(runTool).toHaveBeenCalledWith("read_file", { path: "/n/a.md" });
+    const posted = mockFetch.mock.calls.find((c) =>
+      String(c[0]).endsWith("/agent/tool-result"),
+    );
+    expect(JSON.parse(posted?.[1]?.body as string)).toEqual({
+      id: "call-1",
+      result: "# notes",
+    });
+  });
+});

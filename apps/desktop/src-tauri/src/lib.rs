@@ -1,3 +1,4 @@
+mod agent_fs;
 mod db;
 mod dropper;
 mod fs;
@@ -53,6 +54,13 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            agent_fs::agent_fs_delete,
+            agent_fs::agent_fs_list,
+            agent_fs::agent_fs_mkdir,
+            agent_fs::agent_fs_move,
+            agent_fs::agent_fs_read,
+            agent_fs::agent_fs_search,
+            agent_fs::agent_fs_write,
             db::db_exec,
             dropper::dropper_capabilities,
             dropper::dropper_color_at_cursor,

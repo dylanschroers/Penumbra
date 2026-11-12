@@ -137,8 +137,14 @@ to the server's own store; the sync engine converges the effects to clients, so
 no client sits in the turn loop. The alternative — bouncing each call out to a
 client — was rejected because it deadlocks the moment there is no client, which
 is exactly the autonomous mode of §8. The cost is that convergence now needs an
-explicit nudge in both directions; see SYNC.md → Server-side writes. Proxying to
-a client stays open as a narrow later addition for genuinely client-only tools.
+explicit nudge in both directions; see SYNC.md → Server-side writes.
+
+The one exception is the file tools, which need the machine holding the
+sidebar's folders. The client offers them per turn (`ClientTools` on
+`runAgent`); a local engine runs them in place, and the server advertises them
+only for that turn, sending each call back over the chat stream as a
+`client_tool` event and resuming when the client posts the result to
+`/agent/tool-result`. A turn with no client attached simply has no file tools.
 
 **Abort semantics.** Client disconnect cancels the server's in-flight model call
 and stops the tool loop, but **partial effects stand** — an aborted turn leaves

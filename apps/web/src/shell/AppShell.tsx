@@ -231,8 +231,11 @@ export function AppShell() {
   // Press start: only arm the hold-to-launcher timer once in the app; in the
   // intro the logo is a plain "enter" button with no hold gesture.
   function onLogoPointerDown() {
-    if (!launched) return;
+    // Cleared on every press: a hold sends the logo out from under the pointer,
+    // so its release often makes no click to consume this, and the next real
+    // click (re-entering from the launcher) was swallowed instead.
     didHold.current = false;
+    if (!launched) return;
     setHolding(true);
     if (holdTimer.current !== null) clearTimeout(holdTimer.current);
     holdTimer.current = window.setTimeout(() => {

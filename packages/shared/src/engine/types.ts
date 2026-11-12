@@ -83,6 +83,20 @@ export interface ToolBindings {
 }
 
 /**
+ * Tools only the caller can run, offered for one turn beside the engine's own:
+ * the file tools, which need the machine holding the shared folders. A local
+ * engine runs them in place; the server's is handed a runner that forwards each
+ * call back to the client that sent the turn.
+ */
+export interface ClientTools {
+  /** Names of the shared file tool contracts the caller can run. */
+  tools: string[];
+  /** The folders those tools reach, named in the prompt. */
+  roots: string[];
+  runTool: (name: string, args: Record<string, unknown>) => Promise<string>;
+}
+
+/**
  * A model backend that can report readiness and run a tool-using turn. Tier 0's
  * LocalEngine talks to an embedded llama-server; Tier 1's UnslothEngine talks
  * to Unsloth Studio. Both are OpenAiEngine underneath — see ./OpenAiEngine.
@@ -94,5 +108,6 @@ export interface Engine {
   runAgent(
     messages: ChatMessage[],
     signal?: AbortSignal,
+    clientTools?: ClientTools,
   ): AsyncGenerator<AgentEvent>;
 }

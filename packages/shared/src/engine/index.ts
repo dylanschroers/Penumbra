@@ -1,4 +1,5 @@
 export { type ModelCatalogEntry, pickLoadedModel } from "./catalog";
+export { withClientTools } from "./clientTools";
 export {
   AGENT_MAX_TOKENS_LOCAL,
   AGENT_MAX_TOKENS_MAX,
@@ -16,6 +17,13 @@ export type {
   AgentStatus,
   ChatMessage,
   ChatRole,
+  ClientTools,
   Engine,
   ToolBindings,
 } from "./types";
+export {
+  type GatewayLimit,
+  type GatewayUsage,
+  gatewayLimit,
+  gatewayUsage,
+} from "./usage";
