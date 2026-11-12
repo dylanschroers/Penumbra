@@ -8,7 +8,7 @@ Last updated: 2026-11-12
 
 ## main
 
-Merged on 2026-11-12, not yet pushed to origin:
+Merged and pushed on 2026-11-12:
 
 - Paint: rotate the canvas or selection 90°.
 - Agent file tools: the assistant can list, read, search, write, move, and
