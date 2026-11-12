@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   blendRgba,
   blit,
+  clientToPixel,
   cornersToRect,
   createRaster,
   drawEllipse,
@@ -10,6 +11,7 @@ import {
   hexToPixel,
   pixelToHex,
   type Raster,
+  rotate90,
   strokeRect,
 } from "./raster";
 
@@ -40,6 +42,37 @@ describe("color packing", () => {
   it("lays bytes out as RGBA, the order ImageData reads", () => {
     const px = new Uint32Array([hexToPixel("#112233")]);
     expect([...new Uint8Array(px.buffer)]).toEqual([0x11, 0x22, 0x33, 0xff]);
+  });
+});
+
+describe("clientToPixel", () => {
+  it("maps every whole-number position exactly at 1x, at any canvas size", () => {
+    for (const size of [600, 800, 1024, 2048]) {
+      for (let px = 0; px < size; px++) {
+        const got = clientToPixel(300 + px, 300, size, size);
+        if (got !== px) expect.fail(`size ${size}: ${px} became ${got}`);
+      }
+    }
+  });
+
+  it("gives every pixel its full width when zoomed", () => {
+    for (const zoom of [2, 4, 8]) {
+      for (let css = 0; css < 800 * zoom; css++) {
+        const got = clientToPixel(css, 0, 800 * zoom, 800);
+        const want = Math.floor(css / zoom);
+        if (got !== want) expect.fail(`${zoom}x: ${css} became ${got}`);
+      }
+    }
+  });
+
+  it("snaps a fractional canvas position the way the browser paints it", () => {
+    expect(clientToPixel(578, 577.875, 800, 800)).toBe(0);
+    expect(clientToPixel(577, 577.375, 800, 800)).toBe(0);
+    expect(clientToPixel(637.875, 577.375, 800, 800)).toBe(60);
+  });
+
+  it("goes negative off the near edge so tools can clip", () => {
+    expect(clientToPixel(290, 300, 800, 800)).toBe(-10);
   });
 });
 
@@ -156,6 +189,46 @@ describe("floodFill", () => {
     expect(r.px[0]).toBe(R);
     expect(r.px[399 + 299 * 400]).toBe(R);
     expect(r.px.filter((p) => p === W).length).toBe(0);
+  });
+});
+
+describe("rotate90", () => {
+  // 1 2 3
+  // 4 5 6
+  const block = new Uint32Array([1, 2, 3, 4, 5, 6]);
+
+  it("turns clockwise", () => {
+    // 4 1
+    // 5 2
+    // 6 3
+    expect([...rotate90(block, 3, 2, true)]).toEqual([4, 1, 5, 2, 6, 3]);
+  });
+
+  it("turns counter-clockwise", () => {
+    // 3 6
+    // 2 5
+    // 1 4
+    expect([...rotate90(block, 3, 2, false)]).toEqual([3, 6, 2, 5, 1, 4]);
+  });
+
+  it("undoes itself in the other direction", () => {
+    const turned = rotate90(block, 3, 2, true);
+    expect([...rotate90(turned, 2, 3, false)]).toEqual([...block]);
+  });
+
+  it("comes back after four turns", () => {
+    let px: Uint32Array = block;
+    let [w, h] = [3, 2];
+    for (let i = 0; i < 4; i++) {
+      px = rotate90(px, w!, h!, true);
+      [w, h] = [h, w];
+    }
+    expect([...px]).toEqual([...block]);
+  });
+
+  it("leaves the source untouched", () => {
+    rotate90(block, 3, 2, true);
+    expect([...block]).toEqual([1, 2, 3, 4, 5, 6]);
   });
 });
 

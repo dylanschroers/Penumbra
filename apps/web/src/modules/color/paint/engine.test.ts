@@ -327,6 +327,156 @@ describe("selection", () => {
   });
 });
 
+describe("rotate", () => {
+  /** A 3×1 bar at (2,5)-(4,5) with a blue end at x=2, selected. */
+  function bar() {
+    const e = engine();
+    drag(e, "pencil", 2, 5, 4, 5, { color: R });
+    drag(e, "pencil", 2, 5, 2, 5, { color: B });
+    drag(e, "select", 2, 5, 4, 5);
+    return e;
+  }
+
+  it("turns the selection about its center and swaps its size", () => {
+    const e = bar();
+    e.rotate(true, WHITE);
+    expect(e.selection?.rect).toEqual({ x: 3, y: 4, w: 1, h: 3 });
+    expect(at(e, 3, 4)).toBe(B);
+    expect(at(e, 3, 5)).toBe(R);
+    expect(at(e, 3, 6)).toBe(R);
+    expect(at(e, 2, 5)).toBe(WHITE);
+    expect(at(e, 4, 5)).toBe(WHITE);
+  });
+
+  it("turns the other way", () => {
+    const e = bar();
+    e.rotate(false, WHITE);
+    expect(at(e, 3, 6)).toBe(B);
+    expect(at(e, 3, 4)).toBe(R);
+  });
+
+  it("leaves the back color where the block was", () => {
+    const e = bar();
+    e.rotate(true, K);
+    expect(at(e, 2, 5)).toBe(K);
+    expect(at(e, 4, 5)).toBe(K);
+  });
+
+  it("does not touch the document until it lands", () => {
+    const e = bar();
+    e.rotate(true, WHITE);
+    expect(docAt(e, 3, 4)).toBe(WHITE);
+    expect(docAt(e, 2, 5)).toBe(B);
+  });
+
+  it("lands many turns as one undo step", () => {
+    const e = bar();
+    const steps = e.history.undoCount;
+    e.rotate(true, WHITE);
+    e.rotate(true, WHITE);
+    e.rotate(true, WHITE);
+    e.commitSelection();
+    expect(e.history.undoCount).toBe(steps + 1);
+    e.undo();
+    expect(at(e, 2, 5)).toBe(B);
+    expect(at(e, 4, 5)).toBe(R);
+  });
+
+  it("stays in place through four turns, and lands no edit", () => {
+    const e = bar();
+    const steps = e.history.undoCount;
+    const before = { ...e.selection!.rect };
+    for (let i = 0; i < 4; i++) e.rotate(true, WHITE);
+    expect(e.selection?.rect).toEqual(before);
+    expect(at(e, 2, 5)).toBe(B);
+    e.commitSelection();
+    expect(e.history.undoCount).toBe(steps);
+  });
+
+  it("does not creep with an even-sized block", () => {
+    const e = engine();
+    drag(e, "select", 2, 2, 5, 2);
+    const before = { ...e.selection!.rect };
+    e.rotate(true, WHITE);
+    e.rotate(false, WHITE);
+    expect(e.selection?.rect).toEqual(before);
+  });
+
+  it("restores everything on cancel or undo before landing", () => {
+    const e = bar();
+    e.rotate(true, WHITE);
+    e.cancel();
+    expect(at(e, 2, 5)).toBe(B);
+    expect(at(e, 3, 4)).toBe(WHITE);
+
+    const f = bar();
+    f.rotate(true, WHITE);
+    f.undo();
+    expect(at(f, 2, 5)).toBe(B);
+    expect(f.selection).toBeNull();
+  });
+
+  it("can still be dragged after turning", () => {
+    const e = bar();
+    e.rotate(true, WHITE);
+    drag(e, "select", 3, 4, 7, 4);
+    expect(at(e, 7, 4)).toBe(B);
+    expect(at(e, 3, 4)).toBe(WHITE);
+  });
+
+  it("clips a turned block hanging off the canvas without wrapping", () => {
+    const e = engine();
+    drag(e, "pencil", 0, 0, 5, 0, { color: R });
+    drag(e, "select", 0, 0, 5, 0);
+    e.rotate(true, WHITE);
+    expect(e.selection?.rect).toEqual({ x: 2, y: -2, w: 1, h: 6 });
+    e.commitSelection();
+    expect(docAt(e, 2, 0)).toBe(R);
+    expect(docAt(e, 2, 3)).toBe(R);
+    expect(docAt(e, 2, 4)).toBe(WHITE);
+    expect(docAt(e, 5, 0)).toBe(WHITE);
+    expect(docAt(e, 9, 9)).toBe(WHITE);
+  });
+
+  it("copies the block as it now stands", () => {
+    const e = bar();
+    e.rotate(true, WHITE);
+    const block = e.copyBlock();
+    expect([block.w, block.h, ...block.px]).toEqual([1, 3, B, R, R]);
+  });
+
+  it("turns a pasted block, leaving nothing behind", () => {
+    const e = engine();
+    e.paste({ w: 2, h: 1, px: new Uint32Array([R, B]) });
+    e.rotate(true, K);
+    expect(e.selection?.rect.w).toBe(1);
+    expect(e.selection?.hole).toBeNull();
+    expect(at(e, 9, 9)).toBe(WHITE);
+  });
+
+  it("is ignored mid-gesture", () => {
+    const e = bar();
+    e.begin("select", 3, 5, OPTS);
+    e.rotate(true, WHITE);
+    e.end();
+    expect(e.selection?.rect.h).toBe(1);
+  });
+
+  it("turns the whole canvas when nothing is selected", () => {
+    const e = engine(4, 2);
+    drag(e, "pencil", 3, 0, 3, 0, { color: R });
+    e.rotate(true, WHITE);
+    expect([e.width, e.height]).toEqual([2, 4]);
+    expect(at(e, 1, 3)).toBe(R);
+    expect(docAt(e, 1, 3)).toBe(R);
+    e.undo();
+    expect([e.width, e.height]).toEqual([4, 2]);
+    expect(at(e, 3, 0)).toBe(R);
+    e.redo();
+    expect([e.width, e.height]).toEqual([2, 4]);
+  });
+});
+
 describe("whole-canvas changes", () => {
   it("resizes from the top-left, filling new space with the back color", () => {
     const e = engine(2, 2);
