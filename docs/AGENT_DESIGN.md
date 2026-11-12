@@ -1,298 +1,110 @@
-# Penumbra — Agent & AI Design
+# Penumbra: Agent & AI design
 
-Companion to [ARCHITECTURE.md](ARCHITECTURE.md); this is the AI detail. Same
-convention: present tense means it exists in the repo, and planned work is
-marked as such.
+Present tense means it exists in the repo. The constraint: **no hard dependency
+on any cloud AI provider.** The local model is the floor; everything else is
+optional.
 
-The single organizing constraint: **Penumbra has no hard dependency on any cloud
-AI provider.** Local usability is the floor. A self-hosted server unlocks more;
-cloud is an opt-in escalation the user chooses, never something the app
-assumes.
+Every backend speaks the OpenAI-compatible chat API (`/v1/chat/completions`) and
+is configured by `{ baseURL, model, apiKey? }`. No vendor SDKs, no LangChain.
 
----
+## Deployment tiers
 
-## 1. The provider-neutral seam
+- **Tier 0, embedded (default).** The desktop app bundles Qwen3-1.7B Q4_K_M
+  (Apache-2.0, so it can be redistributed) and runs it in a `llama-server`
+  sidecar with thinking off. Offline. Binds `agentTools` with a 4-step budget,
+  but is only reliable on single-step requests.
+- **Tier 1, server.** The server runs the tool loop with `agentTools` plus
+  `labTools`, 8-step budget. Chat goes to a model gateway when
+  `PENUMBRA_GATEWAY_URL` and `PENUMBRA_GATEWAY_MODEL` are set, else to the
+  Studio target assigned to chat. With both, `ResolvingEngine` takes the first
+  that reports ready at the start of each turn, so Studio is the fallback.
+- **Cloud (planned).** Listed in the provider selector but disabled.
 
-The one thing every model backend has in common is a tiny config triple:
+The user picks **Local**, **Server**, or **Cloud** in the chat header.
+`engine/index.ts` holds a `SwitchableEngine` that delegates to the selection and
+persists it to `localStorage`.
 
-```
-{ baseURL, model, apiKey? }  →  OpenAI-compatible client  →  caller
-```
+## The engine abstraction
 
-Penumbra standardizes on the **OpenAI-compatible** chat API
-(`/v1/chat/completions`) because it is the lingua franca of local inference —
-llama.cpp's `llama-server`, Ollama, vLLM, and LM Studio all speak it natively —
-and cloud providers sit behind it directly or through a thin adapter. Nothing
-above the seam knows which backend answered.
-
-```
-Embedded llama-server (default)  ─┐
-Self-hosted Studio     (built)   ─┼─→ { baseURL, model } ─→ client ─→ agent / guidance
-Opt-in cloud           (planned) ─┘
-```
-
----
-
-## 2. Capabilities, not model sizes
-
-"Small model vs big model" is the wrong axis. Agentic work is a router sending
-each request to the cheapest component that can do it:
-
-| # | Capability | Best handled by | Status |
-|---|---|---|---|
-| 1 | **Route / classify** intent | rules or a tiny classifier — often no LLM | planned |
-| 2 | **Retrieve / search / memory** | an embedding model + a local index | planned, next up |
-| 3 | **Generate / converse / guide** | the embedded chat model | ✅ built |
-| 4 | **Orchestrate tools** | single-step: embedded model; multi-step: a larger model | ✅ both built (Tier 0 / Tier 1) |
-| 5 | **Proactive / background** | the larger model in an autonomous execution mode | planned (§8) |
-
-The commonly-forgotten one is **#2**: the embedding model is a *different
-artifact* from the chat model (vectors, not generation), it runs on CPU in
-~100 MB (`bge-small` / `nomic-embed` class, over something like `sqlite-vec`),
-and it is what makes a small on-device chat model genuinely useful — grounding
-answers in the user's own data instead of raw parameter count.
-
----
-
-## 3. Deployment tiers
-
-All tiers sit behind the §1 seam.
-
-- **Tier 0 — Embedded (built, the default).** The desktop app bundles
-  **Qwen3-1.7B Q4** (Apache-2.0, matching the repo license — bundling
-  redistributes the weights) and runs it via a `llama-server` sidecar with
-  thinking off for latency (`--reasoning-budget 0`). Zero download, fully
-  offline, private. Scope: guidance, Q&A, and single-step local tool calls
-  against the task registry (§7).
-- **Tier 1 — Self-hosted (built).** The Penumbra server runs a larger model via
-  Unsloth Studio for the full tool registry and multi-step agent work (a step
-  budget of 8 against Tier 0's 4). Tools execute in-process on the server and
-  the sync engine converges the effects to clients, so no client need be in the
-  turn loop. Model size is a config knob, not a new tier.
-- **Opt-in cloud (planned).** Point the same seam at Anthropic / OpenAI /
-  OpenRouter. Maximum capability, entirely optional, and treated as **Plane B**
-  — external, untrusted while offline.
-
-## 4. Guidance vs. agent
-
-Two roles with opposite needs, deliberately not the same model:
-
-| | Guidance | Agent |
-|---|---|---|
-| Tier | 0 (embedded) | 1 (self-hosted) / cloud |
-| Model | small | large |
-| Tools | a few, single-step | full registry, multi-step |
-| Availability | always, offline | when server / cloud is up |
-| Trust | low blast radius | audited, permissioned |
-
-A bundled small model is a good guide and a poor multi-step agent — §7
-measures exactly where that line sits.
-
----
-
-## 5. The engine abstraction
-
-The UI must not know which backend or transport is behind a reply. It talks to
-an **`Engine`** (`packages/shared/src/engine`), exposing only what the UI calls:
+The UI talks to an `Engine` (`packages/shared/src/engine`):
 
 ```ts
 interface Engine {
-  getStatus(): Promise<AgentStatus>;                     // status pill
-  runAgent(messages, signal?): AsyncGenerator<AgentEvent>; // tool loop + answer
+  getStatus(): Promise<AgentStatus>;
+  runAgent(messages, signal?): AsyncGenerator<AgentEvent>;
 }
 ```
 
-Three implementations exist. Two are thin configuration over the shared
-**`OpenAiEngine`** — llama-server and Unsloth Studio speak the same
-OpenAI-compatible protocol, so the loop is written once:
+Readiness is `stopped | unauthorized | no_model | ready`.
 
-- **`LocalEngine`** (`apps/web/src/engine`) — Tier 0, the embedded model.
-- **`UnslothEngine`** (`apps/server/src/agent`) — Tier 1, Studio on the GPU
-  host, adding a bearer token and a longer tool-step budget.
-- **`RemoteEngine`** (`apps/web/src/engine`) — not a backend but a transport:
-  it forwards `runAgent`/`getStatus` to the server's `/agent/*` over SSE, and
-  calls `requestSync()` on every tool event so a server-side write shows up on
-  the client immediately instead of on the next 15s sync round.
+- **`OpenAiEngine`** (shared) holds the tool loop. It is bounded and
+  non-streaming.
+- **`LocalEngine`** (`apps/web/src/engine`): Tier 0, bound to the browser store.
+- **`UnslothEngine`** and **`GatewayEngine`** (`apps/server/src/agent`): Tier 1,
+  bound to the server store, with a bearer header.
+- **`RemoteEngine`** (`apps/web/src/engine`): the transport to `/agent/*` over
+  SSE. It flushes sync before a turn and requests sync after every tool event
+  ([SYNC.md](SYNC.md) → Server-side writes).
 
-The tool loop is bounded and non-streaming. Tools touch app state rather than
-the engine, so `runTool` — with the tool specs and system prompt — is bound when
-an engine is *constructed*: Tier 0 binds the browser store, Tier 1 binds the
-server's. Readiness is `stopped | no_model | ready`
-(`packages/shared/src/engine/types.ts`).
+Tool bindings (specs, system prompt, `runTool`) are injected when an engine is
+constructed.
+
+**Tools run beside the model.** Tier 1 executes tools server-side against the
+server's store, so no client is in the turn loop. Bouncing calls to a client
+would deadlock with no client present, which is exactly autonomous mode.
+
+The exception is the file tools, which need the machine holding the sidebar's
+folders. The client offers them per turn (`ClientTools` on `runAgent`). A local
+engine runs them in place; the server advertises them for that turn only,
+sends each call back as a `client_tool` event, and resumes when the client
+posts the result to `/agent/tool-result`. A turn with no client has no file
+tools.
+
+**Abort**: a client disconnect cancels the in-flight model call and stops the
+loop, but writes already made stand. There is no rollback.
 
 ### Unsloth is on the seam
 
-Studio exposes OpenAI-compatible endpoints (`POST /v1/chat/completions`,
-`GET /v1/models`), with `tools` / `tool_choice` following OpenAI semantics
-including forced-function objects and `"none"`. So the server-side engine is
-`LocalEngine`'s request shape plus a bearer header — no vendor SDK, no protocol
-translation. Two details the seam does *not* imply, both of which cost
-correctness, are recorded in [MODEL_LAB.md](MODEL_LAB.md) → What Studio
-guarantees: `/v1/models` lists unloaded models too, and `enable_tools` /
+Studio serves `/v1/chat/completions` and `/v1/models` with OpenAI tool
+semantics, so `UnslothEngine` is the same request plus a bearer. Two things the
+seam does not imply are in [MODEL_LAB.md](MODEL_LAB.md) → What Studio
+guarantees: `/v1/models` lists unloaded models, and `enable_tools` /
 `mcp_enabled` must never be sent.
 
-**Where the tools run.** The model is server-side in all cases (GPU placement),
-and Tier 1 executes the tool call server-side too, binding the shared contracts
-to the server's own store; the sync engine converges the effects to clients, so
-no client sits in the turn loop. The alternative — bouncing each call out to a
-client — was rejected because it deadlocks the moment there is no client, which
-is exactly the autonomous mode of §8. The cost is that convergence now needs an
-explicit nudge in both directions; see SYNC.md → Server-side writes.
+## Local model delivery
 
-The one exception is the file tools, which need the machine holding the
-sidebar's folders. The client offers them per turn (`ClientTools` on
-`runAgent`); a local engine runs them in place, and the server advertises them
-only for that turn, sending each call back over the chat stream as a
-`client_tool` event and resuming when the client posts the result to
-`/agent/tool-result`. A turn with no client attached simply has no file tools.
+- **Desktop:** `llama-server`, its libraries, and the GGUF ship as Tauri
+  resources and run natively ([SIDECAR.md](../apps/desktop/SIDECAR.md)). Native,
+  not in-webview, because webview WebGPU is unreliable, worst on WebKitGTK.
+- **Web and mobile (planned):** download into OPFS and run on WebGPU/WASM, or a
+  native module, behind the same `LocalEngine`.
 
-**Abort semantics.** Client disconnect cancels the server's in-flight model call
-and stops the tool loop, but **partial effects stand** — an aborted turn leaves
-already-executed writes in place rather than attempting rollback, and the tool
-events already streamed tell the user what happened.
+## Tool calling with a small model
 
-**Selecting between them** is a user choice, not a build-time one. `engine/index.ts`
-holds a `SwitchableEngine` that delegates to whichever provider is selected —
-**Local**, **Server**, or **Cloud** (listed but disabled; nothing is wired up).
-Switching flips a pointer and persists to `localStorage`; no connection opens
-until the next `getStatus()` or `runAgent()`. The chat header renders the three
-as buttons.
+- **Constrained decoding does the work.** llama.cpp constrains output to each
+  tool's JSON Schema, which removes malformed calls. Caveat handled in
+  `toToolSpec`: a large `maxLength` makes llama.cpp reject the request, so
+  oversized bounds are stripped from the wire schema and enforced by Zod.
+- **Keep tools few and shallow.** Small models degrade as tools are added, and
+  the cost lands on tools that already worked. Measure before growing the set
+  ([EVAL.md](EVAL.md)).
+- **Dates are the weak spot.** Runners coerce model dates with a deterministic
+  parser and drop what they cannot parse.
+- **Ceiling:** reliable for single-shot local actions, not multi-step work.
+  That is Tier 1's job.
 
-Planned, behind the same surface: streaming with `<think>`-splitting (arrives
-with a streaming chat UI), and richer readiness states for delivery modes that
-need download progress. Earlier speculative versions of these were built and
-then removed (principle 6 in ARCHITECTURE.md); they live in git history.
+First measured run (Qwen3-1.7B Q4, four task tools, CPU): 92% selection, 0 false
+positives, 100% valid arguments, 3.8s average latency.
 
----
+## Autonomous mode (planned)
 
-## 6. Local model delivery
+Scheduled and proactive jobs on a background worker, reusing Tier 1 with
+pre-authorized permission scopes, an audit of every action, and rate limits. The
+contracts' `permission` field is the hook.
 
-- **Desktop (built):** `llama-server`, its shared libraries, and the GGUF ship
-  as Tauri `bundle.resources`; the Rust side spawns the sidecar at launch.
-  Details and the `externalBin` pitfall: apps/desktop/SIDECAR.md. Honest cost:
-  bundling spends Tauri's small-binary advantage — the installer grows by
-  roughly the model size (~1.3 GB for the current Q4).
-- **Web (planned):** no install step, so the browser build downloads the model
-  once into OPFS and runs it in-browser (WebGPU where available, WASM
-  fallback) behind the same `LocalEngine` interface.
-- **Mobile (planned):** bundle in the app package and use a native inference
-  module.
+## Next
 
-**Why native on desktop, not in-webview:** a native runtime reads the GGUF
-directly and gets real GPU acceleration (Metal / CUDA / Vulkan). Tauri uses
-the OS webview, where WebGPU support is uneven and worst on Linux/WebKitGTK —
-the one place you cannot rely on it. Going native makes the floor "native CPU
-everywhere"; in-webview inference stays a web-only concern.
-
----
-
-## 7. Tool calling with a small model
-
-Viable, with one technique doing most of the work, and a firm ceiling.
-
-- **Constrained decoding is the game.** llama.cpp supports
-  JSON-schema-constrained output, which forces the model to emit valid JSON
-  matching a tool's argument schema — removing the #1 small-model failure
-  (malformed calls). Tool contracts are defined once in Zod
-  (`packages/shared/src/tools`) and derived to JSON Schema (`toToolSpec`), so
-  the grammar, the runtime validation, and the eval all read the same source.
-  One derivation caveat, handled in `toToolSpec`: llama.cpp expands bounded
-  string repetitions into the grammar, so a large `maxLength` (>~1000) makes it
-  reject the whole request — oversized bounds are stripped from the wire schema
-  and enforced by Zod at the call boundary instead.
-- **Keep it shallow and small.** A *few* well-described tools, single-step
-  selection. Small models degrade fast with many tools or long multi-hop loops.
-- **Honest ceiling:** a grammar-constrained small model is usable for local
-  single-shot actions (Tier 0). It is *not* a reliable multi-step agent over
-  finance/banking — that is Tier 1's larger model. With the no-cloud
-  constraint, the ceiling is "run a bigger self-hosted model," not "call the
-  cloud."
-
-### Viability check — measured (✅ passed)
-
-`scripts/tool-eval.ts` (`pnpm tool-eval`) ran 26 labeled utterances against the
-bundled **Qwen3-1.7B Q4** (thinking off), using llama-server's
-grammar-constrained `tools` API. The harness imports the shipped tool contracts
-and system prompt from `@penumbra/shared`, so it measures exactly the four tools
-the app exposes (`create_task`, `list_tasks`, `complete_task`, `delete_task`):
-
-| Metric | Result |
-|---|---|
-| Tool-selection accuracy | **24/26 (92%)** |
-| False positives (tool called on chit-chat) | **0** |
-| False negatives (missed a real action) | 1 |
-| Argument JSON validity | 17/17 (100%) |
-| Argument correctness (priority/status spot-checks) | 5/5 (100%) |
-| Latency (CPU) | avg 3.8 s, max 9.9 s |
-
-- **0 false positives** is the key safety property — it never fabricates an
-  action during questions/greetings. It *under-calls* or mis-picks on idiomatic
-  phrasings ("Tick off…", "Remove … from my list"), which is the safe direction.
-- Argument extraction is good (priority/status parsed from natural language
-  every time); JSON validity is guaranteed by the grammar.
-- **Dates remain the weak spot** — `priority` was verified, but not whether
-  `dueAt` resolves to the *correct* date. The runner coerces model dates with a
-  deterministic parser and drops what it can't parse.
-- Latency is CPU-bound; a Vulkan/CUDA build would cut it substantially.
-
-Verdict: ship it, keep the tool set small, and re-measure as it grows.
-`scripts/tool-eval.ts` is the regression check for model/prompt/tool changes —
-it consumes the shared contracts, so a new tool is automatically part of what
-it exercises (cases still need writing by hand).
-
-The table above is a record of one run against the four task tools, not a
-current reading. Tier 0 has since gained `get_weather`, and the server tier
-carries six Model Lab contracts on top of that — eleven advertised where this
-measured four. Growing the set is exactly what this section says to re-measure,
-so the two are now measured separately: `pnpm tool-eval` for Tier 0's five, and
-`TIER=1 pnpm tool-eval` for the server's eleven, which scores the same base
-utterances under the larger list so the cost of the extra tools is visible
-rather than assumed. See [EVAL.md](EVAL.md) §2.
-
----
-
-## 8. Autonomous / background mode (planned)
-
-Proactive agentics ("your budget is blown," scheduled jobs) run on the planned
-Worker, with no user present to approve a tool mid-loop. This reuses Tier 1's
-model but is a distinct *execution mode*: pre-authorized permission scopes
-(anything outside them queues for approval), hard audit of every action, and
-budget/rate limits so an unattended loop can't run away. Designed-for now —
-the tool contracts' `permission` field is its hook — built later.
-
----
-
-## 9. Decisions
-
-Resolved:
-
-- **Embedded model:** Qwen3-1.7B Q4, bundled. Revisit size only if the §7
-  numbers degrade as tools grow.
-- **Desktop runtime:** bundled `llama-server` binary (reuses the
-  spawn-a-server pattern; no Rust inference crate needed).
-
-Open:
-
-- **Embedding model + local index** (`bge-small` / `nomic-embed`; `sqlite-vec`
-  vs alternatives) — blocks capability #2.
-- **Cloud adapters:** which providers to support behind the seam, if any,
-  given cloud is strictly opt-in.
-
-## 10. Sequencing
-
-1. ✅ **Engine seam + embedded chat (Tier 0)** — `LocalEngine`, the agent
-   canvas module, the bundled sidecar, and grammar-constrained task tools.
-2. **Embeddings + retrieval** — bundle the embedding model + local index;
-   ground guidance and add semantic search. (Next, because it is what makes
-   Tier 0 genuinely useful.)
-3. ✅ **Self-hosted agent (Tier 1)** — server-side multi-step loop against a
-   larger model, `RemoteEngine` as its transport, and a provider selector in
-   the chat header. Landed ahead of the two items below.
-4. **Router** — promote the dispatch heuristic in front of the engines, so the
-   provider choice can be automatic rather than manual.
-5. **Autonomous Worker mode** — proactive jobs with pre-authorized scopes and
-   audit.
-
-Web and mobile fall out of the same engine surface: `LocalEngine` gains a
-WASM/WebGPU backing on web and a native module on mobile, with no UI or
-wire-contract changes.
+1. Embeddings + local index (`bge-small` / `nomic-embed` over something like
+   `sqlite-vec`) to ground Tier 0 in the user's data.
+2. A router that picks the provider automatically.
+3. Autonomous mode.
